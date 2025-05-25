@@ -6,7 +6,7 @@
 <br />
 <div align="center">
   <a href="https://memfuse.vercel.app/">
-    <img src="https://raw.githubusercontent.com/memfuse/memfuse-python_bak/refs/heads/main/assets/logo.png?token=GHSAT0AAAAAADAJX7ZISVG6TMB3FLBS2LKI2BTHVKQ" alt="MemFuse Logo"
+    <img src="assets/logo.png" alt="MemFuse Logo"
          style="max-width: 90%; height: auto; display: block; margin: 0 auto; padding-left: 16px; padding-right: 16px;">
   </a>
   <br />
