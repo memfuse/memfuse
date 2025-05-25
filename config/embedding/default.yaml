@@ -1,0 +1,16 @@
+# @package embedding
+# Embedding configuration aligned with actual implementation
+
+# Default embedding model (as specified in memories)
+model: "all-MiniLM-L6-v2"
+dimension: 384
+cache_size: 10000
+implementation: "minilm"
+
+# Model-specific configurations (only for models actually used)
+models:
+  all-MiniLM-L6-v2:
+    dimension: 384
+    library: sentence-transformers
+    normalize: true
+    trust_remote_code: false

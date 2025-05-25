@@ -1,0 +1,31 @@
+# @package store
+# Store configuration aligned with actual implementation
+
+# Default store configuration
+backend: "qdrant"
+buffer_size: 10
+cache_size: 100
+
+# Query defaults (as specified in memories - 2x top_k for first stage, exact top_k for second stage)
+top_k: 5
+similarity_threshold: 0.3
+
+# Multi-path retrieval configuration
+multi_path:
+  keyword_weight: 0.2
+  vector_weight: 0.5
+  graph_weight: 0.3
+  use_keyword: true
+  use_vector: true
+  use_graph: false
+  fusion_strategy: "rrf"
+
+# Graph store configuration
+graph_store:
+  default_relation: "RELATED_TO"
+  default_edge_weight: 1.0
+
+# Keyword store configuration
+keyword_store:
+  k1: 1.2  # BM25 parameter for term frequency scaling
+  b: 0.75  # BM25 parameter for document length normalization

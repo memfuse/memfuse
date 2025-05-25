@@ -1,0 +1,11 @@
+# @package hydra
+# Hydra configuration simplified for actual usage
+
+# Run configuration
+run:
+  dir: .
+
+# Job configuration
+job:
+  name: memfuse
+  chdir: true

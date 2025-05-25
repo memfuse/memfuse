@@ -1,0 +1,14 @@
+# @package retrieval
+# Retrieval configuration aligned with actual implementation
+
+# Rerank configuration (as specified in memories - cross encoder as default)
+use_rerank: true
+rerank_model: "cross-encoder/ms-marco-MiniLM-L6-v2"
+rerank_strategy: "rrf"
+normalize_scores: true
+
+# Performance optimization (as specified in memories - preload models at startup)
+preload_model: true
+
+# RRF configuration
+rrf_k: 60

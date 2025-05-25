@@ -1,0 +1,16 @@
+# @package _global_
+
+# Default configuration for MemFuse server
+# This is the main configuration file that imports all other configurations
+
+# Data directory
+data_dir: "data"
+
+# Import configurations
+defaults:
+  - server: default
+  - store: default
+  - embedding: default
+  - buffer: default
+  - retrieval: default
+  - _self_

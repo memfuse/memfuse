@@ -1,0 +1,14 @@
+# @package server
+# Server configuration aligned with actual implementation
+
+# Server settings
+host: "0.0.0.0"
+port: 8000
+debug: false
+reload: false
+
+# API configuration
+rate_limit_per_minute: 1000
+cors_origins: ["*"]
+api_key_validation: false
+api_key_header: "Authorization"

@@ -1,0 +1,17 @@
+# @package buffer
+# Buffer system configuration aligned with actual implementation
+
+# Write buffer configuration
+write:
+  max_size: 5
+  batch_threshold: 5
+
+# Speculative buffer configuration
+speculative:
+  max_size: 10
+  context_window: 3
+
+# Query buffer configuration
+query:
+  max_size: 15
+  cache_size: 100
