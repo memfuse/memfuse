@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  memfuse:
+    build:
+      context: .
+      dockerfile: Dockerfile.pip # Use pip-only for better reliability
+      # Alternative options:
+      # dockerfile: Dockerfile      # Poetry-based build
+      # dockerfile: Dockerfile.prod # Production multi-stage build
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount data directory for persistence
+      - ./data:/app/data
+      # Mount logs directory for debugging
+      - ./logs:/app/logs
+      # Mount config directory for easy configuration changes
+      - ./config:/app/config:ro
+    environment:
+      # Override default configuration if needed
+      - MEMFUSE_HOST=0.0.0.0
+      - MEMFUSE_PORT=8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Add a PostgreSQL database if your app needs it
+  # Uncomment the section below if you're using PostgreSQL
+  # postgres:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     POSTGRES_DB: memfuse
+  #     POSTGRES_USER: memfuse
+  #     POSTGRES_PASSWORD: memfuse_password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #   restart: unless-stopped
+
+  # Optional: Add Qdrant vector database if your app uses it
+  # Uncomment the section below if you're using Qdrant
+  # qdrant:
+  #   image: qdrant/qdrant:latest
+  #   ports:
+  #     - "6333:6333"
+  #   volumes:
+  #     - qdrant_data:/qdrant/storage
+  #   restart: unless-stopped
+# Uncomment if using the optional services above
+# volumes:
+#   postgres_data:
+#   qdrant_data:
