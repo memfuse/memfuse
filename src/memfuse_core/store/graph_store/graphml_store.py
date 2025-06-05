@@ -663,12 +663,14 @@ class GraphMLStore(GraphStore):
         if query.metadata:
             include_messages = query.metadata.get("include_messages", True)
             include_knowledge = query.metadata.get("include_knowledge", True)
+            include_chunks = query.metadata.get("include_chunks", True)
 
             filtered_scores = []
             for node_id, content, metadata, score in node_scores:
                 item_type = metadata.get("type")
-                if ((item_type == "message" and include_messages)
-                        or (item_type == "knowledge" and include_knowledge)):
+                if ((item_type == "message" and include_messages) or
+                    (item_type == "knowledge" and include_knowledge) or
+                    (item_type == "chunk" and include_chunks)):
                     filtered_scores.append((node_id, content, metadata, score))
 
             node_scores = filtered_scores

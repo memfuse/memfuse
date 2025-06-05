@@ -80,7 +80,7 @@ class QueryBuffer(BufferComponentInterface):
         self.total_queries += 1
 
         # Check cache first with LRU update
-        logger.debug(f"QueryBuffer.query: Checking cache for query")
+        logger.debug("QueryBuffer.query: Checking cache for query")
         cached_result = await self._check_cache(query_text)
         if cached_result is not None:
             self.cache_hits += 1
@@ -89,7 +89,7 @@ class QueryBuffer(BufferComponentInterface):
             return cached_result
 
         self.cache_misses += 1
-        logger.info(f"QueryBuffer.query: Cache miss, querying storage")
+        logger.info("QueryBuffer.query: Cache miss, querying storage")
 
         if not self.retrieval_handler:
             logger.warning("QueryBuffer: No retrieval handler available")
@@ -179,12 +179,36 @@ class QueryBuffer(BufferComponentInterface):
         if write_buffer and hasattr(write_buffer, 'items'):
             logger.debug(f"QueryBuffer._combine_results: WriteBuffer has {len(write_buffer.items)} items")
             for item in write_buffer.items:
-                item_id = self._get_item_id(item)
-                if item_id not in seen_ids:
-                    self._add_metadata(item, 'write_buffer', 1.0)
-                    all_results.append(item)
-                    seen_ids.add(item_id)
-                    write_buffer_added += 1
+                # Handle MessageList format (List of Messages from WriteBuffer)
+                if isinstance(item, list):
+                    # This is a MessageList - process each message
+                    for message in item:
+                        if isinstance(message, dict):
+                            message_id = self._get_item_id(message)
+                            if message_id not in seen_ids:
+                                # Create a standardized result format for WriteBuffer messages
+                                standardized_message = {
+                                    "id": message_id,
+                                    "content": message.get("content", ""),
+                                    "score": 1.0,  # Default score for WriteBuffer results
+                                    "type": "message",
+                                    "role": message.get("role", "unknown"),
+                                    "created_at": None,  # WriteBuffer messages don't have timestamps yet
+                                    "updated_at": None,
+                                    "metadata": message.get("metadata", {}).copy()
+                                }
+                                self._add_metadata(standardized_message, 'write_buffer', 1.0)
+                                all_results.append(standardized_message)
+                                seen_ids.add(message_id)
+                                write_buffer_added += 1
+                else:
+                    # Handle standard dictionary format
+                    item_id = self._get_item_id(item)
+                    if item_id not in seen_ids:
+                        self._add_metadata(item, 'write_buffer', 1.0)
+                        all_results.append(item)
+                        seen_ids.add(item_id)
+                        write_buffer_added += 1
         else:
             logger.debug("QueryBuffer._combine_results: No WriteBuffer or WriteBuffer has no items")
 

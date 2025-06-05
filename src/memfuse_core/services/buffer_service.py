@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Callable
 from omegaconf import DictConfig
 from loguru import logger
 
-from ..interfaces import MemoryInterface, ServiceInterface
+from ..interfaces import MemoryInterface, ServiceInterface, MessageInterface, MessageList, MessageBatchList
 from ..buffer.write_buffer import WriteBuffer
 from ..buffer.speculative_buffer import SpeculativeBuffer
 from ..buffer.query_buffer import QueryBuffer
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from .memory_service import MemoryService
 
 
-class BufferService(MemoryInterface, ServiceInterface):
+class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
     """Buffer service with full WriteBuffer, SpeculativeBuffer, QueryBuffer functionality.
 
     This service preserves all buffer functionality while optimizing for performance:
@@ -99,9 +99,17 @@ class BufferService(MemoryInterface, ServiceInterface):
             def __init__(self, memory_service):
                 self.memory_service = memory_service
 
-            async def handle_batch(self, items: List[Any]) -> List[str]:
-                """Handle batch write to memory service."""
+            async def handle_batch(self, items: List[MessageList]) -> List[str]:
+                """Handle batch write to memory service.
+
+                Args:
+                    items: List of MessageList (MessageBatchList)
+
+                Returns:
+                    List of message IDs from the storage operation
+                """
                 try:
+                    # items is already a MessageBatchList, pass directly to memory service
                     result = await self.memory_service.add_batch(items)
                     if result.get("status") == "success":
                         return result.get("data", {}).get("message_ids", [])
@@ -127,7 +135,8 @@ class BufferService(MemoryInterface, ServiceInterface):
                     query=query,
                     top_k=max_results,
                     include_messages=True,
-                    include_knowledge=True
+                    include_knowledge=True,
+                    include_chunks=True
                 )
 
                 logger.info(f"RetrievalHandler: MemoryService returned status: {result.get('status')}")
@@ -225,86 +234,78 @@ class BufferService(MemoryInterface, ServiceInterface):
         """
         return self.memory_service is not None
 
-    async def add(self, messages: List[Dict[str, Any]], session_id: Optional[str] = None) -> Dict[str, Any]:
-        """Add messages to memory using optimized WriteBuffer.
+    async def add(self, messages: MessageList, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Add a single list of messages.
+
+        This method wraps the MessageList in a MessageBatchList and calls add_batch().
 
         Args:
-            messages: List of message dictionaries with role and content
+            messages: List of message dictionaries (MessageList)
             session_id: Session ID for context (passed as parameter)
 
         Returns:
-            Dictionary with status, code, and message IDs
+            Dictionary with status, data, and message information
+        """
+        return await self.add_batch([messages], session_id=session_id)
+
+    async def add_batch(self, message_batch_list: MessageBatchList, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Add a batch of message lists.
+
+        This is the core processing method that handles MessageBatchList.
+        Each MessageList is added as a unit to the WriteBuffer.
+
+        Args:
+            message_batch_list: List of lists of messages (MessageBatchList)
+            session_id: Session ID for context (passed as parameter)
+
+        Returns:
+            Dictionary with status, data, and message information
         """
         if not self.memory_service:
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": "No memory service available",
-                "errors": [{"field": "general", "message": "No memory service available"}],
-            }
+            return self._error_response("No memory service available")
 
-        if not messages:
-            return {
-                "status": "success",
-                "code": 200,
-                "data": {"message_ids": []},
-                "message": "No messages to add",
-                "errors": None,
-            }
+        if not message_batch_list:
+            return self._success_response([], "No message lists to add")
 
-        self.total_items_added += len(messages)
-
-        # Add metadata to messages if needed
-        for message in messages:
-            if 'metadata' not in message:
-                message['metadata'] = {}
-            if self.user_id and 'user_id' not in message['metadata']:
-                message['metadata']['user_id'] = self.user_id
-            if session_id and 'session_id' not in message['metadata']:
-                message['metadata']['session_id'] = session_id
-
-        # Use optimized WriteBuffer for batching and FIFO management
         try:
-            # Add messages to WriteBuffer one by one (maintains FIFO logic)
             batch_triggered = False
-            for message in messages:
-                if await self.write_buffer.add(message):
+            total_messages = 0
+
+            for message_list in message_batch_list:
+                if not message_list:
+                    continue
+
+                total_messages += len(message_list)
+
+                # Add metadata to messages if needed
+                for message in message_list:
+                    if 'metadata' not in message:
+                        message['metadata'] = {}
+                    if self.user_id and 'user_id' not in message['metadata']:
+                        message['metadata']['user_id'] = self.user_id
+                    if session_id and 'session_id' not in message['metadata']:
+                        message['metadata']['session_id'] = session_id
+
+                # Add the entire MessageList as a unit to WriteBuffer
+                if await self.write_buffer.add(message_list):
                     batch_triggered = True
                     self.total_batch_writes += 1
+
+            self.total_items_added += total_messages
 
             # Get the last batch results for response
             last_results = await self.write_buffer.get_last_batch_results()
 
-            return {
-                "status": "success",
-                "code": 200,
-                "data": {"message_ids": last_results},
-                "message": f"Added {len(messages)} messages to buffer",
-                "errors": None,
-            }
+            return self._success_response(
+                last_results,
+                f"Added {len(message_batch_list)} message lists to buffer",
+                batch_triggered=batch_triggered,
+                total_messages=total_messages
+            )
 
         except Exception as e:
-            logger.error(f"BufferService.add: Error adding messages: {e}")
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": f"Error adding messages: {str(e)}",
-                "errors": [{"field": "general", "message": str(e)}],
-            }
-
-    async def add_batch(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Add a batch of messages to memory.
-
-        Args:
-            messages: List of message dictionaries with role and content
-
-        Returns:
-            Dictionary with status, code, and message IDs
-        """
-        # Direct delegation to add method (which uses write-through strategy)
-        return await self.add(messages)
+            logger.error(f"BufferService.add_batch: Error adding message batch: {e}")
+            return self._error_response(f"Error adding message batch: {str(e)}")
 
     async def read(self, item_ids: List[str]) -> Dict[str, Any]:
         """Read items from memory.
@@ -557,6 +558,7 @@ class BufferService(MemoryInterface, ServiceInterface):
         scope: str = "all",
         include_messages: bool = True,
         include_knowledge: bool = True,
+        include_chunks: bool = True,
     ) -> Dict[str, Any]:
         """Query memory for relevant messages.
 

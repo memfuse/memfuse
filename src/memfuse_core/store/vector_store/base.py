@@ -378,16 +378,18 @@ class VectorStore(StoreBase):
 
                 results = filtered_results
 
-            # Apply other filters (include_messages, include_knowledge)
+            # Apply other filters (include_messages, include_knowledge, include_chunks)
             if query.metadata:
                 include_messages = query.metadata.get("include_messages", True)
-                include_knowledge = query.metadata.get(
-                    "include_knowledge", True)
+                include_knowledge = query.metadata.get("include_knowledge", True)
+                include_chunks = query.metadata.get("include_chunks", True)
 
                 filtered_results = []
                 for result in results:
                     item_type = result.metadata.get("type")
-                    if (item_type == "message" and include_messages) or (item_type == "knowledge" and include_knowledge):
+                    if ((item_type == "message" and include_messages) or
+                        (item_type == "knowledge" and include_knowledge) or
+                        (item_type == "chunk" and include_chunks)):
                         filtered_results.append(result)
 
                 results = filtered_results[:top_k]

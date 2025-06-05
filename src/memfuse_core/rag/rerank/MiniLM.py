@@ -163,6 +163,15 @@ class MiniLMReranker(RerankerBase):
                     texts.append(item["content"])
                 elif isinstance(item, dict) and "text" in item:
                     texts.append(item["text"])
+                elif isinstance(item, list):
+                    # Handle MessageList format (List of Messages)
+                    message_texts = []
+                    for message in item:
+                        if isinstance(message, dict):
+                            role = message.get("role", "unknown")
+                            content = message.get("content", "")
+                            message_texts.append(f"[{role}]: {content}")
+                    texts.append("\n".join(message_texts))
                 else:
                     logger.warning(f"Could not extract text from item: {item}")
                     texts.append(str(item))

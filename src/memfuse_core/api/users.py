@@ -299,6 +299,37 @@ async def query_memory(
 
     # First, get all messages from the database to ensure we have the correct metadata
     for result in all_session_results:
+        # Handle MessageList format (List of Messages from WriteBuffer)
+        if isinstance(result, list):
+            # This is a MessageList from WriteBuffer - process each message
+            for message in result:
+                if isinstance(message, dict):
+                    # Generate a temporary ID for WriteBuffer messages
+                    result_id = f"buffer_{hash(str(message))}"
+
+                    # Create a standardized result format
+                    standardized_result = {
+                        "id": result_id,
+                        "content": message.get("content", ""),
+                        "score": 1.0,  # Default score for WriteBuffer results
+                        "type": "message",
+                        "role": message.get("role", "unknown"),
+                        "created_at": None,  # WriteBuffer messages don't have timestamps yet
+                        "updated_at": None,
+                        "metadata": message.get("metadata", {})
+                    }
+
+                    # Store in message_map
+                    if result_id not in message_map:
+                        message_map[result_id] = standardized_result
+            continue
+
+        # Ensure result is a dictionary before processing
+        if not isinstance(result, dict):
+            logger.warning(f"Unexpected result format: {type(result)}, skipping")
+            continue
+
+        # Handle standard result format (from persistent storage)
         result_id = result.get("id")
         if not result_id:
             continue
