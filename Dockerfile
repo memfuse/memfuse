@@ -1,4 +1,4 @@
-# Use Python 3.11 slim image as base
+# Alternative Dockerfile using pip instead of Poetry
 FROM python:3.11-slim
 
 # Set environment variables
@@ -17,41 +17,17 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Install Poetry with timeout and retry settings
-RUN pip install --timeout=100 --retries=5 poetry
-
-# Configure Poetry: Don't create virtual environment, install dependencies globally
-ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VENV_IN_PROJECT=0 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache \
-    POETRY_HTTP_TIMEOUT=300 \
-    POETRY_INSTALLER_MAX_WORKERS=1
-
 # Set work directory
 WORKDIR /app
 
-# Copy Poetry configuration files
-COPY pyproject.toml poetry.lock* ./
-
-# Configure Poetry settings for better reliability
-RUN poetry config virtualenvs.create false \
-    && poetry config installer.max-workers 1 \
-    && poetry config http-basic.pypi.timeout 300
-
-# Install dependencies with retry logic
-RUN for i in {1..3}; do \
-        echo "Attempt $i to install dependencies..." && \
-        poetry install --only=main --no-root --timeout=300 && break || \
-        (echo "Attempt $i failed, retrying..." && sleep 30); \
-    done && \
-    rm -rf $POETRY_CACHE_DIR
-
-# Copy project files
+# Copy project files first
+COPY pyproject.toml ./
 COPY src/ ./src/
 COPY config/ ./config/
 COPY README.md ./
 
-# Install the package in editable mode
+# Install the package with all dependencies using pip
+# This extracts dependencies from pyproject.toml and installs them
 RUN pip install --timeout=100 --retries=5 -e .
 
 # Create data directory
