@@ -8,7 +8,7 @@ clean and focused on raw data storage.
 import os
 import sqlite3
 import asyncio
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import time
 from loguru import logger
 import json
@@ -936,3 +936,266 @@ class SQLiteKeywordStore(KeywordStore):
                 await self._flush_buffer()
 
             return [True] * len(chunk_ids)
+
+    # Business Query Operations
+    async def get_chunks_by_session(self, session_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific session.
+
+        Args:
+            session_id: Session ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the session
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Query chunks by session_id in metadata
+                cursor.execute("""
+                SELECT id, content, metadata FROM items_fts
+                WHERE metadata LIKE ?
+                """, (f'%"session_id": "{session_id}"%',))
+
+                results = []
+                for row in cursor.fetchall():
+                    item_id, content, metadata_str = row
+                    try:
+                        metadata = json.loads(metadata_str) if metadata_str else {}
+                        # Double-check session_id match
+                        if metadata.get("session_id") == session_id:
+                            results.append(
+                                ChunkData(
+                                    content=content,
+                                    chunk_id=item_id,
+                                    metadata=metadata
+                                )
+                            )
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON metadata for item {item_id}")
+                        continue
+
+                logger.info(f"Retrieved {len(results)} chunks for session {session_id} from keyword store")
+                return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by session from keyword store: {e}")
+            return []
+
+    async def get_chunks_by_round(self, round_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific round.
+
+        Args:
+            round_id: Round ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the round
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Query chunks by round_id in metadata
+                cursor.execute("""
+                SELECT id, content, metadata FROM items_fts
+                WHERE metadata LIKE ?
+                """, (f'%"round_id": "{round_id}"%',))
+
+                results = []
+                for row in cursor.fetchall():
+                    item_id, content, metadata_str = row
+                    try:
+                        metadata = json.loads(metadata_str) if metadata_str else {}
+                        # Double-check round_id match
+                        if metadata.get("round_id") == round_id:
+                            results.append(
+                                ChunkData(
+                                    content=content,
+                                    chunk_id=item_id,
+                                    metadata=metadata
+                                )
+                            )
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON metadata for item {item_id}")
+                        continue
+
+                logger.info(f"Retrieved {len(results)} chunks for round {round_id} from keyword store")
+                return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by round from keyword store: {e}")
+            return []
+
+    async def get_chunks_by_user(self, user_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific user.
+
+        Args:
+            user_id: User ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the user
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Query chunks by user_id in metadata
+                cursor.execute("""
+                SELECT id, content, metadata FROM items_fts
+                WHERE metadata LIKE ?
+                """, (f'%"user_id": "{user_id}"%',))
+
+                results = []
+                for row in cursor.fetchall():
+                    item_id, content, metadata_str = row
+                    try:
+                        metadata = json.loads(metadata_str) if metadata_str else {}
+                        # Double-check user_id match
+                        if metadata.get("user_id") == user_id:
+                            results.append(
+                                ChunkData(
+                                    content=content,
+                                    chunk_id=item_id,
+                                    metadata=metadata
+                                )
+                            )
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON metadata for item {item_id}")
+                        continue
+
+                logger.info(f"Retrieved {len(results)} chunks for user {user_id} from keyword store")
+                return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by user from keyword store: {e}")
+            return []
+
+    async def get_chunks_by_strategy(self, strategy_type: str) -> List[ChunkData]:
+        """Get all chunks created by a specific strategy.
+
+        Args:
+            strategy_type: Strategy type to filter chunks
+
+        Returns:
+            List of ChunkData objects for the strategy
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Query chunks by strategy in metadata
+                cursor.execute("""
+                SELECT id, content, metadata FROM items_fts
+                WHERE metadata LIKE ?
+                """, (f'%"strategy": "{strategy_type}"%',))
+
+                results = []
+                for row in cursor.fetchall():
+                    item_id, content, metadata_str = row
+                    try:
+                        metadata = json.loads(metadata_str) if metadata_str else {}
+                        # Double-check strategy match
+                        if metadata.get("strategy") == strategy_type:
+                            results.append(
+                                ChunkData(
+                                    content=content,
+                                    chunk_id=item_id,
+                                    metadata=metadata
+                                )
+                            )
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON metadata for item {item_id}")
+                        continue
+
+                logger.info(f"Retrieved {len(results)} chunks for strategy {strategy_type} from keyword store")
+                return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by strategy from keyword store: {e}")
+            return []
+
+    async def get_chunks_stats(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Get statistics about chunks in the store.
+
+        Args:
+            filters: Optional filters to apply (e.g., session_id, user_id)
+
+        Returns:
+            Dictionary containing statistics
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Get total count
+                cursor.execute("SELECT COUNT(*) FROM items_fts")
+                total_chunks = cursor.fetchone()[0]
+
+                # Get detailed stats if reasonable number of chunks
+                stats = {
+                    "total_chunks": total_chunks,
+                    "store_type": "keyword",
+                    "by_session": {},
+                    "by_strategy": {},
+                    "by_user": {},
+                    "storage_size": "N/A"
+                }
+
+                if total_chunks > 0 and total_chunks < 10000:
+                    # Get all metadata for detailed stats
+                    cursor.execute("SELECT metadata FROM items_fts")
+
+                    session_counts = {}
+                    strategy_counts = {}
+                    user_counts = {}
+
+                    for row in cursor.fetchall():
+                        metadata_str = row[0]
+                        try:
+                            metadata = json.loads(metadata_str) if metadata_str else {}
+
+                            # Count by session
+                            session_id = metadata.get("session_id")
+                            if session_id:
+                                session_counts[session_id] = session_counts.get(session_id, 0) + 1
+
+                            # Count by strategy
+                            strategy = metadata.get("strategy")
+                            if strategy:
+                                strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
+
+                            # Count by user
+                            user_id = metadata.get("user_id")
+                            if user_id:
+                                user_counts[user_id] = user_counts.get(user_id, 0) + 1
+
+                        except json.JSONDecodeError:
+                            continue
+
+                    stats["by_session"] = session_counts
+                    stats["by_strategy"] = strategy_counts
+                    stats["by_user"] = user_counts
+
+                return stats
+
+        except Exception as e:
+            logger.error(f"Error getting chunks stats from keyword store: {e}")
+            return {
+                "total_chunks": 0,
+                "store_type": "keyword",
+                "by_session": {},
+                "by_strategy": {},
+                "by_user": {},
+                "storage_size": "N/A",
+                "error": str(e)
+            }

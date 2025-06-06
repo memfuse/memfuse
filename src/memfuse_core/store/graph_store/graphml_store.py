@@ -9,7 +9,7 @@ import asyncio
 import time
 import numpy as np
 from loguru import logger
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import networkx as nx
 
 from ...models.core import Node, Edge, Item, Query, QueryResult
@@ -1250,3 +1250,236 @@ class GraphMLStore(GraphStore):
         except Exception as e:
             logger.error(f"Error clearing graph: {e}")
             return False
+
+    # Business Query Operations
+    async def get_chunks_by_session(self, session_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific session.
+
+        Args:
+            session_id: Session ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the session
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            results = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata_str = node_data.get("metadata", "{}")
+
+                try:
+                    metadata = json.loads(metadata_str)
+                    # Check if this chunk belongs to the session
+                    if metadata.get("session_id") == session_id:
+                        results.append(
+                            ChunkData(
+                                content=content,
+                                chunk_id=node_id,
+                                metadata=metadata
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON metadata for node {node_id}")
+                    continue
+
+            logger.info(f"Retrieved {len(results)} chunks for session {session_id} from graph store")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by session from graph store: {e}")
+            return []
+
+    async def get_chunks_by_round(self, round_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific round.
+
+        Args:
+            round_id: Round ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the round
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            results = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata_str = node_data.get("metadata", "{}")
+
+                try:
+                    metadata = json.loads(metadata_str)
+                    # Check if this chunk belongs to the round
+                    if metadata.get("round_id") == round_id:
+                        results.append(
+                            ChunkData(
+                                content=content,
+                                chunk_id=node_id,
+                                metadata=metadata
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON metadata for node {node_id}")
+                    continue
+
+            logger.info(f"Retrieved {len(results)} chunks for round {round_id} from graph store")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by round from graph store: {e}")
+            return []
+
+    async def get_chunks_by_user(self, user_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific user.
+
+        Args:
+            user_id: User ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the user
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            results = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata_str = node_data.get("metadata", "{}")
+
+                try:
+                    metadata = json.loads(metadata_str)
+                    # Check if this chunk belongs to the user
+                    if metadata.get("user_id") == user_id:
+                        results.append(
+                            ChunkData(
+                                content=content,
+                                chunk_id=node_id,
+                                metadata=metadata
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON metadata for node {node_id}")
+                    continue
+
+            logger.info(f"Retrieved {len(results)} chunks for user {user_id} from graph store")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by user from graph store: {e}")
+            return []
+
+    async def get_chunks_by_strategy(self, strategy_type: str) -> List[ChunkData]:
+        """Get all chunks created by a specific strategy.
+
+        Args:
+            strategy_type: Strategy type to filter chunks
+
+        Returns:
+            List of ChunkData objects for the strategy
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            results = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata_str = node_data.get("metadata", "{}")
+
+                try:
+                    metadata = json.loads(metadata_str)
+                    # Check if this chunk was created by the strategy
+                    if metadata.get("strategy") == strategy_type:
+                        results.append(
+                            ChunkData(
+                                content=content,
+                                chunk_id=node_id,
+                                metadata=metadata
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON metadata for node {node_id}")
+                    continue
+
+            logger.info(f"Retrieved {len(results)} chunks for strategy {strategy_type} from graph store")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by strategy from graph store: {e}")
+            return []
+
+    async def get_chunks_stats(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Get statistics about chunks in the store.
+
+        Args:
+            filters: Optional filters to apply (e.g., session_id, user_id)
+
+        Returns:
+            Dictionary containing statistics
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            total_chunks = len(self.graph.nodes)
+
+            # Basic stats
+            stats = {
+                "total_chunks": total_chunks,
+                "store_type": "graph",
+                "by_session": {},
+                "by_strategy": {},
+                "by_user": {},
+                "storage_size": "N/A"
+            }
+
+            # Get detailed stats if reasonable number of chunks
+            if total_chunks > 0 and total_chunks < 10000:
+                session_counts = {}
+                strategy_counts = {}
+                user_counts = {}
+
+                for node_id, node_data in self.graph.nodes(data=True):
+                    metadata_str = node_data.get("metadata", "{}")
+                    try:
+                        metadata = json.loads(metadata_str)
+
+                        # Count by session
+                        session_id = metadata.get("session_id")
+                        if session_id:
+                            session_counts[session_id] = session_counts.get(session_id, 0) + 1
+
+                        # Count by strategy
+                        strategy = metadata.get("strategy")
+                        if strategy:
+                            strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
+
+                        # Count by user
+                        user_id = metadata.get("user_id")
+                        if user_id:
+                            user_counts[user_id] = user_counts.get(user_id, 0) + 1
+
+                    except json.JSONDecodeError:
+                        continue
+
+                stats["by_session"] = session_counts
+                stats["by_strategy"] = strategy_counts
+                stats["by_user"] = user_counts
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"Error getting chunks stats from graph store: {e}")
+            return {
+                "total_chunks": 0,
+                "store_type": "graph",
+                "by_session": {},
+                "by_strategy": {},
+                "by_user": {},
+                "storage_size": "N/A",
+                "error": str(e)
+            }

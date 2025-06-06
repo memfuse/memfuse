@@ -120,12 +120,93 @@ class ChunkStoreInterface(ABC):
     @abstractmethod
     async def clear(self) -> bool:
         """Clear all chunks from the store.
-        
+
         Returns:
             True if successful, False otherwise
-            
+
         Raises:
             StorageError: If store cannot be cleared
+        """
+        pass
+
+    # Business Query Operations
+    @abstractmethod
+    async def get_chunks_by_session(self, session_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific session.
+
+        Args:
+            session_id: Session ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the session
+
+        Raises:
+            StorageError: If chunks cannot be retrieved
+        """
+        pass
+
+    @abstractmethod
+    async def get_chunks_by_round(self, round_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific round.
+
+        Args:
+            round_id: Round ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the round
+
+        Raises:
+            StorageError: If chunks cannot be retrieved
+        """
+        pass
+
+    @abstractmethod
+    async def get_chunks_by_user(self, user_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific user.
+
+        Args:
+            user_id: User ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the user
+
+        Raises:
+            StorageError: If chunks cannot be retrieved
+        """
+        pass
+
+    @abstractmethod
+    async def get_chunks_by_strategy(self, strategy_type: str) -> List[ChunkData]:
+        """Get all chunks created by a specific strategy.
+
+        Args:
+            strategy_type: Strategy type to filter chunks
+
+        Returns:
+            List of ChunkData objects for the strategy
+
+        Raises:
+            StorageError: If chunks cannot be retrieved
+        """
+        pass
+
+    @abstractmethod
+    async def get_chunks_stats(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Get statistics about chunks in the store.
+
+        Args:
+            filters: Optional filters to apply (e.g., session_id, user_id)
+
+        Returns:
+            Dictionary containing statistics like:
+            - total_chunks: Total number of chunks
+            - by_session: Count by session_id
+            - by_strategy: Count by strategy type
+            - by_user: Count by user_id
+            - storage_size: Estimated storage size
+
+        Raises:
+            StorageError: If statistics cannot be retrieved
         """
         pass
 

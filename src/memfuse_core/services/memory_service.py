@@ -315,6 +315,7 @@ class MemoryService(MessageInterface):
 
         This is the core processing method that handles MessageBatchList.
         Applies chunking strategy and stores chunks to various stores.
+        Uses async parallel processing to reduce latency.
 
         Args:
             message_batch_list: List of lists of messages (MessageBatchList)
@@ -329,17 +330,30 @@ class MemoryService(MessageInterface):
 
             logger.info(f"MemoryService.add_batch: Processing {len(message_batch_list)} message lists")
 
-            # Apply chunk strategy: MessageBatchList -> List[ChunkData]
-            chunks = await self.chunk_strategy.create_chunks(message_batch_list)
-            logger.info(f"MemoryService.add_batch: Created {len(chunks)} chunks")
+            # Fast preparation: get session_id and create round_id (no DB writes yet)
+            session_id, round_id = await self._prepare_session_and_round(message_batch_list)
+            logger.info(f"MemoryService.add_batch: Prepared session_id={session_id}, round_id={round_id}")
 
-            # Store original messages to database and get message IDs
-            message_ids = await self._store_original_messages(message_batch_list)
+            # Parallel processing to reduce latency
+            async def store_messages_task():
+                """Store original messages to database."""
+                return await self._store_original_messages_with_round(message_batch_list, session_id, round_id)
 
-            # Store chunks to various stores
-            await self._store_chunks(chunks)
+            async def process_chunks_task():
+                """Create and store chunks."""
+                chunks = await self.chunk_strategy.create_chunks(message_batch_list)
+                logger.info(f"MemoryService.add_batch: Created {len(chunks)} chunks")
+                await self._store_chunks_enhanced(chunks, session_id, round_id)
+                return chunks
 
-            logger.info(f"MemoryService.add_batch: Successfully processed {len(chunks)} chunks")
+            # Execute both tasks in parallel
+            message_ids_task = asyncio.create_task(store_messages_task())
+            chunks_task = asyncio.create_task(process_chunks_task())
+
+            # Wait for both to complete
+            message_ids, chunks = await asyncio.gather(message_ids_task, chunks_task)
+
+            logger.info(f"MemoryService.add_batch: Successfully processed {len(chunks)} chunks and {len(message_ids)} messages")
             return self._success_response(
                 message_ids,
                 f"Processed {len(message_batch_list)} message lists into {len(chunks)} chunks",
@@ -349,6 +363,247 @@ class MemoryService(MessageInterface):
         except Exception as e:
             logger.error(f"MemoryService.add_batch: Error processing message batch: {e}")
             return self._error_response(f"Error processing message batch: {str(e)}")
+
+    # Chunks Query Methods
+    async def get_chunks_by_session(self, session_id: str, store_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all chunks for a specific session from all or specific stores.
+
+        Args:
+            session_id: Session ID to filter chunks
+            store_type: Optional store type filter ('vector', 'keyword', 'graph', 'hybrid')
+
+        Returns:
+            List of chunk dictionaries with store_type metadata
+        """
+        all_chunks = []
+
+        try:
+            # Determine which stores to query based on store_type
+            if store_type == "hybrid":
+                # Hybrid: prioritize vector > keyword > graph
+                stores_to_query = [
+                    ("vector", self.vector_store),
+                    ("keyword", self.keyword_store),
+                    ("graph", self.graph_store)
+                ]
+            elif store_type is None:
+                # All stores
+                stores_to_query = [
+                    ("vector", self.vector_store),
+                    ("keyword", self.keyword_store),
+                    ("graph", self.graph_store)
+                ]
+            else:
+                # Specific store
+                store_map = {
+                    "vector": self.vector_store,
+                    "keyword": self.keyword_store,
+                    "graph": self.graph_store
+                }
+                stores_to_query = [(store_type, store_map.get(store_type))]
+
+            # Query stores in order (important for hybrid)
+            for store_name, store in stores_to_query:
+                if store and hasattr(store, 'get_chunks_by_session'):
+                    store_chunks = await store.get_chunks_by_session(session_id)
+                    for chunk in store_chunks:
+                        chunk.metadata["store_type"] = store_name
+                        all_chunks.append({
+                            "chunk_id": chunk.chunk_id,
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        })
+
+            logger.info(f"Retrieved {len(all_chunks)} chunks for session {session_id} (store_type: {store_type or 'all'})")
+            return all_chunks
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by session {session_id}: {e}")
+            return []
+
+    async def get_chunks_by_round(self, round_id: str, store_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all chunks for a specific round from all or specific stores.
+
+        Args:
+            round_id: Round ID to filter chunks
+            store_type: Optional store type filter ('vector', 'keyword', 'graph')
+
+        Returns:
+            List of chunk dictionaries with store_type metadata
+        """
+        all_chunks = []
+
+        try:
+            if store_type is None or store_type == "vector":
+                if self.vector_store and hasattr(self.vector_store, 'get_chunks_by_round'):
+                    vector_chunks = await self.vector_store.get_chunks_by_round(round_id)
+                    for chunk in vector_chunks:
+                        chunk.metadata["store_type"] = "vector"
+                        all_chunks.append({
+                            "chunk_id": chunk.chunk_id,
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        })
+
+            if store_type is None or store_type == "keyword":
+                if self.keyword_store and hasattr(self.keyword_store, 'get_chunks_by_round'):
+                    keyword_chunks = await self.keyword_store.get_chunks_by_round(round_id)
+                    for chunk in keyword_chunks:
+                        chunk.metadata["store_type"] = "keyword"
+                        all_chunks.append({
+                            "chunk_id": chunk.chunk_id,
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        })
+
+            if store_type is None or store_type == "graph":
+                if self.graph_store and hasattr(self.graph_store, 'get_chunks_by_round'):
+                    graph_chunks = await self.graph_store.get_chunks_by_round(round_id)
+                    for chunk in graph_chunks:
+                        chunk.metadata["store_type"] = "graph"
+                        all_chunks.append({
+                            "chunk_id": chunk.chunk_id,
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        })
+
+            logger.info(f"Retrieved {len(all_chunks)} chunks for round {round_id}")
+            return all_chunks
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by round {round_id}: {e}")
+            return []
+
+    async def get_chunks_stats(self, store_type: Optional[str] = None) -> Dict[str, Any]:
+        """Get statistics about chunks from all or specific stores.
+
+        Args:
+            store_type: Optional store type filter ('vector', 'keyword', 'graph')
+
+        Returns:
+            Dictionary containing aggregated statistics
+        """
+        all_stats = {}
+
+        try:
+            if store_type is None or store_type == "vector":
+                if self.vector_store and hasattr(self.vector_store, 'get_chunks_stats'):
+                    vector_stats = await self.vector_store.get_chunks_stats()
+                    all_stats["vector"] = vector_stats
+
+            if store_type is None or store_type == "keyword":
+                if self.keyword_store and hasattr(self.keyword_store, 'get_chunks_stats'):
+                    keyword_stats = await self.keyword_store.get_chunks_stats()
+                    all_stats["keyword"] = keyword_stats
+
+            if store_type is None or store_type == "graph":
+                if self.graph_store and hasattr(self.graph_store, 'get_chunks_stats'):
+                    graph_stats = await self.graph_store.get_chunks_stats()
+                    all_stats["graph"] = graph_stats
+
+            # Aggregate total chunks
+            total_chunks = sum(stats.get("total_chunks", 0) for stats in all_stats.values())
+
+            return {
+                "total_chunks": total_chunks,
+                "by_store": all_stats,
+                "store_type_filter": store_type or "all"
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting chunks stats: {e}")
+            return {
+                "total_chunks": 0,
+                "by_store": {},
+                "store_type_filter": store_type or "all",
+                "error": str(e)
+            }
+
+    async def _prepare_session_and_round(self, message_batch_list: MessageBatchList) -> tuple[str, str]:
+        """Fast preparation: extract session_id and create round_id without DB writes.
+
+        Args:
+            message_batch_list: List of lists of messages
+
+        Returns:
+            Tuple of (session_id, round_id)
+
+        Raises:
+            ValueError: If no session_id found in messages
+        """
+        # Flatten message_batch_list to get all messages
+        all_messages = []
+        for message_list in message_batch_list:
+            all_messages.extend(message_list)
+
+        if not all_messages:
+            raise ValueError("No messages found in message_batch_list")
+
+        # Get session_id from first message metadata
+        session_id = None
+        first_message = all_messages[0]
+        if isinstance(first_message, dict) and 'metadata' in first_message:
+            metadata = first_message['metadata']
+            if isinstance(metadata, dict) and 'session_id' in metadata:
+                session_id = metadata['session_id']
+
+        # Also check the message itself for session_id (for backward compatibility)
+        if session_id is None and isinstance(first_message, dict) and 'session_id' in first_message:
+            session_id = first_message['session_id']
+
+        if session_id is None:
+            raise ValueError("No session_id found in messages")
+
+        # Create round_id immediately (just a UUID, no DB operation)
+        import uuid
+        round_id = str(uuid.uuid4())
+
+        return session_id, round_id
+
+    async def _store_original_messages_with_round(self, message_batch_list: MessageBatchList,
+                                                 session_id: str, round_id: str) -> List[str]:
+        """Store original messages to database with pre-created round_id.
+
+        Args:
+            message_batch_list: List of lists of messages
+            session_id: Pre-extracted session ID
+            round_id: Pre-created round ID
+
+        Returns:
+            List of message IDs
+        """
+        message_ids = []
+
+        # Flatten message_batch_list to get all messages
+        all_messages = []
+        for message_list in message_batch_list:
+            all_messages.extend(message_list)
+
+        if not all_messages:
+            return message_ids
+
+        # Add metadata to all messages
+        for message in all_messages:
+            if 'metadata' not in message:
+                message['metadata'] = {}
+            if 'session_id' not in message['metadata']:
+                message['metadata']['session_id'] = session_id
+            if 'user_id' not in message['metadata']:
+                message['metadata']['user_id'] = self._user_id
+            if 'agent_id' not in message['metadata']:
+                message['metadata']['agent_id'] = self._agent_id
+
+        # Create the round in database with pre-created round_id
+        self.db.create_round(session_id, round_id)
+
+        # Store messages to database
+        for message in all_messages:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+            message_id = self.db.add_message(round_id, role, content)
+            message_ids.append(message_id)
+
+        return message_ids
 
     async def _store_original_messages(self, message_batch_list: MessageBatchList) -> List[str]:
         """Store original messages to database and return message IDs.
@@ -408,8 +663,64 @@ class MemoryService(MessageInterface):
 
         return message_ids
 
+    async def _store_chunks_enhanced(self, chunks, session_id: str, round_id: str) -> None:
+        """Store chunks to various stores with enhanced metadata including session_id and round_id.
+
+        Args:
+            chunks: List of ChunkData objects
+            session_id: Session ID for the chunks
+            round_id: Round ID for the chunks
+        """
+        if not chunks:
+            return
+
+        # Add comprehensive metadata to chunk metadata for all stores
+        from datetime import datetime
+        user_chunks = []
+        for chunk in chunks:
+            user_chunk = ChunkData(
+                content=chunk.content,
+                chunk_id=chunk.chunk_id,
+                metadata={
+                    **chunk.metadata,  # Preserve original strategy-specific metadata
+                    "type": "chunk",
+                    "user_id": self._user_id,
+                    "session_id": session_id,      # New: session association
+                    "round_id": round_id,          # New: round association
+                    "agent_id": self._agent_id,    # New: agent association
+                    "created_at": datetime.now().isoformat(),  # New: timestamp
+                }
+            )
+            user_chunks.append(user_chunk)
+
+        # Store chunks to vector store
+        if self.vector_store:
+            try:
+                await asyncio.wait_for(self.vector_store.add(user_chunks), timeout=30.0)
+                logger.debug(f"Successfully stored {len(user_chunks)} chunks to vector store")
+            except Exception as e:
+                logger.error(f"Error adding chunks to vector store: {e}")
+
+        # Store chunks to keyword store
+        if self.keyword_store:
+            try:
+                await asyncio.wait_for(self.keyword_store.add(user_chunks), timeout=30.0)
+                logger.debug(f"Successfully stored {len(user_chunks)} chunks to keyword store")
+            except Exception as e:
+                logger.error(f"Error adding chunks to keyword store: {e}")
+
+        # Store chunks to graph store
+        if self.graph_store:
+            try:
+                await asyncio.wait_for(self.graph_store.add(user_chunks), timeout=30.0)
+                logger.debug(f"Successfully stored {len(user_chunks)} chunks to graph store")
+            except Exception as e:
+                logger.error(f"Error adding chunks to graph store: {e}")
+
     async def _store_chunks(self, chunks) -> None:
         """Store chunks to various stores using unified chunk interface.
+
+        Legacy method - kept for backward compatibility.
 
         Args:
             chunks: List of ChunkData objects
