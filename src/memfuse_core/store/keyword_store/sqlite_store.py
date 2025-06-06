@@ -16,6 +16,7 @@ import json
 from ...models.core import Item, QueryResult
 from ...utils.path_manager import PathManager
 from .base import KeywordStore
+from ...rag.chunk.base import ChunkData
 
 
 class SQLiteKeywordStore(KeywordStore):
@@ -758,3 +759,180 @@ class SQLiteKeywordStore(KeywordStore):
         if self.conn:
             self.conn.close()
             self.conn = None
+
+    # New ChunkStoreInterface methods
+    async def add_chunks_to_index(self, chunks: List[ChunkData]) -> List[str]:
+        """Add chunks to the keyword index.
+
+        Args:
+            chunks: Chunks to add to the index
+
+        Returns:
+            List of added chunk IDs
+        """
+        if not chunks:
+            return []
+
+        async with self.write_lock:
+            # Convert chunks to items and add to write buffer
+            for chunk in chunks:
+                item = Item(
+                    id=chunk.chunk_id,
+                    content=chunk.content,
+                    metadata=chunk.metadata
+                )
+                self.write_buffer.append(("add", item))
+
+            # Flush buffer if it's full
+            if len(self.write_buffer) >= self.buffer_size:
+                await self._flush_buffer()
+
+            return [chunk.chunk_id for chunk in chunks]
+
+    async def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Optional[ChunkData]]:
+        """Get chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to retrieve
+
+        Returns:
+            List of ChunkData objects, None for chunks not found
+        """
+        if not chunk_ids:
+            return []
+
+        # Flush buffer to ensure we have the latest data
+        await self._flush_buffer()
+
+        # Prepare placeholders for the query
+        placeholders = ", ".join(["?"] * len(chunk_ids))
+
+        cursor = self.conn.cursor()
+        cursor.execute(f"""
+        SELECT i.id, f.content, i.type, i.created_at, i.updated_at, i.metadata
+        FROM items i
+        JOIN items_fts f ON i.id = f.id
+        WHERE i.id IN ({placeholders})
+        """, chunk_ids)
+
+        rows = cursor.fetchall()
+        result = {row["id"]: ChunkData(
+            content=row["content"],
+            chunk_id=row["id"],
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {}
+        ) for row in rows}
+
+        # Return chunks in the same order as chunk_ids
+        return [result.get(chunk_id) for chunk_id in chunk_ids]
+
+    async def update_chunk_in_index(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update a chunk in the keyword index.
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+
+        Returns:
+            True if successful, False if chunk not found
+        """
+        async with self.write_lock:
+            # Convert chunk to item and add to write buffer
+            item = Item(
+                id=chunk.chunk_id,
+                content=chunk.content,
+                metadata=chunk.metadata
+            )
+            self.write_buffer.append(("update", chunk_id, item))
+
+            # Flush buffer if it's full
+            if len(self.write_buffer) >= self.buffer_size:
+                await self._flush_buffer()
+
+            return True
+
+    async def search_chunks(self, query_text: str, top_k: int = 5, user_id: Optional[str] = None) -> List[ChunkData]:
+        """Search chunks using keyword matching.
+
+        Args:
+            query_text: Query text
+            top_k: Number of results to return
+            user_id: User ID to filter by (optional)
+
+        Returns:
+            List of ChunkData objects sorted by relevance
+        """
+        # Use existing search method and convert results
+        query_results = await self.search(query_text, top_k, user_id)
+
+        # Convert QueryResult objects to ChunkData objects
+        chunks = []
+        for result in query_results:
+            # Add score to metadata
+            metadata_with_score = result.metadata.copy()
+            metadata_with_score["score"] = result.score
+
+            chunks.append(ChunkData(
+                content=result.content,
+                chunk_id=result.id,
+                metadata=metadata_with_score
+            ))
+
+        return chunks
+
+    async def get_chunk_count(self) -> int:
+        """Get the total number of chunks in the store.
+
+        Returns:
+            Total number of chunks stored
+        """
+        # Flush buffer to ensure we have the latest data
+        await self._flush_buffer()
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM items")
+        return cursor.fetchone()[0]
+
+    async def clear_all_chunks(self) -> bool:
+        """Clear all chunks from the store.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            async with self.write_lock:
+                # Clear write buffer
+                self.write_buffer.clear()
+
+                # Clear database tables
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM items_fts")
+                cursor.execute("DELETE FROM items")
+                self.conn.commit()
+
+                return True
+        except Exception as e:
+            logger.error(f"Error clearing keyword store: {e}")
+            return False
+
+    async def delete_chunks_by_ids(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to delete
+
+        Returns:
+            List of deletion success flags
+        """
+        if not chunk_ids:
+            return []
+
+        async with self.write_lock:
+            # Add all chunks to delete buffer
+            for chunk_id in chunk_ids:
+                self.write_buffer.append(("delete", chunk_id))
+
+            # Flush buffer if it's full
+            if len(self.write_buffer) >= self.buffer_size:
+                await self._flush_buffer()
+
+            return [True] * len(chunk_ids)

@@ -11,6 +11,7 @@ from ..utils.path_manager import PathManager
 from ..rag.rerank import MiniLMReranker
 from ..interfaces import MessageInterface, MessageList, MessageBatchList
 from ..rag.chunk import ChunkStrategy, MessageChunkStrategy
+from ..rag.chunk.base import ChunkData
 
 
 class MemoryService(MessageInterface):
@@ -408,7 +409,7 @@ class MemoryService(MessageInterface):
         return message_ids
 
     async def _store_chunks(self, chunks) -> None:
-        """Store chunks to various stores.
+        """Store chunks to various stores using unified chunk interface.
 
         Args:
             chunks: List of ChunkData objects
@@ -416,83 +417,40 @@ class MemoryService(MessageInterface):
         if not chunks:
             return
 
+        # Add user_id to chunk metadata for all stores
+        user_chunks = []
+        for chunk in chunks:
+            user_chunk = ChunkData(
+                content=chunk.content,
+                chunk_id=chunk.chunk_id,
+                metadata={
+                    **chunk.metadata,
+                    "type": "chunk",
+                    "user_id": self._user_id,
+                }
+            )
+            user_chunks.append(user_chunk)
+
         # Store chunks to vector store
         if self.vector_store:
-            vector_items = []
-            for chunk in chunks:
-                vector_items.append(Item(
-                    id=chunk.chunk_id,
-                    content=chunk.content,
-                    metadata={
-                        **chunk.metadata,
-                        "type": "chunk",
-                        "user_id": self._user_id,
-                    }
-                ))
-
-            if hasattr(self.vector_store, 'add_batch'):
-                try:
-                    await asyncio.wait_for(self.vector_store.add_batch(vector_items), timeout=30.0)
-                except Exception as e:
-                    logger.error(f"Error adding chunks to vector store: {e}")
-            else:
-                for item in vector_items:
-                    try:
-                        await self.vector_store.add(item)
-                    except Exception as e:
-                        logger.error(f"Error adding chunk {item.id} to vector store: {e}")
-
-        # Store chunks to graph store
-        if self.graph_store:
-            graph_nodes = []
-            for chunk in chunks:
-                graph_nodes.append(Node(
-                    id=chunk.chunk_id,
-                    content=chunk.content,
-                    metadata={
-                        **chunk.metadata,
-                        "type": "chunk",
-                        "user_id": self._user_id,
-                    }
-                ))
-
-            if hasattr(self.graph_store, 'add_nodes'):
-                try:
-                    await asyncio.wait_for(self.graph_store.add_nodes(graph_nodes), timeout=30.0)
-                except Exception as e:
-                    logger.error(f"Error adding chunks to graph store: {e}")
-            else:
-                for node in graph_nodes:
-                    try:
-                        await self.graph_store.add_node(node)
-                    except Exception as e:
-                        logger.error(f"Error adding chunk {node.id} to graph store: {e}")
+            try:
+                await asyncio.wait_for(self.vector_store.add(user_chunks), timeout=30.0)
+            except Exception as e:
+                logger.error(f"Error adding chunks to vector store: {e}")
 
         # Store chunks to keyword store
         if self.keyword_store:
-            keyword_items = []
-            for chunk in chunks:
-                keyword_items.append(Item(
-                    id=chunk.chunk_id,
-                    content=chunk.content,
-                    metadata={
-                        **chunk.metadata,
-                        "type": "chunk",
-                        "user_id": self._user_id,
-                    }
-                ))
+            try:
+                await asyncio.wait_for(self.keyword_store.add(user_chunks), timeout=30.0)
+            except Exception as e:
+                logger.error(f"Error adding chunks to keyword store: {e}")
 
-            if hasattr(self.keyword_store, 'add_batch'):
-                try:
-                    await asyncio.wait_for(self.keyword_store.add_batch(keyword_items), timeout=30.0)
-                except Exception as e:
-                    logger.error(f"Error adding chunks to keyword store: {e}")
-            else:
-                for item in keyword_items:
-                    try:
-                        await self.keyword_store.add(item)
-                    except Exception as e:
-                        logger.error(f"Error adding chunk {item.id} to keyword store: {e}")
+        # Store chunks to graph store
+        if self.graph_store:
+            try:
+                await asyncio.wait_for(self.graph_store.add(user_chunks), timeout=30.0)
+            except Exception as e:
+                logger.error(f"Error adding chunks to graph store: {e}")
 
     # Legacy add method - now delegates to add_batch with proper wrapping
     async def add(self, messages: MessageList, **kwargs) -> Dict[str, Any]:

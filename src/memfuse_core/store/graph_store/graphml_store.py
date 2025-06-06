@@ -16,6 +16,7 @@ from ...models.core import Node, Edge, Item, Query, QueryResult
 from ...utils.path_manager import PathManager
 from .base import GraphStore
 from ..adapters.model_adapter import ModelAdapterFactory
+from ...rag.chunk.base import ChunkData
 
 
 class GraphMLStore(GraphStore):
@@ -1015,3 +1016,237 @@ class GraphMLStore(GraphStore):
 
         # Print statistics
         logger.info(f"GraphMLStore statistics: {self.stats}")
+
+    # New ChunkStoreInterface methods
+    async def add_chunks_as_nodes(self, chunks: List[ChunkData]) -> List[str]:
+        """Add chunks as nodes to the graph.
+
+        Args:
+            chunks: Chunks to add as nodes
+
+        Returns:
+            List of added chunk IDs
+        """
+        if not chunks:
+            return []
+
+        async with self.write_lock:
+            # Add all chunks as nodes to buffer
+            for chunk in chunks:
+                # Convert ChunkData to Node
+                node = Node(
+                    id=chunk.chunk_id,
+                    content=chunk.content,
+                    metadata=chunk.metadata
+                )
+                self.node_buffer.append(("add", node))
+
+            # Flush buffer if it's full
+            if len(self.node_buffer) >= self.buffer_size:
+                await self._flush_node_buffer()
+
+            self.stats["nodes_added"] += len(chunks)
+            return [chunk.chunk_id for chunk in chunks]
+
+    async def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Optional[ChunkData]]:
+        """Get chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to retrieve
+
+        Returns:
+            List of ChunkData objects, None for chunks not found
+        """
+        if not chunk_ids:
+            return []
+
+        # Flush buffer to ensure we have the latest data
+        await self._flush_node_buffer()
+
+        result = []
+        for chunk_id in chunk_ids:
+            if chunk_id in self.graph.nodes:
+                node_data = self.graph.nodes[chunk_id]
+                result.append(ChunkData(
+                    content=node_data.get("content", ""),
+                    chunk_id=chunk_id,
+                    metadata=json.loads(node_data.get("metadata", "{}"))
+                ))
+            else:
+                result.append(None)
+
+        return result
+
+    async def update_chunk_in_graph(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update a chunk in the graph.
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+
+        Returns:
+            True if successful, False if chunk not found
+        """
+        async with self.write_lock:
+            # Convert ChunkData to Node
+            node = Node(
+                id=chunk.chunk_id,
+                content=chunk.content,
+                metadata=chunk.metadata
+            )
+
+            # Add to buffer
+            self.node_buffer.append(("update", chunk_id, node))
+
+            # Flush buffer if it's full
+            if len(self.node_buffer) >= self.buffer_size:
+                await self._flush_node_buffer()
+
+            self.stats["nodes_updated"] += 1
+            return True
+
+    async def delete_chunks_and_edges(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks and their associated edges.
+
+        Args:
+            chunk_ids: List of chunk IDs to delete
+
+        Returns:
+            List of deletion success flags
+        """
+        if not chunk_ids:
+            return []
+
+        async with self.write_lock:
+            # Add all chunks to delete buffer
+            for chunk_id in chunk_ids:
+                self.node_buffer.append(("delete", chunk_id))
+
+            # Flush buffer if it's full
+            if len(self.node_buffer) >= self.buffer_size:
+                await self._flush_node_buffer()
+
+            self.stats["nodes_deleted"] += len(chunk_ids)
+            return [True] * len(chunk_ids)
+
+    async def search_graph(self, query_text: str, top_k: int = 5, user_id: Optional[str] = None) -> List[ChunkData]:
+        """Search chunks using graph traversal.
+
+        Args:
+            query_text: Query text
+            top_k: Number of results to return
+            user_id: User ID to filter by (optional)
+
+        Returns:
+            List of ChunkData objects sorted by relevance
+        """
+        start_time = time.time()
+
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+            await self._flush_edge_buffer()
+
+            # Generate embedding for the query
+            query_embedding = await self.embedding_adapter.encode([query_text])
+            if not query_embedding:
+                return []
+
+            query_embedding = query_embedding[0]
+
+            # Calculate similarity scores for all nodes
+            node_scores = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata = json.loads(node_data.get("metadata", "{}"))
+
+                # Apply user_id filter if provided
+                if user_id and metadata.get("user_id") != user_id:
+                    continue
+
+                # Generate embedding for the node content
+                node_embedding = await self.embedding_adapter.encode([content])
+                if not node_embedding:
+                    continue
+
+                node_embedding = node_embedding[0]
+
+                # Calculate cosine similarity
+                similarity = np.dot(query_embedding, node_embedding) / (
+                    np.linalg.norm(query_embedding) * np.linalg.norm(node_embedding)
+                )
+
+                node_scores.append((node_id, content, metadata, similarity))
+
+            # Sort by similarity score (descending)
+            node_scores.sort(key=lambda x: x[3], reverse=True)
+
+            # Take top_k results
+            top_results = node_scores[:top_k]
+
+            # Convert to ChunkData objects
+            results = []
+            for node_id, content, metadata, score in top_results:
+                # Add score to metadata
+                metadata_with_score = metadata.copy()
+                metadata_with_score["score"] = score
+
+                results.append(ChunkData(
+                    content=content,
+                    chunk_id=node_id,
+                    metadata=metadata_with_score
+                ))
+
+            self.stats["queries"] += 1
+            self.stats["query_time"] += time.time() - start_time
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Error searching graph: {e}")
+            return []
+
+    async def get_node_count(self) -> int:
+        """Get the total number of nodes in the graph.
+
+        Returns:
+            Total number of nodes stored
+        """
+        # Flush buffer to ensure we have the latest data
+        await self._flush_node_buffer()
+        return len(self.graph.nodes)
+
+    async def clear_graph(self) -> bool:
+        """Clear all nodes and edges from the graph.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            async with self.write_lock:
+                # Clear buffers
+                self.node_buffer.clear()
+                self.edge_buffer.clear()
+
+                # Clear graph
+                self.graph.clear()
+
+                # Save empty graph
+                nx.write_graphml(self.graph, self.graph_file)
+
+                # Reset statistics
+                self.stats = {
+                    "nodes_added": 0,
+                    "edges_added": 0,
+                    "nodes_updated": 0,
+                    "edges_updated": 0,
+                    "nodes_deleted": 0,
+                    "edges_deleted": 0,
+                    "queries": 0,
+                    "query_time": 0,
+                }
+
+                return True
+        except Exception as e:
+            logger.error(f"Error clearing graph: {e}")
+            return False

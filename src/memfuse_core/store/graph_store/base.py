@@ -2,15 +2,19 @@
 
 from loguru import logger
 from abc import abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from ..base import StoreBase
-from ...models.core import Edge, Node, Query, QueryResult
-from ...models.core import StoreType
+from ...models.core import Query, StoreType
+from ...rag.chunk.base import ChunkData
+from ...interfaces.chunk_store import ChunkStoreInterface, StorageError
 
 
-class GraphStore(StoreBase):
-    """Base class for graph store implementations."""
+class GraphStore(StoreBase, ChunkStoreInterface):
+    """Base class for graph store implementations.
+
+    Implements ChunkStoreInterface for unified chunk handling across all store types.
+    """
 
     def __init__(
         self,
@@ -40,298 +44,333 @@ class GraphStore(StoreBase):
         """
         return StoreType.GRAPH
 
-    @abstractmethod
-    async def add_node(self, node: Node) -> str:
-        """Add a node to the graph.
+    # ChunkStoreInterface implementation
+
+    # CRUD Operations
+    async def add(self, chunks: List[ChunkData]) -> List[str]:
+        """Create: Add chunks to the graph store as nodes.
 
         Args:
-            node: Node to add
+            chunks: List of chunks to add to the store
 
         Returns:
-            ID of the added node
+            List of added chunk IDs
+
+        Raises:
+            StorageError: If chunks cannot be added
+        """
+        if not chunks:
+            return []
+
+        try:
+            # Invalidate query cache
+            self.query_cache = {}
+
+            return await self.add_chunks_as_nodes(chunks)
+        except Exception as e:
+            logger.error(f"Error adding chunks to graph store: {e}")
+            raise StorageError(
+                f"Failed to add chunks: {e}",
+                store_type="graph",
+                operation="add"
+            )
+
+    @abstractmethod
+    async def add_chunks_as_nodes(self, chunks: List[ChunkData]) -> List[str]:
+        """Add chunks as nodes to the graph (implementation specific).
+
+        This method should create graph nodes from chunks and establish
+        relationships based on chunk metadata or content similarity.
+
+        Args:
+            chunks: Chunks to add as nodes
+
+        Returns:
+            List of added chunk IDs
+        """
+        pass
+
+    async def read(self, chunk_ids: List[str], filters: Optional[Dict[str, Any]] = None) -> List[Optional[ChunkData]]:
+        """Read: Get chunks by their IDs with optional metadata filters.
+
+        This is a database-level read operation that retrieves chunks by exact IDs
+        and optionally filters by metadata conditions.
+
+        Args:
+            chunk_ids: List of chunk IDs to retrieve
+            filters: Optional metadata filters (e.g., {"user_id": "123", "type": "chunk"})
+
+        Returns:
+            List of ChunkData objects, None for chunks not found or filtered out
+
+        Raises:
+            StorageError: If chunks cannot be retrieved
+        """
+        try:
+            chunks = await self.get_chunks_by_ids(chunk_ids)
+
+            # Apply metadata filters if provided
+            if filters:
+                filtered_chunks = []
+                for chunk in chunks:
+                    if chunk is None:
+                        filtered_chunks.append(None)
+                        continue
+
+                    # Check if chunk matches all filter conditions
+                    matches = True
+                    for key, value in filters.items():
+                        if chunk.metadata.get(key) != value:
+                            matches = False
+                            break
+
+                    if matches:
+                        filtered_chunks.append(chunk)
+                    else:
+                        filtered_chunks.append(None)
+
+                return filtered_chunks
+
+            return chunks
+
+        except Exception as e:
+            logger.error(f"Error reading chunks from graph store: {e}")
+            raise StorageError(
+                f"Failed to read chunks: {e}",
+                store_type="graph",
+                operation="read"
+            )
+
+    async def update(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update: Modify an existing chunk.
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+
+        Returns:
+            True if successful, False if chunk not found
+
+        Raises:
+            StorageError: If chunk cannot be updated
+        """
+        try:
+            # Update chunk in graph
+            success = await self.update_chunk_in_graph(chunk_id, chunk)
+
+            if success:
+                # Invalidate query cache
+                self.query_cache = {}
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Error updating chunk in graph store: {e}")
+            raise StorageError(
+                f"Failed to update chunk: {e}",
+                store_type="graph",
+                operation="update"
+            )
+
+    @abstractmethod
+    async def update_chunk_in_graph(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update a chunk in the graph (implementation specific).
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+
+        Returns:
+            True if successful, False if chunk not found
         """
         pass
 
     @abstractmethod
-    async def add_nodes(self, nodes: List[Node]) -> List[str]:
-        """Add multiple nodes to the graph.
+    async def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Optional[ChunkData]]:
+        """Get chunks by their IDs (implementation specific).
 
         Args:
-            nodes: Nodes to add
+            chunk_ids: List of chunk IDs to retrieve
 
         Returns:
-            List of IDs of the added nodes
+            List of ChunkData objects, None for chunks not found
         """
         pass
 
-    @abstractmethod
-    async def get_node(self, node_id: str) -> Optional[Node]:
-        """Get a node by ID.
+    async def query(self, query: Query, top_k: int = 5) -> List[ChunkData]:
+        """Query relevant chunks using graph traversal.
 
         Args:
-            node_id: ID of the node to get
+            query: Query object containing search text and metadata
+            top_k: Maximum number of results to return
 
         Returns:
-            Node if found, None otherwise
+            List of relevant ChunkData objects, sorted by relevance score
+
+        Raises:
+            StorageError: If query cannot be executed
         """
-        pass
+        try:
+            # Add user_id to cache key if present
+            cache_key = f"{query.text}:{top_k}"
+            user_id = query.metadata.get("user_id") if query.metadata else None
+            if user_id:
+                cache_key += f":{user_id}"
+
+            if cache_key in self.query_cache:
+                return self.query_cache[cache_key]
+
+            # Perform graph search
+            results = await self.search_graph(query.text, top_k, user_id)
+
+            # Apply filters
+            if query.metadata:
+                include_messages = query.metadata.get("include_messages", True)
+                include_knowledge = query.metadata.get("include_knowledge", True)
+                include_chunks = query.metadata.get("include_chunks", True)
+
+                filtered_results = []
+                for chunk in results:
+                    chunk_type = chunk.metadata.get("type")
+                    if (
+                        (chunk_type == "message" and include_messages) or
+                        (chunk_type == "knowledge" and include_knowledge) or
+                        (chunk_type == "chunk" and include_chunks)
+                    ):
+                        filtered_results.append(chunk)
+
+                results = filtered_results[:top_k]
+
+            # Cache results
+            self.query_cache[cache_key] = results
+
+            # Limit cache size
+            if len(self.query_cache) > self.cache_size:
+                # Remove oldest entry (first key)
+                oldest_key = next(iter(self.query_cache))
+                del self.query_cache[oldest_key]
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Error querying chunks from graph store: {e}")
+            raise StorageError(
+                f"Failed to query chunks: {e}",
+                store_type="graph",
+                operation="query"
+            )
 
     @abstractmethod
-    async def get_nodes(self, node_ids: List[str]) -> List[Optional[Node]]:
-        """Get multiple nodes by ID.
+    async def search_graph(self, query_text: str, top_k: int = 5, user_id: Optional[str] = None) -> List[ChunkData]:
+        """Search chunks using graph traversal (implementation specific).
+
+        This method should use graph algorithms to find relevant chunks
+        based on node relationships and content similarity.
 
         Args:
-            node_ids: IDs of the nodes to get
-
-        Returns:
-            List of nodes (None for nodes not found)
-        """
-        pass
-
-    @abstractmethod
-    async def update_node(self, node_id: str, node: Node) -> bool:
-        """Update a node.
-
-        Args:
-            node_id: ID of the node to update
-            node: New node data
-
-        Returns:
-            True if successful, False otherwise
-        """
-        pass
-
-    @abstractmethod
-    async def update_nodes(self, node_ids: List[str], nodes: List[Node]) -> List[bool]:
-        """Update multiple nodes.
-
-        Args:
-            node_ids: IDs of the nodes to update
-            nodes: New node data
-
-        Returns:
-            List of success flags
-        """
-        pass
-
-    @abstractmethod
-    async def delete_node(self, node_id: str) -> bool:
-        """Delete a node.
-
-        Args:
-            node_id: ID of the node to delete
-
-        Returns:
-            True if successful, False otherwise
-        """
-        pass
-
-    @abstractmethod
-    async def delete_nodes(self, node_ids: List[str]) -> List[bool]:
-        """Delete multiple nodes.
-
-        Args:
-            node_ids: IDs of the nodes to delete
-
-        Returns:
-            List of success flags
-        """
-        pass
-
-    @abstractmethod
-    async def add_edge(self, edge: Edge) -> str:
-        """Add an edge to the graph.
-
-        Args:
-            edge: Edge to add
-
-        Returns:
-            ID of the added edge
-        """
-        pass
-
-    @abstractmethod
-    async def add_edges(self, edges: List[Edge]) -> List[str]:
-        """Add multiple edges to the graph.
-
-        Args:
-            edges: Edges to add
-
-        Returns:
-            List of IDs of the added edges
-        """
-        pass
-
-    @abstractmethod
-    async def get_edge(self, edge_id: str) -> Optional[Edge]:
-        """Get an edge by ID.
-
-        Args:
-            edge_id: ID of the edge to get
-
-        Returns:
-            Edge if found, None otherwise
-        """
-        pass
-
-    @abstractmethod
-    async def get_edges(self, edge_ids: List[str]) -> List[Optional[Edge]]:
-        """Get multiple edges by ID.
-
-        Args:
-            edge_ids: IDs of the edges to get
-
-        Returns:
-            List of edges (None for edges not found)
-        """
-        pass
-
-    @abstractmethod
-    async def update_edge(self, edge_id: str, edge: Edge) -> bool:
-        """Update an edge.
-
-        Args:
-            edge_id: ID of the edge to update
-            edge: New edge data
-
-        Returns:
-            True if successful, False otherwise
-        """
-        pass
-
-    @abstractmethod
-    async def update_edges(self, edge_ids: List[str], edges: List[Edge]) -> List[bool]:
-        """Update multiple edges.
-
-        Args:
-            edge_ids: IDs of the edges to update
-            edges: New edge data
-
-        Returns:
-            List of success flags
-        """
-        pass
-
-    @abstractmethod
-    async def delete_edge(self, edge_id: str) -> bool:
-        """Delete an edge.
-
-        Args:
-            edge_id: ID of the edge to delete
-
-        Returns:
-            True if successful, False otherwise
-        """
-        pass
-
-    @abstractmethod
-    async def delete_edges(self, edge_ids: List[str]) -> List[bool]:
-        """Delete multiple edges.
-
-        Args:
-            edge_ids: IDs of the edges to delete
-
-        Returns:
-            List of success flags
-        """
-        pass
-
-    @abstractmethod
-    async def get_neighbors(self, node_id: str, relation: Optional[str] = None, top_k: int = 5) -> List[QueryResult]:
-        """Get the neighbors of a node.
-
-        Args:
-            node_id: ID of the node
-            relation: Optional relation filter
+            query_text: Query text
             top_k: Number of results to return
+            user_id: User ID to filter by (optional)
 
         Returns:
-            List of query results
+            List of ChunkData objects sorted by relevance
         """
         pass
+
+    async def delete(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to delete
+
+        Returns:
+            List of deletion success flags (True if deleted, False if not found)
+
+        Raises:
+            StorageError: If chunks cannot be deleted
+        """
+        try:
+            # Invalidate query cache
+            self.query_cache = {}
+
+            return await self.delete_chunks_and_edges(chunk_ids)
+        except Exception as e:
+            logger.error(f"Error deleting chunks from graph store: {e}")
+            raise StorageError(
+                f"Failed to delete chunks: {e}",
+                store_type="graph",
+                operation="delete"
+            )
 
     @abstractmethod
-    async def get_edges_between(
-        self,
-        source_id: str,
-        target_id: str,
-        relation: Optional[str] = None
-    ) -> List[Edge]:
-        """Get edges between two nodes.
+    async def delete_chunks_and_edges(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks and their associated edges (implementation specific).
+
+        This method should remove both the nodes and all edges connected to them.
 
         Args:
-            source_id: ID of the source node
-            target_id: ID of the target node
-            relation: Optional relation filter
+            chunk_ids: List of chunk IDs to delete
 
         Returns:
-            List of edges
+            List of deletion success flags
         """
         pass
 
-    async def query(self, query: Query, top_k: int = 5) -> List[QueryResult]:
-        """Query the graph.
-
-        Args:
-            query: Query to execute
-            top_k: Number of results to return
+    async def count(self) -> int:
+        """Get the total number of chunks in the store.
 
         Returns:
-            List of query results
+            Total number of chunks stored
+
+        Raises:
+            StorageError: If count cannot be retrieved
         """
-        # Add user_id to cache key if present
-        cache_key = f"{query.text}:{top_k}"
-        user_id = None
-        if query.metadata and "user_id" in query.metadata:
-            user_id = query.metadata["user_id"]
-            cache_key += f":{user_id}"
+        try:
+            return await self.get_node_count()
+        except Exception as e:
+            logger.error(f"Error counting chunks in graph store: {e}")
+            raise StorageError(
+                f"Failed to count chunks: {e}",
+                store_type="graph",
+                operation="count"
+            )
 
-        if cache_key in self.query_cache:
-            return self.query_cache[cache_key]
+    @abstractmethod
+    async def get_node_count(self) -> int:
+        """Get the total number of nodes in the graph (implementation specific).
 
-        # For graph store, we need to extract entities from the query
-        # and find relevant nodes and their neighbors
-        # This is a simplified implementation
+        Returns:
+            Total number of nodes stored
+        """
+        pass
 
-        # Get all nodes with user_id filter applied at the database level
-        # In a real implementation, you would pass the user_id to your graph database query
-        results = []
+    async def clear(self) -> bool:
+        """Clear all chunks from the store.
 
-        # Log the filtering
-        if user_id:
-            logger.debug(
-                f"Applied user_id filter: {user_id} at database level for graph query")
+        Returns:
+            True if successful, False otherwise
 
-        # Apply user_id filter as a post-processing step
-        if user_id:
-            filtered_results = []
-            for result in results:
-                result_user_id = result.metadata.get("user_id")
-                if result_user_id == user_id:
-                    filtered_results.append(result)
-                else:
-                    logger.debug(
-                        f"Post-filtering: Removing result with user_id={result_user_id}, expected {user_id}")
+        Raises:
+            StorageError: If store cannot be cleared
+        """
+        try:
+            # Clear query cache
+            self.query_cache = {}
 
-            results = filtered_results
+            return await self.clear_graph()
+        except Exception as e:
+            logger.error(f"Error clearing graph store: {e}")
+            raise StorageError(
+                f"Failed to clear store: {e}",
+                store_type="graph",
+                operation="clear"
+            )
 
-        # Filter results based on metadata
-        if query.metadata:
-            include_messages = query.metadata.get("include_messages", True)
-            include_knowledge = query.metadata.get("include_knowledge", True)
-            include_chunks = query.metadata.get("include_chunks", True)
+    @abstractmethod
+    async def clear_graph(self) -> bool:
+        """Clear all nodes and edges from the graph (implementation specific).
 
-            filtered_results = []
-            for result in results:
-                item_type = result.metadata.get("type")
-                if ((item_type == "message" and include_messages) or
-                    (item_type == "knowledge" and include_knowledge) or
-                    (item_type == "chunk" and include_chunks)):
-                    filtered_results.append(result)
-
-            results = filtered_results[:top_k]
-
-        # Cache results
-        self.query_cache[cache_key] = results
-
-        return results
+        Returns:
+            True if successful, False otherwise
+        """
+        pass

@@ -2,15 +2,19 @@
 
 from loguru import logger
 from abc import abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from ..base import StoreBase
-from ...models.core import Item, Query, QueryResult
-from ...models.core import StoreType
+from ...models.core import Query, StoreType
+from ...rag.chunk.base import ChunkData
+from ...interfaces.chunk_store import ChunkStoreInterface, StorageError
 
 
-class KeywordStore(StoreBase):
-    """Base class for keyword store implementations."""
+class KeywordStore(StoreBase, ChunkStoreInterface):
+    """Base class for keyword store implementations.
+    
+    Implements ChunkStoreInterface for unified chunk handling across all store types.
+    """
 
     def __init__(
         self,
@@ -40,107 +44,222 @@ class KeywordStore(StoreBase):
         """
         return StoreType.KEYWORD
 
-    @abstractmethod
-    async def add_document(self, item: Item) -> str:
-        """Add a document to the store.
+    # ChunkStoreInterface implementation
+
+    # CRUD Operations
+    async def add(self, chunks: List[ChunkData]) -> List[str]:
+        """Create: Add chunks to the keyword store.
 
         Args:
-            item: Item to add
+            chunks: List of chunks to add to the store
 
         Returns:
-            ID of the added document
+            List of added chunk IDs
+
+        Raises:
+            StorageError: If chunks cannot be added
+        """
+        if not chunks:
+            return []
+
+        try:
+            # Invalidate query cache
+            self.query_cache = {}
+
+            return await self.add_chunks_to_index(chunks)
+        except Exception as e:
+            logger.error(f"Error adding chunks to keyword store: {e}")
+            raise StorageError(
+                f"Failed to add chunks: {e}",
+                store_type="keyword",
+                operation="add"
+            )
+
+    @abstractmethod
+    async def add_chunks_to_index(self, chunks: List[ChunkData]) -> List[str]:
+        """Add chunks to the keyword index (implementation specific).
+        
+        Args:
+            chunks: Chunks to add to the index
+            
+        Returns:
+            List of added chunk IDs
+        """
+        pass
+
+    async def read(self, chunk_ids: List[str], filters: Optional[Dict[str, Any]] = None) -> List[Optional[ChunkData]]:
+        """Read: Get chunks by their IDs with optional metadata filters.
+
+        This is a database-level read operation that retrieves chunks by exact IDs
+        and optionally filters by metadata conditions.
+
+        Args:
+            chunk_ids: List of chunk IDs to retrieve
+            filters: Optional metadata filters (e.g., {"user_id": "123", "type": "chunk"})
+
+        Returns:
+            List of ChunkData objects, None for chunks not found or filtered out
+
+        Raises:
+            StorageError: If chunks cannot be retrieved
+        """
+        try:
+            chunks = await self.get_chunks_by_ids(chunk_ids)
+
+            # Apply metadata filters if provided
+            if filters:
+                filtered_chunks = []
+                for chunk in chunks:
+                    if chunk is None:
+                        filtered_chunks.append(None)
+                        continue
+
+                    # Check if chunk matches all filter conditions
+                    matches = True
+                    for key, value in filters.items():
+                        if chunk.metadata.get(key) != value:
+                            matches = False
+                            break
+
+                    if matches:
+                        filtered_chunks.append(chunk)
+                    else:
+                        filtered_chunks.append(None)
+
+                return filtered_chunks
+
+            return chunks
+
+        except Exception as e:
+            logger.error(f"Error reading chunks from keyword store: {e}")
+            raise StorageError(
+                f"Failed to read chunks: {e}",
+                store_type="keyword",
+                operation="read"
+            )
+
+    async def update(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update: Modify an existing chunk.
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+
+        Returns:
+            True if successful, False if chunk not found
+
+        Raises:
+            StorageError: If chunk cannot be updated
+        """
+        try:
+            # Update chunk in index
+            success = await self.update_chunk_in_index(chunk_id, chunk)
+
+            if success:
+                # Invalidate query cache
+                self.query_cache = {}
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Error updating chunk in keyword store: {e}")
+            raise StorageError(
+                f"Failed to update chunk: {e}",
+                store_type="keyword",
+                operation="update"
+            )
+
+    @abstractmethod
+    async def update_chunk_in_index(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update a chunk in the keyword index (implementation specific).
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+
+        Returns:
+            True if successful, False if chunk not found
         """
         pass
 
     @abstractmethod
-    async def add_documents(self, items: List[Item]) -> List[str]:
-        """Add multiple documents to the store.
-
+    async def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Optional[ChunkData]]:
+        """Get chunks by their IDs (implementation specific).
+        
         Args:
-            items: Items to add
-
+            chunk_ids: List of chunk IDs to retrieve
+            
         Returns:
-            List of IDs of the added documents
+            List of ChunkData objects, None for chunks not found
         """
         pass
 
-    @abstractmethod
-    async def get_document(self, item_id: str) -> Optional[Item]:
-        """Get a document by ID.
-
+    async def query(self, query: Query, top_k: int = 5) -> List[ChunkData]:
+        """Query relevant chunks based on the query.
+        
         Args:
-            item_id: ID of the document to get
-
+            query: Query object containing search text and metadata
+            top_k: Maximum number of results to return
+            
         Returns:
-            Document if found, None otherwise
+            List of relevant ChunkData objects, sorted by relevance score
+            
+        Raises:
+            StorageError: If query cannot be executed
         """
-        pass
+        try:
+            # Add user_id to cache key if present
+            cache_key = f"{query.text}:{top_k}"
+            user_id = query.metadata.get("user_id") if query.metadata else None
+            if user_id:
+                cache_key += f":{user_id}"
+
+            if cache_key in self.query_cache:
+                return self.query_cache[cache_key]
+
+            # Perform search
+            results = await self.search_chunks(query.text, top_k, user_id)
+            
+            # Apply filters
+            if query.metadata:
+                include_messages = query.metadata.get("include_messages", True)
+                include_knowledge = query.metadata.get("include_knowledge", True)
+                include_chunks = query.metadata.get("include_chunks", True)
+
+                filtered_results = []
+                for chunk in results:
+                    chunk_type = chunk.metadata.get("type")
+                    if (
+                        (chunk_type == "message" and include_messages) or
+                        (chunk_type == "knowledge" and include_knowledge) or
+                        (chunk_type == "chunk" and include_chunks)
+                    ):
+                        filtered_results.append(chunk)
+
+                results = filtered_results[:top_k]
+
+            # Cache results
+            self.query_cache[cache_key] = results
+
+            # Limit cache size
+            if len(self.query_cache) > self.cache_size:
+                # Remove oldest entry (first key)
+                oldest_key = next(iter(self.query_cache))
+                del self.query_cache[oldest_key]
+
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error querying chunks from keyword store: {e}")
+            raise StorageError(
+                f"Failed to query chunks: {e}",
+                store_type="keyword",
+                operation="query"
+            )
 
     @abstractmethod
-    async def get_documents(self, item_ids: List[str]) -> List[Optional[Item]]:
-        """Get multiple documents by ID.
-
-        Args:
-            item_ids: IDs of the documents to get
-
-        Returns:
-            List of documents (None for documents not found)
-        """
-        pass
-
-    @abstractmethod
-    async def update_document(self, item_id: str, item: Item) -> bool:
-        """Update a document.
-
-        Args:
-            item_id: ID of the document to update
-            item: New document data
-
-        Returns:
-            True if successful, False otherwise
-        """
-        pass
-
-    @abstractmethod
-    async def update_documents(self, item_ids: List[str], items: List[Item]) -> List[bool]:
-        """Update multiple documents.
-
-        Args:
-            item_ids: IDs of the documents to update
-            items: New document data
-
-        Returns:
-            List of success flags
-        """
-        pass
-
-    @abstractmethod
-    async def delete_document(self, item_id: str) -> bool:
-        """Delete a document.
-
-        Args:
-            item_id: ID of the document to delete
-
-        Returns:
-            True if successful, False otherwise
-        """
-        pass
-
-    @abstractmethod
-    async def delete_documents(self, item_ids: List[str]) -> List[bool]:
-        """Delete multiple documents.
-
-        Args:
-            item_ids: IDs of the documents to delete
-
-        Returns:
-            List of success flags
-        """
-        pass
-
-    @abstractmethod
-    async def search(self, query_text: str, top_k: int = 5, user_id: Optional[str] = None) -> List[QueryResult]:
-        """Search the store.
+    async def search_chunks(self, query_text: str, top_k: int = 5, user_id: Optional[str] = None) -> List[ChunkData]:
+        """Search chunks using keyword matching (implementation specific).
 
         Args:
             query_text: Query text
@@ -148,159 +267,102 @@ class KeywordStore(StoreBase):
             user_id: User ID to filter by (optional)
 
         Returns:
-            List of query results
+            List of ChunkData objects sorted by relevance
         """
         pass
 
-    async def add(self, item: Item) -> str:
-        """Add an item to the store.
-
+    async def delete(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks by their IDs.
+        
         Args:
-            item: Item to add
-
+            chunk_ids: List of chunk IDs to delete
+            
         Returns:
-            ID of the added item
+            List of deletion success flags (True if deleted, False if not found)
+            
+        Raises:
+            StorageError: If chunks cannot be deleted
         """
-        return await self.add_document(item)
+        try:
+            # Invalidate query cache
+            self.query_cache = {}
+            
+            return await self.delete_chunks_by_ids(chunk_ids)
+        except Exception as e:
+            logger.error(f"Error deleting chunks from keyword store: {e}")
+            raise StorageError(
+                f"Failed to delete chunks: {e}",
+                store_type="keyword",
+                operation="delete"
+            )
 
-    async def add_batch(self, items: List[Item]) -> List[str]:
-        """Add multiple items to the store.
-
+    @abstractmethod
+    async def delete_chunks_by_ids(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks by their IDs (implementation specific).
+        
         Args:
-            items: Items to add
-
+            chunk_ids: List of chunk IDs to delete
+            
         Returns:
-            List of IDs of the added items
+            List of deletion success flags
         """
-        return await self.add_documents(items)
+        pass
 
-    async def get(self, item_id: str) -> Optional[Item]:
-        """Get an item by ID.
-
-        Args:
-            item_id: ID of the item to get
-
+    async def count(self) -> int:
+        """Get the total number of chunks in the store.
+        
         Returns:
-            Item if found, None otherwise
+            Total number of chunks stored
+            
+        Raises:
+            StorageError: If count cannot be retrieved
         """
-        return await self.get_document(item_id)
+        try:
+            return await self.get_chunk_count()
+        except Exception as e:
+            logger.error(f"Error counting chunks in keyword store: {e}")
+            raise StorageError(
+                f"Failed to count chunks: {e}",
+                store_type="keyword",
+                operation="count"
+            )
 
-    async def get_batch(self, item_ids: List[str]) -> List[Optional[Item]]:
-        """Get multiple items by ID.
-
-        Args:
-            item_ids: IDs of the items to get
-
+    @abstractmethod
+    async def get_chunk_count(self) -> int:
+        """Get the total number of chunks in the store (implementation specific).
+        
         Returns:
-            List of items (None for items not found)
+            Total number of chunks stored
         """
-        return await self.get_documents(item_ids)
+        pass
 
-    async def update(self, item_id: str, item: Item) -> bool:
-        """Update an item.
+    async def clear(self) -> bool:
+        """Clear all chunks from the store.
+        
+        Returns:
+            True if successful, False otherwise
+            
+        Raises:
+            StorageError: If store cannot be cleared
+        """
+        try:
+            # Clear query cache
+            self.query_cache = {}
+            
+            return await self.clear_all_chunks()
+        except Exception as e:
+            logger.error(f"Error clearing keyword store: {e}")
+            raise StorageError(
+                f"Failed to clear store: {e}",
+                store_type="keyword",
+                operation="clear"
+            )
 
-        Args:
-            item_id: ID of the item to update
-            item: New item data
-
+    @abstractmethod
+    async def clear_all_chunks(self) -> bool:
+        """Clear all chunks from the store (implementation specific).
+        
         Returns:
             True if successful, False otherwise
         """
-        return await self.update_document(item_id, item)
-
-    async def update_batch(self, item_ids: List[str], items: List[Item]) -> List[bool]:
-        """Update multiple items.
-
-        Args:
-            item_ids: IDs of the items to update
-            items: New item data
-
-        Returns:
-            List of success flags
-        """
-        return await self.update_documents(item_ids, items)
-
-    async def delete(self, item_id: str) -> bool:
-        """Delete an item.
-
-        Args:
-            item_id: ID of the item to delete
-
-        Returns:
-            True if successful, False otherwise
-        """
-        return await self.delete_document(item_id)
-
-    async def delete_batch(self, item_ids: List[str]) -> List[bool]:
-        """Delete multiple items.
-
-        Args:
-            item_ids: IDs of the items to delete
-
-        Returns:
-            List of success flags
-        """
-        return await self.delete_documents(item_ids)
-
-    async def query(self, query: Query, top_k: int = 5) -> List[QueryResult]:
-        """Query the store.
-
-        Args:
-            query: Query to execute
-            top_k: Number of results to return
-
-        Returns:
-            List of query results
-        """
-        # Add user_id to cache key if present
-        cache_key = f"{query.text}:{top_k}"
-        user_id = None
-        if query.metadata and "user_id" in query.metadata:
-            user_id = query.metadata["user_id"]
-            cache_key += f":{user_id}"
-
-        if cache_key in self.query_cache:
-            return self.query_cache[cache_key]
-
-        # Search for documents with user_id filter applied at the database level
-        # Pass the user_id to the search method for database-level filtering
-        results = await self.search(query.text, top_k, user_id=user_id)
-
-        # Log the filtering
-        if user_id:
-            logger.debug(
-                f"Applied user_id filter: {user_id} at database level for keyword query")
-
-        # Apply user_id filter as a post-processing step
-        if user_id:
-            filtered_results = []
-            for result in results:
-                result_user_id = result.metadata.get("user_id")
-                if result_user_id == user_id:
-                    filtered_results.append(result)
-                else:
-                    logger.debug(
-                        f"Post-filtering: Removing result with user_id={result_user_id}, expected {user_id}")
-
-            results = filtered_results
-
-        # Filter results based on metadata
-        if query.metadata:
-            include_messages = query.metadata.get("include_messages", True)
-            include_knowledge = query.metadata.get("include_knowledge", True)
-            include_chunks = query.metadata.get("include_chunks", True)
-
-            filtered_results = []
-            for result in results:
-                item_type = result.metadata.get("type")
-                if ((item_type == "message" and include_messages) or
-                    (item_type == "knowledge" and include_knowledge) or
-                    (item_type == "chunk" and include_chunks)):
-                    filtered_results.append(result)
-
-            results = filtered_results[:top_k]
-
-        # Cache results
-        self.query_cache[cache_key] = results
-
-        return results
+        pass
