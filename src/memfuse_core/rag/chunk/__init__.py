@@ -8,6 +8,7 @@ from .base import ChunkData, ChunkStrategy
 from .message import MessageChunkStrategy
 from .contextual import ContextualChunkStrategy
 from .character import CharacterChunkStrategy
+from .message_character import MessageCharacterChunkStrategy
 
 __all__ = [
     "ChunkData",
@@ -15,4 +16,5 @@ __all__ = [
     "MessageChunkStrategy",
     "ContextualChunkStrategy",
     "CharacterChunkStrategy",
+    "MessageCharacterChunkStrategy",
 ]

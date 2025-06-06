@@ -5,12 +5,26 @@ service initialization and server startup.
 """
 
 import asyncio
+import os
 import threading
 from typing import Optional, Any
 from fastapi import FastAPI
 from loguru import logger
 from omegaconf import DictConfig
 import uvicorn
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    # Load .env file from project root
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        logger.info(f"Loaded environment variables from {env_path}")
+    else:
+        logger.info("No .env file found, using system environment variables")
+except ImportError:
+    logger.warning("python-dotenv not installed, using system environment variables only")
 
 from .utils.path_manager import PathManager
 from .utils.config import config_manager

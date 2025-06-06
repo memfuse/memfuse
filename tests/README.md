@@ -27,7 +27,16 @@ tests/
 │
 ├── integration/                # Integration tests for component interactions
 │   ├── __init__.py
-│   └── test_chunking_integration.py  # Chunking system integration tests
+│   ├── rag/                    # RAG integration tests
+│   │   ├── __init__.py
+│   │   └── test_contextual_retrieval_integration.py  # Contextual retrieval integration
+│   ├── llm/                    # LLM integration tests
+│   │   ├── __init__.py
+│   │   └── test_llm_integration.py  # LLM provider integration
+│   ├── chunking/               # Chunking integration tests
+│   │   ├── __init__.py
+│   │   └── test_chunking_integration.py  # Advanced chunking integration
+│   └── test_chunking_integration.py  # Legacy chunking integration tests
 │
 └── e2e/                        # End-to-end tests for full system functionality
     ├── __init__.py
@@ -43,10 +52,13 @@ tests/
 - High code coverage focus
 
 ### Integration Tests (`tests/integration/`)
-- Test component interactions
+- Test component interactions and complete workflows
 - Medium execution time (1-10 seconds per test)
-- Test real component integration
-- Focus on interface contracts
+- Test real component integration without external dependencies
+- Focus on interface contracts and data flow
+- **RAG Integration**: Advanced contextual retrieval and three-layer strategies
+- **LLM Integration**: LLM provider integration with chunking enhancement
+- **Chunking Integration**: Complete chunking workflows with real conversation data
 
 ### End-to-End Tests (`tests/e2e/`)
 - Test complete user workflows
@@ -111,7 +123,12 @@ pytest tests/unit/rag/chunk/
 pytest tests/unit/rag/chunk/test_message_chunk_strategy.py
 
 # Run integration tests
-pytest tests/integration/test_chunking_integration.py
+pytest tests/integration/
+
+# Run specific integration test categories
+pytest tests/integration/rag/  # RAG integration tests
+pytest tests/integration/llm/  # LLM integration tests
+pytest tests/integration/chunking/  # Chunking integration tests
 
 # Run E2E tests
 pytest tests/e2e/test_chunking.py

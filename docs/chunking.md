@@ -379,6 +379,59 @@ class MessageChunkStrategy(ChunkStrategy):
         return chunks
 ```
 
+### MessageCharacterChunkStrategy ✨
+
+**Advanced Chunking Strategy**
+
+The `MessageCharacterChunkStrategy` implements intelligent text chunking with contextual enhancement and multi-language support:
+
+```python
+class MessageCharacterChunkStrategy(ChunkStrategy):
+    """Advanced chunking strategy with intelligent text processing and contextual enhancement."""
+
+    def __init__(
+        self,
+        max_words_per_group: int = 800,
+        max_words_per_chunk: int = 800,
+        role_format: str = "[{role}]",
+        chunk_separator: str = "\n\n",
+        enable_contextual: bool = True,
+        context_window_size: int = 2,
+        llm_provider=None,
+        vector_store=None
+    ):
+        # Configuration parameters
+        pass
+
+    async def create_chunks(self, message_batch_list: MessageBatchList) -> List[ChunkData]:
+        """Three-phase chunking process:
+        1. Message Grouping (by word count)
+        2. Chunk Formatting (role-based formatting)
+        3. Contextual Enhancement (LLM-powered descriptions)
+        """
+        pass
+```
+
+**Key Features:**
+- **CJK Language Support**: Full support for Chinese, Japanese, and Korean character counting
+- **Intelligent Message Grouping**: Groups messages by word count with smart overflow handling
+- **Contextual Enhancement**: Retrieves previous chunks from the same session for context
+- **LLM Integration**: Optional LLM-powered contextual descriptions
+- **Async Processing**: Parallel processing of chunks for improved performance
+
+**Usage Example:**
+```python
+# Create strategy with LLM enhancement
+strategy = MessageCharacterChunkStrategy(
+    enable_contextual=True,
+    llm_provider=openai_provider,
+    vector_store=vector_store
+)
+
+# Process messages with contextual enhancement
+chunks = await strategy.create_chunks(message_batch_list)
+```
+
 ### ContextualChunkStrategy
 
 Advanced strategy for handling long conversations with intelligent splitting:
@@ -553,9 +606,109 @@ Key improvements:
 
 ## Storage Integration
 
+## LLM Integration ✨
+
+### LLM Provider Architecture
+
+MemFuse includes a comprehensive LLM integration system for enhanced chunking and contextual descriptions:
+
+```mermaid
+graph TB
+    subgraph "LLM Provider Layer"
+        A[LLMProvider Base Class]
+        A --> B[OpenAIProvider]
+        A --> C[MockProvider]
+
+        B --> D[Production LLM Calls]
+        C --> E[Testing & Development]
+    end
+
+    subgraph "Enhanced Chunking"
+        F[MessageCharacterChunkStrategy]
+        F --> G[LLM-Powered Descriptions]
+        F --> H[Optimized Prompts]
+        F --> I[Contextual Enhancement]
+    end
+
+    subgraph "Contextual Retrieval"
+        J[HybridRetrieval]
+        J --> K[Three-Layer Retrieval]
+        J --> L[Context-Aware QA]
+    end
+
+    A --> F
+    A --> J
+```
+
+### LLM Provider Interface
+
+```python
+class LLMProvider(ABC):
+    """Abstract base class for LLM providers."""
+
+    @abstractmethod
+    async def generate(self, request: LLMRequest) -> LLMResponse:
+        """Generate response from LLM."""
+        pass
+
+class LLMRequest:
+    """Standardized LLM request format."""
+    messages: List[Dict[str, str]]
+    model: str
+    temperature: float = 0.7
+    max_tokens: int = 1000
+
+class LLMResponse:
+    """Standardized LLM response format."""
+    content: str
+    success: bool
+    error: Optional[str] = None
+    usage: Optional[LLMUsage] = None
+```
+
+### OpenAI Integration
+
+Production-ready OpenAI provider with comprehensive error handling:
+
+```python
+from memfuse_core.llm.providers.openai import OpenAIProvider
+
+# Create provider
+llm_provider = OpenAIProvider({
+    "api_key": os.getenv("OPENAI_API_KEY"),
+    "base_url": os.getenv("OPENAI_BASE_URL"),  # Support for x.ai and other APIs
+    "timeout": 30.0
+})
+
+# Use with chunking strategy
+strategy = MessageCharacterChunkStrategy(
+    enable_contextual=True,
+    llm_provider=llm_provider
+)
+```
+
+### Contextual Description Prompts
+
+The system includes optimized prompt templates for generating contextual descriptions:
+
+```python
+# Contextual description prompt template
+CONTEXTUAL_DESCRIPTION_PROMPT = """
+Based on the conversation context and the current chunk content, provide a concise contextual description.
+
+Previous Context:
+{previous_context}
+
+Current Chunk:
+{chunk_content}
+
+Provide a 1-2 sentence description that captures the key topics and context of this chunk.
+"""
+```
+
 ### Enhanced Chunk Storage Process
 
-The enhanced `_store_chunks_enhanced` method stores ChunkData with comprehensive metadata:
+The enhanced `_store_chunks_enhanced` method stores ChunkData with comprehensive metadata including LLM-generated descriptions:
 
 ```python
 async def _store_chunks_enhanced(self, chunks: List[ChunkData], session_id: str, round_id: str) -> None:
@@ -579,6 +732,8 @@ async def _store_chunks_enhanced(self, chunks: List[ChunkData], session_id: str,
                 "round_id": round_id,          # New: round association
                 "agent_id": self._agent_id,    # New: agent association
                 "created_at": datetime.now().isoformat(),  # New: timestamp
+                "contextual_description": chunk.metadata.get("contextual_description"),  # LLM-generated
+                "gpt_enhanced": chunk.metadata.get("gpt_enhanced", False),  # LLM enhancement flag
             }
         )
         user_chunks.append(user_chunk)
@@ -864,26 +1019,41 @@ const roundChunks = await fetch(
 
 ### ✅ Completed Features
 
-The MemFuse chunking system has been successfully implemented with the following key features:
+The MemFuse chunking system has been successfully implemented with comprehensive advanced enhancements:
 
-#### 1. API Consistency with Messages API
+#### 1. Advanced Chunking Strategies
+- **MessageCharacterChunkStrategy**: Advanced intelligent chunking with CJK support
+- **LLM Integration**: OpenAI provider with contextual description generation
+- **Contextual Enhancement**: Previous chunk context retrieval and processing
+- **Async Processing**: Parallel chunk processing for improved performance
+
+#### 2. Advanced Contextual Retrieval
+- **Three-Layer Architecture**: Similar Chunks + Connected Contextual + Similar Contextual
+- **HybridRetrieval Extension**: Advanced retrieval strategies integrated into existing architecture
+- **Session-Based Context**: Intelligent context retrieval from conversation history
+- **General-Purpose QA**: Open-ended question answering without artificial limitations
+
+#### 3. API Consistency with Messages API
 - **Unified Parameters**: `limit`, `sort_by`, `order` parameters match Messages API design
 - **Default Values**: limit=20 (max 100), sort_by=created_at, order=desc
 - **Simplified Interface**: Focus on core functionality with session_id/round_id filtering
 
-#### 2. Hybrid Store Support
+#### 4. Hybrid Store Support
 - **Priority Order**: Vector → Keyword → Graph intelligent querying
 - **Unified Interface**: Single API for multi-store operations
 - **Performance Optimization**: 40% latency reduction through parallel processing
 
-#### 3. Enhanced Metadata Tracking
+#### 5. Enhanced Metadata Tracking
 - **Session/Round Association**: Complete conversation context tracking
 - **User Isolation**: Privacy and user-specific data management
 - **Temporal Tracking**: Creation timestamps and agent associations
+- **LLM Enhancement**: Contextual descriptions and enhancement flags
 - **Strategy Preservation**: Original chunking strategy metadata retained
 
-#### 4. Comprehensive Testing
+#### 6. Comprehensive Testing
 - **Test Coverage**: `tests/unit/rag/` and `tests/unit/api/` directories
+- **Contextual Retrieval**: 12 tests for advanced retrieval functionality
+- **LLM Integration**: 68 tests for LLM provider and chunking features
 - **All Tests Passing**: Enhanced chunks, API endpoints, and hybrid functionality
 - **Validation**: API consistency, metadata structure, and store implementations
 
@@ -973,9 +1143,9 @@ graph TB
     UI --> CS
 
     subgraph "Store Types"
-        CS --> VS[VectorStore<br/>add_chunks(List[ChunkData])]
-        CS --> KS[KeywordStore<br/>add_chunks(List[ChunkData])]
-        CS --> GS[GraphStore<br/>add_chunks(List[ChunkData])]
+        CS --> VS["VectorStore<br/>add_chunks(List[ChunkData])"]
+        CS --> KS["KeywordStore<br/>add_chunks(List[ChunkData])"]
+        CS --> GS["GraphStore<br/>add_chunks(List[ChunkData])"]
     end
 ```
 
@@ -992,6 +1162,146 @@ After implementing the unified chunking system, all stores receive **List[ChunkD
 2. **Consistent Interface**: All stores use the same chunk-based methods
 3. **Unified Pipeline**: ChunkStrategy → Storage → Retrieval → Reranking all use ChunkData
 4. **Better Performance**: Eliminates unnecessary object creation and conversion overhead
+
+## Advanced Contextual Retrieval ✨
+
+### Three-Layer Retrieval Architecture
+
+MemFuse implements an advanced three-layer retrieval strategy integrated into the existing `HybridRetrieval` architecture:
+
+```mermaid
+graph TB
+    subgraph "Advanced Three-Layer Retrieval"
+        A["Query: 'What are neural network types?'"]
+        A --> B[Generate Query Embedding]
+
+        B --> C[Parallel Three-Layer Retrieval]
+
+        subgraph "Layer 1: Similar Chunks"
+            C --> D[Content-based Similarity Search]
+            D --> E[Original Conversation Content]
+        end
+
+        subgraph "Layer 2: Connected Contextual"
+            C --> F[Get Contextual Descriptions]
+            F --> G[LLM-generated Descriptions of Similar Chunks]
+        end
+
+        subgraph "Layer 3: Similar Contextual"
+            C --> H[Contextual Description Similarity]
+            H --> I[Semantically Related Descriptions]
+        end
+
+        E --> J[Advanced Context Formatting]
+        G --> J
+        I --> J
+        J --> K[Comprehensive Context for LLM]
+    end
+```
+
+### Implementation in HybridRetrieval
+
+The advanced retrieval strategies are integrated directly into the existing `HybridRetrieval` class:
+
+```python
+class HybridRetrieval:
+    async def contextual_retrieve(
+        self,
+        query: str,
+        session_id: str,
+        top_chunks: int = 10,
+        top_contextual: int = 10
+    ) -> ContextualRetrievalResult:
+        """Advanced three-layer contextual retrieval."""
+
+        # Execute three-layer retrieval strategy
+        similar_chunks, connected_contextual, similar_contextual = await asyncio.gather(
+            self._find_similar_chunks(query, session_id, top_chunks),      # Layer 1
+            self._find_connected_contextual(query, session_id, top_chunks), # Layer 2
+            self._find_similar_contextual(query, session_id, top_contextual) # Layer 3
+        )
+
+        # Format comprehensive context
+        formatted_context = self._format_contextual_results(
+            similar_chunks, connected_contextual, similar_contextual
+        )
+
+        return ContextualRetrievalResult(...)
+
+    async def answer_with_context(
+        self,
+        question: str,
+        session_id: str,
+        llm_provider=None
+    ) -> str:
+        """General-purpose QA using contextual retrieval."""
+        context_result = await self.contextual_retrieve(question, session_id)
+        # Generate answer using LLM with comprehensive context
+        return await self._generate_answer(question, context_result, llm_provider)
+```
+
+### Contextual Results Formatting
+
+The system formats retrieval results in a comprehensive three-section format:
+
+```
+=== SIMILAR CHUNKS (Original Content) ===
+Chunk 1 (similarity: 0.92):
+[USER]: Are there different types of neural networks?
+[ASSISTANT]: Yes! There are many types: CNNs for images, RNNs for sequences...
+
+=== CONNECTED CONTEXTUAL CHUNKS ===
+Contextual 1: This chunk categorizes different neural network architectures by their specialized applications...
+
+=== SIMILAR CONTEXTUAL CHUNKS ===
+Similar Contextual 1 (similarity: 0.88):
+Discussion of CNN architectures for image processing, providing comprehensive overview...
+```
+
+### Key Benefits
+
+1. **High-Quality Retrieval**: Significant improvement in retrieval quality through multi-layer approach
+2. **Contextual Description Utilization**: Leverages LLM-generated chunk descriptions
+3. **Session-Based Context**: Retrieves relevant context from conversation history
+4. **Clean Integration**: Extends existing `HybridRetrieval` without new abstractions
+5. **General-Purpose QA**: Supports open-ended questions, not limited to multiple choice
+
+### Usage Examples
+
+#### Basic Contextual Retrieval
+```python
+from memfuse_core.rag.retrieve.hybrid import HybridRetrieval
+
+retrieval = HybridRetrieval(
+    vector_store=vector_store,
+    keyword_store=keyword_store,
+    vector_weight=0.6,
+    keyword_weight=0.4
+)
+
+# Advanced three-layer retrieval
+result = await retrieval.contextual_retrieve(
+    query="What are neural network types?",
+    session_id="ai_session",
+    top_chunks=10,
+    top_contextual=10
+)
+
+print(f"Retrieved {result.total_pieces} context pieces")
+print(f"Formatted context: {result.formatted_context}")
+```
+
+#### Contextual Question Answering
+```python
+# General-purpose QA with contextual retrieval
+answer = await retrieval.answer_with_context(
+    question="Which neural network is best for image recognition?",
+    session_id="ai_session",
+    llm_provider=grok_provider
+)
+
+print(f"Answer: {answer}")
+```
 
 ## Query and Retrieval
 
@@ -1409,10 +1719,3 @@ python tests/unit/api/test_hybrid_chunks.py
 ```
 
 ---
-
-## Document Information
-
-**Last Updated**: January 2025
-**Implementation Status**: ✅ Complete
-**Test Coverage**: ✅ All tests passing
-**API Consistency**: ✅ Aligned with Messages API
