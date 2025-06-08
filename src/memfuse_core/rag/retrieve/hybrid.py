@@ -350,14 +350,30 @@ class HybridRetrieval(BaseRetrieval):
                 f"Querying {store_type} store with query: {query_preview}, user_id: {user_id}")
 
             # The query object contains user_id which will be used for filtering at the database level
-            results = await store.query(query, top_k)
+            chunk_results = await store.query(query, top_k)
             logger.debug(
-                f"Retrieved {len(results)} results from {store_type} store with user_id filter: {user_id}")
+                f"Retrieved {len(chunk_results)} results from {store_type} store with user_id filter: {user_id}")
+
+            # Convert ChunkData objects to QueryResult objects
+            query_results = []
+            for chunk in chunk_results:
+                # Extract score from metadata if available, default to 1.0
+                score = chunk.metadata.get("score", 1.0)
+
+                # Create QueryResult from ChunkData
+                query_result = QueryResult(
+                    id=chunk.chunk_id,
+                    content=chunk.content,
+                    score=score,
+                    metadata=chunk.metadata.copy(),
+                    store_type=store_type
+                )
+                query_results.append(query_result)
 
             # Apply user_id filter as a post-processing step
-            if user_id != "none" and results:
+            if user_id != "none" and query_results:
                 filtered_results = []
-                for result in results:
+                for result in query_results:
                     result_user_id = result.metadata.get("user_id")
                     if result_user_id == user_id:
                         filtered_results.append(result)
@@ -365,14 +381,14 @@ class HybridRetrieval(BaseRetrieval):
                         logger.debug(
                             f"Store filtering: Removing result with user_id={result_user_id}, expected {user_id}")
 
-                if len(filtered_results) != len(results):
+                if len(filtered_results) != len(query_results):
                     logger.debug(
-                        f"Filtered {len(results) - len(filtered_results)} results from {store_type} store")
+                        f"Filtered {len(query_results) - len(filtered_results)} results from {store_type} store")
 
-                results = filtered_results
+                query_results = filtered_results
 
-            logger.debug(f"Got {len(results)} results from {store_type} store")
-            return results
+            logger.debug(f"Got {len(query_results)} results from {store_type} store")
+            return query_results
         except Exception as e:
             logger.error(f"Error querying store: {e}", exc_info=True)
             return []

@@ -143,13 +143,19 @@ class MemoryService(MessageInterface):
             logger.error(f"Failed to create vector store: {e}")
             self.vector_store = None
 
-        try:
-            self.graph_store = await StoreFactory.create_graph_store(
-                data_dir=self.user_dir,
-                existing_model=existing_model
-            )
-        except Exception as e:
-            logger.error(f"Failed to create graph store: {e}")
+        # Only create graph store if enabled in configuration
+        if self.config.get("store", {}).get("multi_path", {}).get("use_graph", False):
+            try:
+                self.graph_store = await StoreFactory.create_graph_store(
+                    data_dir=self.user_dir,
+                    existing_model=existing_model
+                )
+                logger.info("Graph store created successfully")
+            except Exception as e:
+                logger.error(f"Failed to create graph store: {e}")
+                self.graph_store = None
+        else:
+            logger.info("Graph store disabled in configuration")
             self.graph_store = None
 
         try:

@@ -30,8 +30,8 @@ class ChunkData:
         self.metadata = metadata or {}
     
     def _generate_chunk_id(self) -> str:
-        """Generate a unique chunk ID."""
-        return f"chunk_{uuid.uuid4().hex[:12]}"
+        """Generate a unique chunk ID as a proper UUID."""
+        return str(uuid.uuid4())
     
     def __len__(self) -> int:
         """Return the length of the content."""
