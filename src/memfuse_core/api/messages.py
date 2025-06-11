@@ -219,6 +219,7 @@ async def list_messages(
     limit: Optional[str] = "20",  # Changed to str to handle validation manually
     sort_by: str = "timestamp",
     order: str = "desc",
+    buffer_only: Optional[str] = None,  # Buffer support
     # Underscore prefix to indicate unused
     _api_key_data: dict = api_key_dependency,
 ) -> ApiResponse:
@@ -229,6 +230,7 @@ async def list_messages(
         limit: Maximum number of messages to return (default: 20, max: 100)
         sort_by: Field to sort messages by (allowed values: timestamp, id)
         order: Sort order (allowed values: asc, desc)
+        buffer_only: Buffer parameter - if "true", only return RoundBuffer data; if "false", return HybridBuffer + SQLite data excluding RoundBuffer
     """
     try:
         # Validate query parameters
@@ -279,6 +281,23 @@ async def list_messages(
                 )],
             )
 
+        # Validate and convert buffer_only parameter
+        buffer_only_value = None
+        if buffer_only is not None:
+            if buffer_only.lower() == "true":
+                buffer_only_value = True
+            elif buffer_only.lower() == "false":
+                buffer_only_value = False
+            else:
+                return ApiResponse.error(
+                    message="Invalid buffer_only parameter",
+                    code=400,
+                    errors=[ErrorDetail(
+                        field="buffer_only",
+                        message="buffer_only must be 'true' or 'false'"
+                    )],
+                )
+
         # Validate session
         session, error_response = await validate_session(session_id)
         if error_response:
@@ -312,12 +331,33 @@ async def list_messages(
 
         # Get messages through the service (which handles both buffer and direct database access)
         if hasattr(service, 'get_messages_by_session'):
-            messages = await service.get_messages_by_session(
-                session_id=session_id,
-                limit=limit_value,
-                sort_by=sort_by,
-                order=order
-            )
+            # Check if service supports buffer_only parameter
+            if buffer_only_value is not None and hasattr(service, 'get_messages_by_session'):
+                # Try to call with buffer_only parameter
+                try:
+                    messages = await service.get_messages_by_session(
+                        session_id=session_id,
+                        limit=limit_value,
+                        sort_by=sort_by,
+                        order=order,
+                        buffer_only=buffer_only_value
+                    )
+                except TypeError:
+                    # Service doesn't support buffer_only parameter, call without it
+                    messages = await service.get_messages_by_session(
+                        session_id=session_id,
+                        limit=limit_value,
+                        sort_by=sort_by,
+                        order=order
+                    )
+            else:
+                # Call without buffer_only parameter
+                messages = await service.get_messages_by_session(
+                    session_id=session_id,
+                    limit=limit_value,
+                    sort_by=sort_by,
+                    order=order
+                )
         else:
             # Fallback to direct database access if service doesn't support the method
             from ..services.database_service import DatabaseService

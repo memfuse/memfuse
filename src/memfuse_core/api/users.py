@@ -266,6 +266,7 @@ async def query_memory(
             )
 
         # Query this session
+        logger.info(f"🔍 API LAYER: Querying session {session['id']} with query: {request.query[:50]}...")
         result = await memory.query(
             query=request.query,
             top_k=request.top_k,
@@ -275,8 +276,19 @@ async def query_memory(
             include_knowledge=request.include_knowledge,
         )
 
+        # Debug the raw result from BufferService
+        logger.info(f"🔍 API LAYER: Raw result from BufferService: {type(result)}")
+        logger.info(f"🔍 API LAYER: Result keys: {list(result.keys()) if isinstance(result, dict) else 'not dict'}")
+        logger.info(f"🔍 API LAYER: Result status: {result.get('status') if isinstance(result, dict) else 'unknown'}")
+
         # Get results for this session
         session_results = result.get("data", {}).get("results", [])
+        logger.info(f"🔍 API LAYER: Session {session['id']} returned {len(session_results)} results")
+
+        if session_results:
+            logger.info(f"🔍 API LAYER: First result from session: {session_results[0]}")
+        else:
+            logger.warning(f"🚨 API LAYER: Session {session['id']} returned NO results!")
 
         # Add session scope information
         for r in session_results:
@@ -298,7 +310,18 @@ async def query_memory(
     knowledge_map = {}
 
     # First, get all messages from the database to ensure we have the correct metadata
-    for result in all_session_results:
+    logger.info(f"🔍 API LAYER: Processing {len(all_session_results)} raw results from BufferService")
+
+    # Debug: Check if we got any results at all
+    if not all_session_results:
+        logger.warning("🚨 API LAYER: No results received from BufferService!")
+        return ApiResponse.success(
+            data={"results": [], "total": 0},
+            message="No results found from BufferService",
+        )
+
+    for i, result in enumerate(all_session_results):
+        logger.info(f"🔍 API LAYER: Processing raw result {i}: type={type(result)}, content preview: {str(result)[:100]}...")
         # Handle MessageList format (List of Messages from WriteBuffer)
         if isinstance(result, list):
             # This is a MessageList from WriteBuffer - process each message
@@ -335,40 +358,49 @@ async def query_memory(
             continue
 
         if result.get("type") == "message":
-            # Get the message from the database to verify its true session and agent
-            message = db.get_message(result_id)
-            if message:
-                # Get the actual round and session for this message
-                round_data = db.get_round(message.get(
-                    "round_id")) if message.get("round_id") else None
-                if round_data and round_data.get("session_id"):
-                    actual_session_id = round_data.get("session_id")
-                    actual_session = db.get_session(actual_session_id)
+            # Check if this is a buffer result (from memory) vs database result
+            is_buffer_result = result.get("metadata", {}).get("retrieval", {}).get("source") in ["write_buffer", "speculative_buffer", "query_buffer", "hybrid_buffer"]
 
-                    if actual_session:
-                        # Store the message with its correct metadata
-                        # If we've seen this message before, keep the one with the higher score
-                        if result_id not in message_map or result.get("score", 0) > message_map[result_id].get("score", 0):
-                            # Create a new result with the correct metadata
-                            message_map[result_id] = {
-                                "id": result_id,
-                                "content": result.get("content"),
-                                "score": result.get("score", 0),
-                                "type": "message",
-                                "role": message.get("role"),
-                                "created_at": message.get("created_at"),
-                                "updated_at": message.get("updated_at"),
-                                "metadata": {
-                                    "user_id": user_id,
-                                    "agent_id": actual_session["agent_id"],
-                                    "session_id": actual_session_id,
-                                    "session_name": actual_session["name"],
-                                    "scope": ("in_session" if actual_session_id == request.session_id
-                                              else "cross_session") if request.session_id else None,
-                                    "level": 0,
-                                    "retrieval": result.get("metadata", {}).get("retrieval", {})
+            if is_buffer_result:
+                # For buffer results, use the result as-is since they come from memory
+                logger.info(f"Processing buffer result ID: {result_id}")
+                if result_id not in message_map or result.get("score", 0) > message_map[result_id].get("score", 0):
+                    message_map[result_id] = result
+            else:
+                # Get the message from the database to verify its true session and agent
+                message = db.get_message(result_id)
+                if message:
+                    # Get the actual round and session for this message
+                    round_data = db.get_round(message.get(
+                        "round_id")) if message.get("round_id") else None
+                    if round_data and round_data.get("session_id"):
+                        actual_session_id = round_data.get("session_id")
+                        actual_session = db.get_session(actual_session_id)
+
+                        if actual_session:
+                            # Store the message with its correct metadata
+                            # If we've seen this message before, keep the one with the higher score
+                            if result_id not in message_map or result.get("score", 0) > message_map[result_id].get("score", 0):
+                                # Create a new result with the correct metadata
+                                message_map[result_id] = {
+                                    "id": result_id,
+                                    "content": result.get("content"),
+                                    "score": result.get("score", 0),
+                                    "type": "message",
+                                    "role": message.get("role"),
+                                    "created_at": message.get("created_at"),
+                                    "updated_at": message.get("updated_at"),
+                                    "metadata": {
+                                        "user_id": user_id,
+                                        "agent_id": actual_session["agent_id"],
+                                        "session_id": actual_session_id,
+                                        "session_name": actual_session["name"],
+                                        "scope": ("in_session" if actual_session_id == request.session_id
+                                                  else "cross_session") if request.session_id else None,
+                                        "level": 0,
+                                        "retrieval": result.get("metadata", {}).get("retrieval", {})
+                                    }
                                 }
-                            }
         elif result.get("type") == "knowledge":
             # For knowledge items, just store them by ID
             if result_id not in knowledge_map or result.get("score", 0) > knowledge_map[result_id].get("score", 0):
@@ -403,10 +435,20 @@ async def query_memory(
     for result in all_results:
         result_id = result.get("id")
         if result_id not in unique_results or result.get("score", 0) > unique_results[result_id].get("score", 0):
+            # Check if this is a buffer result (from memory) vs database result
+            is_buffer_result = result.get("metadata", {}).get("retrieval", {}).get("source") in ["write_buffer", "speculative_buffer", "query_buffer", "hybrid_buffer"]
+
+            # Debug logging
+            logger.info(f"Processing result ID: {result_id}, is_buffer_result: {is_buffer_result}")
+            logger.info(f"Result metadata: {result.get('metadata', {})}")
+
             # Get the message from the database to verify its true session and agent
-            if result.get("type") == "message":
+            # Skip database verification for buffer results as they come from memory
+            if result.get("type") == "message" and not is_buffer_result:
+                logger.info(f"Checking database for message ID: {result_id}")
                 message = db.get_message(result_id)
                 if message:
+                    logger.info(f"Found message in database: {message.get('id')}")
                     # Get the actual round and session for this message
                     round_data = db.get_round(message.get(
                         "round_id")) if message.get("round_id") else None
@@ -423,7 +465,16 @@ async def query_memory(
                             result["metadata"]["scope"] = ("in_session" if actual_session_id == request.session_id
                                                            else "cross_session") if request.session_id else None
 
-            unique_results[result_id] = result
+                    # Add the result with database verification
+                    unique_results[result_id] = result
+                    logger.info(f"Added database result to unique_results: {result_id}")
+                else:
+                    logger.info(f"Message not found in database, skipping: {result_id}")
+                # If message not found in database, skip this result (don't add to unique_results)
+            else:
+                # For buffer results or knowledge items, use the result as-is
+                logger.info(f"Adding buffer/knowledge result to unique_results: {result_id}")
+                unique_results[result_id] = result
 
     # Convert back to a list
     all_results = list(unique_results.values())

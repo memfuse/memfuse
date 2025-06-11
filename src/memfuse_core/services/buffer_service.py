@@ -1,26 +1,15 @@
 """Buffer Service implementation for MemFuse.
 
-This service provides a high-performance buffer implementation that preserves
-all buffer functionality (WriteBuffer, SpeculativeBuffer, QueryBuffer) while
-optimizing for minimal latency overhead.
-
-Key Design Principles:
-- Preserve all buffer functionality
-- True async implementation without task abuse
-- Optimized WriteBuffer, SpeculativeBuffer, QueryBuffer
-- User-level singleton pattern
-- Minimal performance overhead (<5%)
-- FIFO logic maintained correctly
+This service implements the Buffer architecture with RoundBuffer, HybridBuffer,
+and QueryBuffer components, providing improved performance and functionality.
 """
 
-import asyncio
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Callable
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from omegaconf import DictConfig
 from loguru import logger
 
 from ..interfaces import MemoryInterface, ServiceInterface, MessageInterface, MessageList, MessageBatchList
 from ..buffer.write_buffer import WriteBuffer
-from ..buffer.speculative_buffer import SpeculativeBuffer
 from ..buffer.query_buffer import QueryBuffer
 
 if TYPE_CHECKING:
@@ -28,109 +17,71 @@ if TYPE_CHECKING:
 
 
 class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
-    """Buffer service with full WriteBuffer, SpeculativeBuffer, QueryBuffer functionality.
+    """Buffer Service with WriteBuffer as unified entry point.
 
-    This service preserves all buffer functionality while optimizing for performance:
-    - WriteBuffer: FIFO queue management with optimized batch writes
-    - SpeculativeBuffer: Prefetching with efficient context generation
-    - QueryBuffer: Multi-source retrieval with LRU caching
-    - True async implementation without task abuse
-    - <5% overhead target
+    This service implements the Buffer architecture according to PRD:
+    - WriteBuffer: Unified entry point managing RoundBuffer + HybridBuffer
+    - QueryBuffer: Independent query component with sorting and caching
     """
-
+    
     def __init__(
         self,
         memory_service: "MemoryService",
         user: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
-        """Initialize the Optimized Buffer service.
-
+        """Initialize the Buffer Service.
+        
         Args:
             memory_service: MemoryService instance to delegate operations to
             user: User ID (required for user-level singleton pattern)
-            config: Configuration dictionary with settings for the buffer
+            config: Configuration dictionary with Buffer settings
         """
         self.memory_service = memory_service
         self.user = user
         self.config = config or {}
-
+        
         # Get the actual user_id (UUID) from memory_service
         self.user_id = getattr(memory_service, '_user_id', user) if memory_service else user
-
+        
         # Buffer configuration
         buffer_config = self.config.get('buffer', {})
-        write_config = buffer_config.get('write', {})
-        speculative_config = buffer_config.get('speculative', {})
-        query_config = buffer_config.get('query', {})
 
-        # Initialize optimized buffer components
+        # Rerank configuration
+        retrieval_config = self.config.get('retrieval', {})
+        self.use_rerank = retrieval_config.get('use_rerank', True)
+
+        # Initialize WriteBuffer as unified entry point
         self.write_buffer = WriteBuffer(
-            max_size=write_config.get('max_size', 5),
-            batch_threshold=write_config.get('batch_threshold', 5),
-            storage_handler=self._create_storage_handler()
+            config=buffer_config,
+            sqlite_handler=self._create_sqlite_handler(),
+            qdrant_handler=self._create_qdrant_handler()
         )
 
-        self.speculative_buffer = SpeculativeBuffer(
-            max_size=speculative_config.get('max_size', 10),
-            context_window=speculative_config.get('context_window', 3),
-            retrieval_handler=self._create_retrieval_handler()
-        )
-
+        # Initialize QueryBuffer independently
+        query_config = buffer_config.get('query', {})
         self.query_buffer = QueryBuffer(
             retrieval_handler=self._create_retrieval_handler(),
             max_size=query_config.get('max_size', 15),
-            cache_size=query_config.get('cache_size', 100)
+            cache_size=query_config.get('cache_size', 100),
+            default_sort_by=query_config.get('default_sort_by', 'score'),
+            default_order=query_config.get('default_order', 'desc')
         )
-
-        # Register WriteBuffer update handler for SpeculativeBuffer
-        self.write_buffer.register_update_handler(self.speculative_buffer.update_from_items)
-
+        
         # Statistics
         self.total_items_added = 0
         self.total_queries = 0
-        self.total_batch_writes = 0
-
-        logger.info(f"BufferService: Initialized for user {user} with full buffer functionality")
-
-    def _create_storage_handler(self):
-        """Create storage handler for WriteBuffer."""
-        class StorageHandler:
-            def __init__(self, memory_service):
-                self.memory_service = memory_service
-
-            async def handle_batch(self, items: List[MessageList]) -> List[str]:
-                """Handle batch write to memory service.
-
-                Args:
-                    items: List of MessageList (MessageBatchList)
-
-                Returns:
-                    List of message IDs from the storage operation
-                """
-                try:
-                    # items is already a MessageBatchList, pass directly to memory service
-                    result = await self.memory_service.add_batch(items)
-                    if result.get("status") == "success":
-                        return result.get("data", {}).get("message_ids", [])
-                    return []
-                except Exception as e:
-                    logger.error(f"StorageHandler: Batch write error: {e}")
-                    return []
-
-        return StorageHandler(self.memory_service)
-
+        self.total_transfers = 0
+        
+        logger.info(f"BufferService: Initialized for user {user} with Buffer architecture")
+        logger.info(f"BufferService: Rerank enabled: {self.use_rerank}")
+    
     def _create_retrieval_handler(self):
-        """Create retrieval handler for SpeculativeBuffer and QueryBuffer."""
+        """Create retrieval handler for QueryBuffer."""
         async def retrieval_handler(query: str, max_results: int) -> List[Any]:
             """Handle retrieval from memory service."""
-            query_preview = query[:50] + "..." if len(query) > 50 else query
-            logger.info(f"RetrievalHandler: Called with query: {query_preview}, max_results={max_results}")
-
             try:
-                # Direct call to MemoryService to avoid infinite recursion
-                # This bypasses the BufferService query method
-                logger.debug(f"RetrievalHandler: Calling memory_service.query with top_k={max_results}")
+                # Direct call to MemoryService for storage retrieval
                 result = await self.memory_service.query(
                     query=query,
                     top_k=max_results,
@@ -138,59 +89,58 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     include_knowledge=True,
                     include_chunks=True
                 )
-
-                logger.info(f"RetrievalHandler: MemoryService returned status: {result.get('status')}")
-
+                
                 if result.get("status") == "success":
                     data = result.get("data", {})
-                    logger.info(f"RetrievalHandler: Data keys: {list(data.keys())}")
-
-                    # MemoryService returns results in data.results, not data.messages/data.knowledge
                     results = data.get("results", [])
-                    logger.info(f"RetrievalHandler: Got {len(results)} total results from MemoryService")
-
-                    if results:
-                        logger.info(f"RetrievalHandler: First result sample keys: {list(results[0].keys())}")
-                        logger.info(f"RetrievalHandler: First result type: {results[0].get('type')}")
-
-                    # Separate messages and knowledge based on type field
-                    messages = []
-                    knowledge = []
-
-                    for item in results:
-                        item_type = item.get("type")
-                        if item_type == "message":
-                            messages.append(item)
-                        elif item_type == "knowledge":
-                            knowledge.append(item)
-                        else:
-                            logger.warning(f"RetrievalHandler: Unknown item type: {item_type}")
-
-                    logger.info(f"RetrievalHandler: Separated into {len(messages)} messages, {len(knowledge)} knowledge items")
-
-                    # Combine all items
-                    items = messages + knowledge
-
-                    final_items = items[:max_results]
-                    logger.info(f"RetrievalHandler: Returning {len(final_items)} items")
-                    return final_items
+                    return results
                 else:
-                    logger.warning(f"RetrievalHandler: MemoryService query failed: {result.get('message', 'Unknown error')}")
+                    logger.warning(f"BufferService: MemoryService query failed: {result.get('message')}")
                     return []
             except Exception as e:
-                logger.error(f"RetrievalHandler: Query error: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
+                logger.error(f"BufferService: Retrieval error: {e}")
                 return []
-
+        
         return retrieval_handler
-
+    
+    def _create_sqlite_handler(self):
+        """Create SQLite handler for HybridBuffer."""
+        async def sqlite_handler(rounds: List[MessageList]) -> None:
+            """Handle SQLite storage operations."""
+            try:
+                # Convert rounds to MessageBatchList and store via memory service
+                if rounds:
+                    result = await self.memory_service.add_batch(rounds)
+                    if result.get("status") != "success":
+                        logger.error(f"BufferService: SQLite storage failed: {result.get('message')}")
+            except Exception as e:
+                logger.error(f"BufferService: SQLite handler error: {e}")
+        
+        return sqlite_handler
+    
+    def _create_qdrant_handler(self):
+        """Create Qdrant handler for HybridBuffer."""
+        async def qdrant_handler(points: List[Dict[str, Any]]) -> None:
+            """Handle Qdrant storage operations."""
+            try:
+                # Store chunks via vector store if available
+                if hasattr(self.memory_service, 'vector_store') and points:
+                    # Convert points to format expected by vector store
+                    for point in points:
+                        # This would integrate with the actual vector store
+                        # For now, we'll log the operation
+                        logger.debug(f"BufferService: Would store chunk {point['id']} to Qdrant")
+            except Exception as e:
+                logger.error(f"BufferService: Qdrant handler error: {e}")
+        
+        return qdrant_handler
+    
     async def initialize(self, cfg: Optional[DictConfig] = None) -> bool:
         """Initialize the buffer service.
-
+        
         Args:
             cfg: Configuration for the service (optional)
-
+            
         Returns:
             True if initialization was successful, False otherwise
         """
@@ -203,41 +153,43 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                         await self.memory_service.initialize()
             return True
         except Exception as e:
-            logger.error(f"Failed to initialize optimized buffer service: {e}")
+            logger.error(f"Failed to initialize BufferService: {e}")
             return False
-
+    
     async def shutdown(self) -> bool:
         """Shutdown the buffer service gracefully.
-
+        
         Returns:
             True if shutdown was successful, False otherwise
         """
         try:
-            # Clear buffer
-            async with self._buffer_lock:
-                self._write_buffer.clear()
-
+            # Flush any remaining data
+            await self.hybrid_buffer.flush_to_storage()
+            
+            # Clear buffers
+            await self.round_buffer.clear()
+            await self.query_buffer.clear()
+            await self.query_buffer.clear_cache()
+            
             # Shutdown memory service if available
             if self.memory_service and hasattr(self.memory_service, 'shutdown'):
                 await self.memory_service.shutdown()
-
+            
             return True
         except Exception as e:
-            logger.error(f"Failed to shutdown optimized buffer service: {e}")
+            logger.error(f"Failed to shutdown BufferService: {e}")
             return False
-
+    
     def is_initialized(self) -> bool:
         """Check if the buffer service is initialized.
-
+        
         Returns:
             True if the service is initialized, False otherwise
         """
         return self.memory_service is not None
-
+    
     async def add(self, messages: MessageList, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Add a single list of messages.
-
-        This method wraps the MessageList in a MessageBatchList and calls add_batch().
 
         Args:
             messages: List of message dictionaries (MessageList)
@@ -246,13 +198,10 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         Returns:
             Dictionary with status, data, and message information
         """
-        return await self.add_batch([messages], session_id=session_id)
-
+        return await self.write_buffer.add(messages, session_id)
+    
     async def add_batch(self, message_batch_list: MessageBatchList, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Add a batch of message lists.
-
-        This is the core processing method that handles MessageBatchList.
-        Each MessageList is added as a unit to the WriteBuffer.
 
         Args:
             message_batch_list: List of lists of messages (MessageBatchList)
@@ -268,287 +217,43 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             return self._success_response([], "No message lists to add")
 
         try:
-            batch_triggered = False
-            total_messages = 0
-
-            for message_list in message_batch_list:
+            # Add metadata to messages if needed
+            for i, message_list in enumerate(message_batch_list):
                 if not message_list:
                     continue
 
-                total_messages += len(message_list)
+                for j, message in enumerate(message_list):
+                    # Ensure message is a dictionary
+                    if isinstance(message, dict):
+                        if 'metadata' not in message:
+                            message['metadata'] = {}
+                        if self.user_id and 'user_id' not in message['metadata']:
+                            message['metadata']['user_id'] = self.user_id
+                        if session_id and 'session_id' not in message['metadata']:
+                            message['metadata']['session_id'] = session_id
+                    else:
+                        logger.warning(f"BufferService: Skipping non-dict message {j}: {type(message)} - {message}")
 
-                # Add metadata to messages if needed
-                for message in message_list:
-                    if 'metadata' not in message:
-                        message['metadata'] = {}
-                    if self.user_id and 'user_id' not in message['metadata']:
-                        message['metadata']['user_id'] = self.user_id
-                    if session_id and 'session_id' not in message['metadata']:
-                        message['metadata']['session_id'] = session_id
+            # Delegate to WriteBuffer
+            result = await self.write_buffer.add_batch(message_batch_list, session_id)
 
-                # Add the entire MessageList as a unit to WriteBuffer
-                if await self.write_buffer.add(message_list):
-                    batch_triggered = True
-                    self.total_batch_writes += 1
-
+            # Update statistics
+            total_messages = sum(len(msg_list) for msg_list in message_batch_list if msg_list)
             self.total_items_added += total_messages
-
-            # Get the last batch results for response
-            last_results = await self.write_buffer.get_last_batch_results()
+            if result.get("total_transfers", 0) > 0:
+                self.total_transfers += result.get("total_transfers", 0)
 
             return self._success_response(
-                last_results,
-                f"Added {len(message_batch_list)} message lists to buffer",
-                batch_triggered=batch_triggered,
+                {"message_ids": []},  # Buffer doesn't return immediate IDs, but API expects this format
+                f"Added {len(message_batch_list)} message lists to Buffer",
+                transfer_triggered=result.get("total_transfers", 0) > 0,
                 total_messages=total_messages
             )
 
         except Exception as e:
             logger.error(f"BufferService.add_batch: Error adding message batch: {e}")
             return self._error_response(f"Error adding message batch: {str(e)}")
-
-    async def read(self, item_ids: List[str]) -> Dict[str, Any]:
-        """Read items from memory.
-
-        Args:
-            item_ids: List of item IDs
-
-        Returns:
-            Dictionary with status, code, and items
-        """
-        if not self.memory_service:
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": "No memory service available",
-                "errors": [{"field": "general", "message": "No memory service available"}],
-            }
-
-        # Direct delegation to memory service (no complex buffer lookup)
-        return await self.memory_service.read(item_ids)
-
-    async def get_messages_by_session(
-        self,
-        session_id: str,
-        limit: Optional[int] = None,
-        sort_by: str = 'timestamp',
-        order: str = 'desc'
-    ) -> List[Dict[str, Any]]:
-        """Get messages for a session with optional limit and sorting.
-
-        This method combines messages from the buffer and the underlying memory service
-        to provide a complete view of all messages in the session.
-
-        Args:
-            session_id: Session ID
-            limit: Maximum number of messages to return (optional)
-            sort_by: Field to sort by, either 'timestamp' or 'id' (default: 'timestamp')
-            order: Sort order, either 'asc' or 'desc' (default: 'desc')
-
-        Returns:
-            List of message data
-        """
-        if not self.memory_service:
-            return []
-
-        # Get messages from the underlying memory service
-        if hasattr(self.memory_service, 'get_messages_by_session'):
-            stored_messages = await self.memory_service.get_messages_by_session(
-                session_id=session_id,
-                limit=None,  # Get all stored messages first, we'll apply limit later
-                sort_by=sort_by,
-                order=order
-            )
-        else:
-            # Fallback to direct database access
-            from ..services.database_service import DatabaseService
-            db = DatabaseService.get_instance()
-            stored_messages = db.get_messages_by_session(
-                session_id=session_id,
-                limit=None,  # Get all stored messages first, we'll apply limit later
-                sort_by=sort_by,
-                order=order
-            )
-
-        # Get messages from write buffer that belong to this session
-        buffer_messages = []
-        if hasattr(self.write_buffer, 'items'):
-            for item in self.write_buffer.items:
-                if isinstance(item, dict):
-                    item_session_id = item.get('metadata', {}).get('session_id')
-                    if item_session_id == session_id:
-                        # Convert buffer item to message format
-                        buffer_message = {
-                            "id": item.get('id', ''),  # Buffer items might not have IDs yet
-                            "role": item.get('role', 'user'),
-                            "content": item.get('content', ''),
-                            "created_at": item.get('created_at', ''),
-                            "updated_at": item.get('updated_at', ''),
-                        }
-                        buffer_messages.append(buffer_message)
-
-        # Combine stored and buffer messages
-        all_messages = stored_messages + buffer_messages
-
-        # Sort combined messages
-        if sort_by == 'timestamp':
-            all_messages.sort(key=lambda x: x.get('created_at', ''), reverse=(order == 'desc'))
-        elif sort_by == 'id':
-            all_messages.sort(key=lambda x: x.get('id', ''), reverse=(order == 'desc'))
-
-        # Apply limit if specified
-        if limit is not None and limit > 0:
-            all_messages = all_messages[:limit]
-
-        return all_messages
-
-    async def update(self, item_ids: List[str], new_items: List[Any]) -> Dict[str, Any]:
-        """Update items in memory.
-
-        Args:
-            item_ids: List of item IDs
-            new_items: List of new items to replace the existing ones
-
-        Returns:
-            Dictionary with status, code, and updated item IDs
-        """
-        if not self.memory_service:
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": "No memory service available",
-                "errors": [{"field": "general", "message": "No memory service available"}],
-            }
-
-        # Add metadata to items if needed
-        for item in new_items:
-            if isinstance(item, dict) and 'metadata' in item:
-                if self.user_id and 'user_id' not in item['metadata']:
-                    item['metadata']['user_id'] = self.user_id
-
-        # Direct delegation to memory service
-        return await self.memory_service.update(item_ids, new_items)
-
-    async def delete(self, item_ids: List[str]) -> Dict[str, Any]:
-        """Delete items from memory.
-
-        Args:
-            item_ids: List of item IDs
-
-        Returns:
-            Dictionary with status, code, and deleted item IDs
-        """
-        if not self.memory_service:
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": "No memory service available",
-                "errors": [{"field": "general", "message": "No memory service available"}],
-            }
-
-        # Direct delegation to memory service
-        return await self.memory_service.delete(item_ids)
-
-    async def add_knowledge(self, knowledge_items: List[Any]) -> Dict[str, Any]:
-        """Add knowledge items to memory.
-
-        Args:
-            knowledge_items: List of knowledge items
-
-        Returns:
-            Dictionary with status, code, and knowledge IDs
-        """
-        if not self.memory_service:
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": "No memory service available",
-                "errors": [{"field": "general", "message": "No memory service available"}],
-            }
-
-        # Add metadata to knowledge items if needed
-        for item in knowledge_items:
-            if isinstance(item, dict) and 'metadata' in item:
-                if self.user_id and 'user_id' not in item['metadata']:
-                    item['metadata']['user_id'] = self.user_id
-
-        # Direct delegation to memory service
-        return await self.memory_service.add_knowledge(knowledge_items)
-
-    async def read_knowledge(self, knowledge_ids: List[str]) -> Dict[str, Any]:
-        """Read knowledge items from memory.
-
-        Args:
-            knowledge_ids: List of knowledge item IDs
-
-        Returns:
-            Dictionary with status, code, and knowledge items
-        """
-        if not self.memory_service:
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": "No memory service available",
-                "errors": [{"field": "general", "message": "No memory service available"}],
-            }
-
-        # Direct delegation to memory service
-        return await self.memory_service.read_knowledge(knowledge_ids)
-
-    async def update_knowledge(self, knowledge_ids: List[str], new_knowledge_items: List[Any]) -> Dict[str, Any]:
-        """Update knowledge items in memory.
-
-        Args:
-            knowledge_ids: List of knowledge item IDs
-            new_knowledge_items: List of new knowledge items
-
-        Returns:
-            Dictionary with status, code, and updated knowledge IDs
-        """
-        if not self.memory_service:
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": "No memory service available",
-                "errors": [{"field": "general", "message": "No memory service available"}],
-            }
-
-        # Add metadata to knowledge items if needed
-        for item in new_knowledge_items:
-            if isinstance(item, dict) and 'metadata' in item:
-                if self.user_id and 'user_id' not in item['metadata']:
-                    item['metadata']['user_id'] = self.user_id
-
-        # Direct delegation to memory service
-        return await self.memory_service.update_knowledge(knowledge_ids, new_knowledge_items)
-
-    async def delete_knowledge(self, knowledge_ids: List[str]) -> Dict[str, Any]:
-        """Delete knowledge items from memory.
-
-        Args:
-            knowledge_ids: List of knowledge item IDs
-
-        Returns:
-            Dictionary with status, code, and deleted knowledge IDs
-        """
-        if not self.memory_service:
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": "No memory service available",
-                "errors": [{"field": "general", "message": "No memory service available"}],
-            }
-
-        # Direct delegation to memory service
-        return await self.memory_service.delete_knowledge(knowledge_ids)
-
+    
     async def query(
         self,
         query: str,
@@ -559,49 +264,49 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         include_messages: bool = True,
         include_knowledge: bool = True,
         include_chunks: bool = True,
+        sort_by: Optional[str] = None,
+        order: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Query memory for relevant messages.
-
+        """Query memory for relevant messages with Buffer enhancements.
+        
         Args:
             query: Query string
             top_k: Maximum number of results to return
-            store_type: Type of store to query (vector, graph, keyword, or None for all)
+            store_type: Type of store to query (ignored in current implementation)
             session_id: Session ID to filter results (optional)
             scope: Scope of the query (all, session, or user)
             include_messages: Whether to include messages in results
             include_knowledge: Whether to include knowledge in results
-
+            include_chunks: Whether to include chunks in results
+            sort_by: Sort field ('score' or 'timestamp')
+            order: Sort order ('asc' or 'desc')
+            
         Returns:
             Dictionary with status, code, and query results
         """
         if not self.memory_service:
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": "No memory service available",
-                "errors": [{"field": "general", "message": "No memory service available"}],
-            }
-
+            return self._error_response("No memory service available")
+        
         self.total_queries += 1
-
+        
         query_preview = query[:50] + "..." if len(query) > 50 else query
         logger.info(f"BufferService.query: Processing query '{query_preview}' with top_k={top_k}")
 
-        # Use optimized QueryBuffer for multi-source retrieval
         try:
             # Log buffer states before query
-            write_buffer_size = len(self.write_buffer.items) if hasattr(self.write_buffer, 'items') else 0
-            speculative_buffer_size = len(self.speculative_buffer.items) if hasattr(self.speculative_buffer, 'items') else 0
+            round_buffer_size = len(self.write_buffer.get_round_buffer().rounds)
+            hybrid_buffer_size = len(self.write_buffer.get_hybrid_buffer().chunks)
 
-            logger.info(f"BufferService.query: Buffer states - WriteBuffer: {write_buffer_size} items, SpeculativeBuffer: {speculative_buffer_size} items")
+            logger.info(f"BufferService.query: Buffer states - RoundBuffer: {round_buffer_size} rounds, HybridBuffer: {hybrid_buffer_size} chunks")
 
-            # QueryBuffer combines results from storage, WriteBuffer, and SpeculativeBuffer
+            # Query using QueryBuffer with HybridBuffer from WriteBuffer
             logger.info("BufferService.query: Calling QueryBuffer.query")
             results = await self.query_buffer.query(
                 query_text=query,
-                write_buffer=self.write_buffer,
-                speculative_buffer=self.speculative_buffer
+                top_k=top_k,
+                sort_by=sort_by or "score",
+                order=order or "desc",
+                hybrid_buffer=self.write_buffer.get_hybrid_buffer()
             )
 
             logger.info(f"BufferService.query: QueryBuffer returned {len(results) if results else 0} results")
@@ -611,8 +316,8 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             else:
                 logger.warning("BufferService.query: QueryBuffer returned empty results!")
 
-            # Apply reranking if we have results (same as original BufferService)
-            if results:
+            # Apply reranking if enabled and we have results
+            if results and self.use_rerank:
                 reranked_results = await self._rerank_unified_results(
                     query=query,
                     items=results,
@@ -620,11 +325,15 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 )
                 logger.info(f"BufferService.query: Reranked to {len(reranked_results)} results")
                 limited_results = reranked_results
+            elif results:
+                # No reranking, just limit results
+                limited_results = results[:top_k]
+                logger.info(f"BufferService.query: No reranking applied, limited to {len(limited_results)} results")
             else:
                 limited_results = []
-                logger.info("BufferService.query: No results to rerank")
+                logger.info("BufferService.query: No results to process")
 
-            # Format response to match MemoryService format exactly
+            # Format response to match MemoryService format exactly (same as V2)
             # MemoryService returns {"data": {"results": [...], "total": ...}}
             response = {
                 "status": "success",
@@ -633,7 +342,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     "results": limited_results,  # This is what the test script expects
                     "total": len(limited_results)
                 },
-                "message": f"Retrieved {len(limited_results)} results",
+                "message": f"Retrieved {len(limited_results)} results using Buffer",
                 "errors": None,
             }
 
@@ -645,15 +354,174 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
 
         except Exception as e:
             logger.error(f"BufferService.query: Error querying: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": f"Error querying: {str(e)}",
-                "errors": [{"field": "general", "message": str(e)}],
+            return self._error_response(f"Error querying: {str(e)}")
+    
+    async def get_messages_by_session(
+        self,
+        session_id: str,
+        limit: Optional[int] = None,
+        sort_by: str = 'timestamp',
+        order: str = 'desc',
+        buffer_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Get messages for a session with Buffer support.
+        
+        Args:
+            session_id: Session ID
+            limit: Maximum number of messages to return
+            sort_by: Field to sort by ('timestamp' or 'id')
+            order: Sort order ('asc' or 'desc')
+            buffer_only: If True, only return RoundBuffer data
+            
+        Returns:
+            List of message data
+        """
+        if not self.memory_service:
+            return []
+        
+        try:
+            if buffer_only:
+                # Only return RoundBuffer data
+                return await self.write_buffer.get_round_buffer().get_all_messages_for_read_api(
+                    limit=limit,
+                    sort_by=sort_by,
+                    order=order
+                )
+            else:
+                # Return HybridBuffer + SQLite data (excluding RoundBuffer)
+                all_messages = []
+                
+                # Get messages from HybridBuffer
+                hybrid_messages = await self.write_buffer.get_hybrid_buffer().get_all_messages_for_read_api(
+                    limit=None,  # Get all first, apply limit later
+                    sort_by=sort_by,
+                    order=order
+                )
+                
+                # Filter by session_id
+                for msg in hybrid_messages:
+                    if msg.get('metadata', {}).get('session_id') == session_id:
+                        all_messages.append(msg)
+                
+                # Get messages from storage via memory service
+                if hasattr(self.memory_service, 'get_messages_by_session'):
+                    stored_messages = await self.memory_service.get_messages_by_session(
+                        session_id=session_id,
+                        limit=None,
+                        sort_by=sort_by,
+                        order=order
+                    )
+                    all_messages.extend(stored_messages)
+                
+                # Sort combined messages
+                if sort_by == 'timestamp':
+                    all_messages.sort(
+                        key=lambda x: x.get('created_at', ''),
+                        reverse=(order == 'desc')
+                    )
+                elif sort_by == 'id':
+                    all_messages.sort(
+                        key=lambda x: x.get('id', ''),
+                        reverse=(order == 'desc')
+                    )
+                
+                # Apply limit
+                if limit is not None and limit > 0:
+                    all_messages = all_messages[:limit]
+                
+                return all_messages
+                
+        except Exception as e:
+            logger.error(f"BufferService.get_messages_by_session: Error: {e}")
+            return []
+    
+    async def get_buffer_stats(self) -> Dict[str, Any]:
+        """Get comprehensive statistics about the Buffer system.
+
+        Returns:
+            Dictionary with detailed buffer statistics
+        """
+        write_buffer_stats = self.write_buffer.get_stats()
+        query_stats = self.query_buffer.get_stats()
+
+        return {
+            "version": "0.1.1",
+            "total_items_added": self.total_items_added,
+            "total_queries": self.total_queries,
+            "total_transfers": self.total_transfers,
+            "write_buffer": write_buffer_stats,
+            "query_buffer": query_stats,
+            "architecture": {
+                "write_buffer": "Unified entry point for RoundBuffer + HybridBuffer",
+                "round_buffer": "Token-based FIFO with automatic transfer",
+                "hybrid_buffer": "Dual-format (chunks + rounds) with FIFO",
+                "query_buffer": "Unified query with sorting and caching"
             }
+        }
+    
+    def _success_response(self, data: Any, message: str, **kwargs) -> Dict[str, Any]:
+        """Create a success response."""
+        return {
+            "status": "success",
+            "code": 200,
+            "data": data,
+            "message": message,
+            "errors": None,
+            **kwargs
+        }
+    
+    def _error_response(self, message: str, code: int = 500) -> Dict[str, Any]:
+        """Create an error response."""
+        return {
+            "status": "error",
+            "code": code,
+            "data": None,
+            "message": message,
+            "errors": [{"field": "general", "message": message}]
+        }
+    
+    # Delegate other methods to memory service
+    async def read(self, item_ids: List[str]) -> Dict[str, Any]:
+        """Read items from memory."""
+        if not self.memory_service:
+            return self._error_response("No memory service available")
+        return await self.memory_service.read(item_ids)
+    
+    async def update(self, item_ids: List[str], new_items: List[Any]) -> Dict[str, Any]:
+        """Update items in memory."""
+        if not self.memory_service:
+            return self._error_response("No memory service available")
+        return await self.memory_service.update(item_ids, new_items)
+    
+    async def delete(self, item_ids: List[str]) -> Dict[str, Any]:
+        """Delete items from memory."""
+        if not self.memory_service:
+            return self._error_response("No memory service available")
+        return await self.memory_service.delete(item_ids)
+    
+    async def add_knowledge(self, knowledge_items: List[Any]) -> Dict[str, Any]:
+        """Add knowledge items to memory."""
+        if not self.memory_service:
+            return self._error_response("No memory service available")
+        return await self.memory_service.add_knowledge(knowledge_items)
+    
+    async def read_knowledge(self, knowledge_ids: List[str]) -> Dict[str, Any]:
+        """Read knowledge items from memory."""
+        if not self.memory_service:
+            return self._error_response("No memory service available")
+        return await self.memory_service.read_knowledge(knowledge_ids)
+    
+    async def update_knowledge(self, knowledge_ids: List[str], new_knowledge_items: List[Any]) -> Dict[str, Any]:
+        """Update knowledge items in memory."""
+        if not self.memory_service:
+            return self._error_response("No memory service available")
+        return await self.memory_service.update_knowledge(knowledge_ids, new_knowledge_items)
+    
+    async def delete_knowledge(self, knowledge_ids: List[str]) -> Dict[str, Any]:
+        """Delete knowledge items from memory."""
+        if not self.memory_service:
+            return self._error_response("No memory service available")
+        return await self.memory_service.delete_knowledge(knowledge_ids)
 
     async def _rerank_unified_results(
         self,
@@ -697,105 +565,13 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             reranked_items = await reranker.rerank(
                 query=query,
                 items=items,
-                top_k=top_k,
-                source="buffer_service"
+                top_k=top_k
             )
 
-            # Add reranking metadata
-            for item in reranked_items:
-                if isinstance(item, dict) and "metadata" in item:
-                    if "retrieval" not in item["metadata"]:
-                        item["metadata"]["retrieval"] = {}
-                    item["metadata"]["retrieval"]["reranked"] = True
-                    item["metadata"]["retrieval"]["rerank_source"] = "buffer_service"
-
+            logger.info(f"BufferService._rerank_unified_results: Reranked {len(items)} items to {len(reranked_items)} results")
             return reranked_items
 
         except Exception as e:
-            logger.error(f"BufferService._rerank_unified_results: Error reranking items: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"BufferService._rerank_unified_results: Reranking error: {e}")
             # Return original items limited to top_k if reranking fails
             return items[:top_k]
-
-    async def get_buffer_stats(self) -> Dict[str, Any]:
-        """Get comprehensive statistics about the optimized buffer system.
-
-        Returns:
-            Dictionary with detailed buffer statistics
-        """
-        write_stats = self.write_buffer.get_stats()
-        speculative_stats = self.speculative_buffer.get_stats()
-        query_stats = self.query_buffer.get_stats()
-
-        return {
-            "total_items_added": self.total_items_added,
-            "total_queries": self.total_queries,
-            "total_batch_writes": self.total_batch_writes,
-            "write_buffer": write_stats,
-            "speculative_buffer": speculative_stats,
-            "query_buffer": query_stats,
-            "performance": {
-                "overhead_target": "<5%",
-                "strategy": "optimized_three_component_system",
-                "complexity": "full_functionality_preserved",
-                "optimizations": [
-                    "no_asyncio_task_abuse",
-                    "true_async_implementation",
-                    "efficient_fifo_logic",
-                    "lru_cache_with_efficient_combination",
-                    "optimized_context_generation"
-                ]
-            },
-            "architecture": {
-                "write_buffer": "FIFO queue with optimized batch writes",
-                "speculative_buffer": "Prefetching with efficient context generation",
-                "query_buffer": "Multi-source retrieval with LRU caching"
-            }
-        }
-
-
-async def create_buffer_service_from_config(
-    cfg: Any,
-    memory_service: "MemoryService",
-    user: Optional[str] = None,
-) -> BufferService:
-    """Create an BufferService from a configuration.
-
-    Args:
-        cfg: Configuration dictionary or DictConfig
-        memory_service: MemoryService to delegate operations to
-        user: User ID (required for user-level singleton pattern)
-
-    Returns:
-        BufferService instance
-    """
-    # Extract buffer configuration
-    buffer_config = {}
-
-    # Helper function to safely get attributes with defaults
-    def get_attr(obj, attr_path, default_value):
-        """Get attribute from nested object path with default value."""
-        try:
-            attrs = attr_path.split('.')
-            current = obj
-            for attr in attrs:
-                current = getattr(current, attr)
-            return current
-        except (AttributeError, TypeError):
-            return default_value
-
-    # Extract buffer configuration from cfg
-    if hasattr(cfg, 'buffer'):
-        buffer_config['buffer'] = {
-            'size': get_attr(cfg.buffer, 'write.max_size', 10),
-        }
-
-    # Create and return the service
-    service = BufferService(
-        memory_service=memory_service,
-        user=user,
-        config=buffer_config,
-    )
-
-    return service

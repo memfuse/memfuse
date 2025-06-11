@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "memfuse_core"
-version = "0.1.0"
+version = "0.1.1"
 description = "MemFuse: lightning-fast, open-source memory layer for LLMs"
 authors = [
     "Ming Xue <mxue@percena.co>",
@@ -35,6 +35,7 @@ python-igraph = "^0.11.3"
 qdrant-client = "^1.8.0"
 sentence-transformers = "^2.6.0"
 sqlalchemy = "^2.0.41"
+tiktoken = "^0.7.0"
 transformers = "^4.40.1"
 uvicorn = "^0.27.1"
 

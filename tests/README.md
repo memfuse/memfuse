@@ -312,4 +312,4 @@ pytest tests/unit/ --memray
 
 **Last Updated**: 2025-01-27  
 **Test Suite Version**: v1.0.0  
-**MemFuse Version**: v0.1.0
+**MemFuse Version**: v0.1.1

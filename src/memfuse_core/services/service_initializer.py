@@ -148,9 +148,23 @@ class ServiceInitializer:
             if rerank_model is not None:
                 logger.info("Creating global reranker instance with pre-loaded model")
                 from ..rag.rerank import MiniLMReranker
+                from ..utils.config import config_manager
+
+                # Get rerank configuration from config
+                config_dict = config_manager.get_config()
+                if config_dict is None:
+                    config_dict = {}
+                retrieval_config = config_dict.get('retrieval', {})
+                use_rerank = retrieval_config.get('use_rerank', True)
+                rerank_strategy = retrieval_config.get('rerank_strategy', 'rrf')
+
+                logger.info(f"Global reranker configuration: use_rerank={use_rerank}, strategy={rerank_strategy}")
+
                 global_reranker = MiniLMReranker(
                     existing_model=rerank_model,  # Use the pre-loaded model
-                    model_name="cross-encoder/ms-marco-MiniLM-L6-v2"
+                    model_name="cross-encoder/ms-marco-MiniLM-L6-v2",
+                    use_rerank=use_rerank,  # Pass the configuration explicitly
+                    rerank_strategy=rerank_strategy
                 )
 
                 # Initialize the reranker (should be quick since model is already loaded)
