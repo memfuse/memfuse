@@ -13,7 +13,7 @@ round_buffer:
 # HybridBuffer configuration - Dual-format buffer with FIFO
 hybrid_buffer:
   max_size: 5                   # Maximum number of items in buffer (FIFO)
-  chunk_strategy: "message"     # Chunking strategy: "message" or "contextual"
+  chunk_strategy: "contextual"  # Chunking strategy: "message" or "contextual"
   embedding_model: "all-MiniLM-L6-v2"  # Embedding model for vector generation
 
 # Token counter configuration

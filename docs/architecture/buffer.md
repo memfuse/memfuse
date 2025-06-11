@@ -274,7 +274,7 @@ graph TB
         B --> E[QueryBuffer Config]
         
         C --> F[max_tokens: 800<br/>max_size: 5<br/>token_model: gpt-4o-mini]
-        D --> G[max_size: 5<br/>chunk_strategy: message<br/>embedding_model: all-MiniLM-L6-v2]
+        D --> G[max_size: 5<br/>chunk_strategy: contextual<br/>embedding_model: all-MiniLM-L6-v2]
         E --> H[max_size: 15<br/>cache_size: 100<br/>default_sort_by: score]
     end
 ```
@@ -294,7 +294,7 @@ buffer:
   # HybridBuffer configuration
   hybrid_buffer:
     max_size: 5                   # FIFO buffer size
-    chunk_strategy: "message"     # Chunking strategy
+    chunk_strategy: "contextual"  # Chunking strategy (contextual with LLM enhancement)
     embedding_model: "all-MiniLM-L6-v2"  # Embedding model
   
   # QueryBuffer configuration

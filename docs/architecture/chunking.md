@@ -91,27 +91,30 @@ class ChunkData:
 # Comprehensive chunk metadata
 chunk_metadata = {
     # Strategy Information
-    "strategy": "message",              # Chunking strategy used
+    "strategy": "contextual",          # Chunking strategy used
     "message_count": 2,                # Number of messages in chunk
     "source": "message_list",          # Source type
-    
+
     # Context Information
     "user_id": "user_123",            # User identifier
     "session_id": "session_456",      # Conversation session
     "round_id": "round_789",          # Conversation round
     "agent_id": "agent_abc",          # AI agent identifier
-    
+
     # Temporal Information
     "created_at": "2025-01-01T12:00:00Z",  # Creation timestamp
     "batch_index": 0,                 # Position in batch
-    
+
     # Content Information
     "roles": ["user", "assistant"],   # Message roles
     "type": "chunk",                  # Data type
-    
-    # Enhancement Information
-    "contextual_description": "...",   # LLM-generated description
-    "gpt_enhanced": true              # Enhancement flag
+
+    # Contextual Enhancement Information
+    "has_context": true,              # Whether chunk has contextual information
+    "gpt_enhanced": true,             # LLM enhancement flag
+    "context_window_size": 2,         # Number of previous chunks used as context
+    "context_chunk_ids": ["chunk_1", "chunk_2"],  # IDs of context chunks
+    "contextual_description": "...",   # LLM-generated contextual description
 }
 ```
 
@@ -150,8 +153,8 @@ graph LR
 - Preserving message pairs
 - Simple processing requirements
 
-#### MessageCharacterChunkStrategy
-**Purpose**: Advanced chunking with intelligent text processing and contextual enhancement.
+#### ContextualChunkStrategy (Recommended)
+**Purpose**: Advanced contextual chunking with LLM enhancement and sliding window context.
 
 ```mermaid
 graph TB
@@ -160,24 +163,25 @@ graph TB
     C --> D[Smart Overflow Handling]
     D --> E[Role-based Formatting]
     E --> F[Contextual Enhancement]
-    F --> G[LLM Description Generation]
-    G --> H[Final ChunkData]
+    F --> G[Sliding Window Context]
+    G --> H[LLM Description Generation]
+    H --> I[Final Enhanced ChunkData]
 ```
 
 **Features**:
 - CJK language support (Chinese, Japanese, Korean)
 - Intelligent message grouping by word count
-- LLM-powered contextual descriptions
-- Async parallel processing
-- Previous chunk context retrieval
-
-#### ContextualChunkStrategy
-**Purpose**: Intelligent splitting for long conversations with context preservation.
+- LLM-powered contextual descriptions with XAI grok-3-mini
+- Sliding window context retrieval (configurable window size)
+- Async parallel processing for enhanced chunks
+- Previous chunk context retrieval from vector store
+- Contextual metadata preservation
 
 **Use Cases**:
-- Long conversation threads
-- Context-aware boundaries
-- Intelligent content splitting
+- Long conversation threads requiring context
+- Semantic understanding enhancement
+- Multi-turn conversation analysis
+- Context-aware retrieval scenarios
 
 #### CharacterChunkStrategy
 **Purpose**: Fixed-size chunks with configurable overlap.
@@ -467,13 +471,15 @@ GET /api/v1/chunks/stats?user_id=user_123&store_type=hybrid
 
 ```python
 # Strategy initialization
-strategy = MessageCharacterChunkStrategy(
+strategy = ContextualChunkStrategy(
     max_words_per_chunk=800,
     enable_contextual=True,
-    llm_provider=openai_provider
+    context_window_size=2,
+    gpt_model="grok-3-mini",
+    llm_provider=xai_provider
 )
 
-# Chunk processing
+# Chunk processing with contextual enhancement
 chunks = await strategy.create_chunks(message_batch_list)
 
 # Store operations

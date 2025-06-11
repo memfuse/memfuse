@@ -109,7 +109,7 @@ class MemoryService(MessageInterface):
         self.multi_path_retrieval = None
         self.reranker = None
 
-        # Initialize chunk strategy
+        # Initialize chunk strategy (will be configured in initialize method)
         self.chunk_strategy = MessageChunkStrategy()
 
         # Log initialization
@@ -258,7 +258,51 @@ class MemoryService(MessageInterface):
             # Store the newly created reranker as global instance for future use
             ServiceFactory.set_global_models(reranker_instance=self.reranker)
 
+        # Configure chunk strategy based on configuration
+        await self._configure_chunk_strategy()
+
         return self
+
+    async def _configure_chunk_strategy(self):
+        """Configure chunk strategy based on configuration and inject dependencies."""
+        try:
+            # Get buffer configuration to determine chunk strategy
+            buffer_config = self.config.get("buffer", {})
+            hybrid_config = buffer_config.get("hybrid_buffer", {})
+            chunk_strategy_name = hybrid_config.get("chunk_strategy", "message")
+
+            logger.info(f"Configuring chunk strategy: {chunk_strategy_name}")
+
+            if chunk_strategy_name == "contextual":
+                # Use advanced ContextualChunkStrategy
+                from ..rag.chunk.contextual import ContextualChunkStrategy
+
+                # Get chunking configuration
+                chunking_config = buffer_config.get("chunking", {})
+                strategy_config = chunking_config.get(chunk_strategy_name, {})
+
+                # Create strategy with configuration and inject dependencies
+                self.chunk_strategy = ContextualChunkStrategy(
+                    max_words_per_group=strategy_config.get("max_words_per_group", 800),
+                    max_words_per_chunk=strategy_config.get("max_words_per_chunk", 800),
+                    role_format=strategy_config.get("role_format", "[{role}]"),
+                    chunk_separator=strategy_config.get("chunk_separator", "\n\n"),
+                    enable_contextual=strategy_config.get("enable_contextual", True),
+                    context_window_size=strategy_config.get("context_window_size", 2),
+                    gpt_model=strategy_config.get("gpt_model", "gpt-4o-mini"),
+                    vector_store=self.vector_store,  # Inject vector store for context retrieval
+                    llm_provider=None  # TODO: Inject LLM provider when available
+                )
+
+                logger.info(f"Configured {chunk_strategy_name} strategy with contextual enhancement: "
+                           f"enable_contextual={strategy_config.get('enable_contextual', True)}")
+            else:
+                # Keep existing MessageChunkStrategy for "message" strategy
+                logger.info("Using basic MessageChunkStrategy")
+
+        except Exception as e:
+            logger.error(f"Failed to configure chunk strategy: {e}")
+            # Keep the default strategy on error
 
     def _get_retrieval_method(
         self,

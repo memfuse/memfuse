@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'sr
 
 from memfuse_core.llm.providers.openai import OpenAIProvider
 from memfuse_core.llm.base import LLMRequest
-from memfuse_core.rag.chunk.message_character import MessageCharacterChunkStrategy
+from memfuse_core.rag.chunk.contextual import ContextualChunkStrategy
 from tests.mocks.llm import MockProvider
 
 
@@ -39,7 +39,7 @@ class TestLLMIntegration:
     @pytest.mark.asyncio
     async def test_mock_provider_integration(self):
         """Test mock provider integration with chunking strategy."""
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             enable_contextual=True,
             llm_provider=self.mock_provider
         )
@@ -59,7 +59,7 @@ class TestLLMIntegration:
         
         # Verify LLM enhancement
         chunk = chunks[0]
-        assert chunk.metadata.get("strategy") == "message_character"
+        assert chunk.metadata.get("strategy") == "contextual"
         
         # If contextual description was generated, verify it
         if chunk.metadata.get("contextual_description"):
@@ -93,7 +93,7 @@ class TestLLMIntegration:
     @pytest.mark.asyncio
     async def test_chunking_with_llm_enhancement(self):
         """Test chunking strategy with LLM enhancement."""
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             enable_contextual=True,
             llm_provider=self.mock_provider,
             max_words_per_group=100
@@ -118,7 +118,7 @@ class TestLLMIntegration:
         
         # Verify each chunk has proper metadata
         for i, chunk in enumerate(chunks):
-            assert chunk.metadata.get("strategy") == "message_character"
+            assert chunk.metadata.get("strategy") == "contextual"
             assert chunk.metadata.get("chunk_index") == i
             assert chunk.content
             
@@ -135,7 +135,7 @@ class TestLLMIntegration:
             "failure_message": "API rate limit exceeded"
         })
         
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             enable_contextual=True,
             llm_provider=failing_provider
         )
@@ -154,7 +154,7 @@ class TestLLMIntegration:
         assert len(chunks) > 0
         chunk = chunks[0]
         assert chunk.content
-        assert chunk.metadata.get("strategy") == "message_character"
+        assert chunk.metadata.get("strategy") == "contextual"
         
         # Should not have LLM enhancement due to failure
         assert chunk.metadata.get("gpt_enhanced") is not True
@@ -162,7 +162,7 @@ class TestLLMIntegration:
     @pytest.mark.asyncio
     async def test_contextual_description_quality(self):
         """Test quality of generated contextual descriptions."""
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             enable_contextual=True,
             llm_provider=self.mock_provider
         )
@@ -232,7 +232,7 @@ class TestLLMIntegration:
     @pytest.mark.asyncio
     async def test_parallel_llm_processing(self):
         """Test parallel LLM processing in chunking."""
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             enable_contextual=True,
             llm_provider=self.mock_provider
         )
@@ -262,7 +262,7 @@ class TestLLMIntegration:
         
         # Verify all chunks have consistent metadata
         for chunk in chunks:
-            assert chunk.metadata.get("strategy") == "message_character"
+            assert chunk.metadata.get("strategy") == "contextual"
             assert chunk.content
 
 

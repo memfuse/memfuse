@@ -134,9 +134,10 @@ class HybridBuffer:
             self.total_rounds_received += len(rounds)
             logger.info(f"HybridBuffer: Now contains {len(self.chunks)} chunks, {len(self.original_rounds)} rounds")
 
-            # TODO: Auto-flush disabled temporarily due to performance issues
-            # Will be re-enabled after optimizing the flush process
+            # TODO: Auto-flush temporarily disabled - the Qdrant handler is causing deadlocks
+            # Need to fix the async issues in BufferService._create_qdrant_handler before re-enabling
             logger.info("HybridBuffer: Auto-flush disabled - data stored in memory buffer only")
+            logger.warning("HybridBuffer: Data will only be available in memory until flush mechanism is fixed")
             # flush_success = await self.flush_to_storage()
             # if flush_success:
             #     logger.info("HybridBuffer: Auto-flush completed successfully")
@@ -144,21 +145,44 @@ class HybridBuffer:
             #     logger.error("HybridBuffer: Auto-flush failed")
     
     async def _load_chunk_strategy(self) -> None:
-        """Lazy load the chunk strategy."""
+        """Lazy load the chunk strategy with configuration support."""
         try:
+            # Get configuration for chunking strategies
+            from ..utils.config import config_manager
+            config = config_manager.get_config()
+            chunking_config = config.get("buffer", {}).get("chunking", {})
+
             if self.chunk_strategy_name == "message":
                 from ..rag.chunk.message import MessageChunkStrategy
                 self.chunk_strategy = MessageChunkStrategy()
-            elif self.chunk_strategy_name == "contextual":
+
+            elif self.chunk_strategy_name in ["contextual", "contextual"]:
+                # Use the advanced ContextualChunkStrategy for both contextual options
                 from ..rag.chunk.contextual import ContextualChunkStrategy
-                self.chunk_strategy = ContextualChunkStrategy()
+
+                # Get strategy-specific configuration
+                strategy_config = chunking_config.get(self.chunk_strategy_name, {})
+
+                # Create strategy with configuration
+                self.chunk_strategy = ContextualChunkStrategy(
+                    max_words_per_group=strategy_config.get("max_words_per_group", 800),
+                    max_words_per_chunk=strategy_config.get("max_words_per_chunk", 800),
+                    role_format=strategy_config.get("role_format", "[{role}]"),
+                    chunk_separator=strategy_config.get("chunk_separator", "\n\n"),
+                    enable_contextual=strategy_config.get("enable_contextual", True),
+                    context_window_size=strategy_config.get("context_window_size", 2),
+                    gpt_model=strategy_config.get("gpt_model", "gpt-4o-mini"),
+                    vector_store=None,  # Will be injected later by MemoryService
+                    llm_provider=None   # Will be injected later by MemoryService
+                )
+
             else:
                 # Default to message strategy
                 from ..rag.chunk.message import MessageChunkStrategy
                 self.chunk_strategy = MessageChunkStrategy()
                 logger.warning(f"HybridBuffer: Unknown chunk strategy '{self.chunk_strategy_name}', using message")
-            
-            logger.debug(f"HybridBuffer: Loaded chunk strategy: {self.chunk_strategy_name}")
+
+            logger.info(f"HybridBuffer: Loaded chunk strategy: {self.chunk_strategy_name}")
         except Exception as e:
             logger.error(f"HybridBuffer: Failed to load chunk strategy: {e}")
             # Create a minimal fallback strategy

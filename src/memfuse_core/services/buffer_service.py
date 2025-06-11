@@ -9,7 +9,8 @@ from omegaconf import DictConfig
 from loguru import logger
 
 from ..interfaces import MemoryInterface, ServiceInterface, MessageInterface, MessageList, MessageBatchList
-from ..buffer.write_buffer import WriteBuffer
+from ..buffer.round_buffer import RoundBuffer
+from ..buffer.hybrid_buffer import HybridBuffer
 from ..buffer.query_buffer import QueryBuffer
 
 if TYPE_CHECKING:
@@ -17,11 +18,12 @@ if TYPE_CHECKING:
 
 
 class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
-    """Buffer Service with WriteBuffer as unified entry point.
+    """Buffer Service with RoundBuffer, HybridBuffer, and QueryBuffer.
 
-    This service implements the Buffer architecture according to PRD:
-    - WriteBuffer: Unified entry point managing RoundBuffer + HybridBuffer
-    - QueryBuffer: Independent query component with sorting and caching
+    This service implements the Buffer architecture:
+    - RoundBuffer: Token-based short-term storage with automatic transfer
+    - HybridBuffer: Dual-format (chunks + rounds) medium-term storage with FIFO
+    - QueryBuffer: Unified query with sorting and caching
     """
     
     def __init__(
@@ -46,20 +48,27 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         
         # Buffer configuration
         buffer_config = self.config.get('buffer', {})
+        round_config = buffer_config.get('round_buffer', {})
+        hybrid_config = buffer_config.get('hybrid_buffer', {})
+        query_config = buffer_config.get('query', {})
 
         # Rerank configuration
         retrieval_config = self.config.get('retrieval', {})
         self.use_rerank = retrieval_config.get('use_rerank', True)
-
-        # Initialize WriteBuffer as unified entry point
-        self.write_buffer = WriteBuffer(
-            config=buffer_config,
-            sqlite_handler=self._create_sqlite_handler(),
-            qdrant_handler=self._create_qdrant_handler()
+        
+        # Initialize Buffer components
+        self.round_buffer = RoundBuffer(
+            max_tokens=round_config.get('max_tokens', 800),
+            max_size=round_config.get('max_size', 5),
+            token_model=round_config.get('token_model', 'gpt-4o-mini')
         )
-
-        # Initialize QueryBuffer independently
-        query_config = buffer_config.get('query', {})
+        
+        self.hybrid_buffer = HybridBuffer(
+            max_size=hybrid_config.get('max_size', 5),
+            chunk_strategy=hybrid_config.get('chunk_strategy', 'message'),
+            embedding_model=hybrid_config.get('embedding_model', 'all-MiniLM-L6-v2')
+        )
+        
         self.query_buffer = QueryBuffer(
             retrieval_handler=self._create_retrieval_handler(),
             max_size=query_config.get('max_size', 15),
@@ -68,10 +77,18 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             default_order=query_config.get('default_order', 'desc')
         )
         
+        # Set up component connections
+        self.round_buffer.set_transfer_handler(self.hybrid_buffer.add_from_rounds)
+        self.hybrid_buffer.set_storage_handlers(
+            self._create_sqlite_handler(),
+            self._create_qdrant_handler()
+        )
+        self.query_buffer.set_hybrid_buffer(self.hybrid_buffer)
+        
         # Statistics
         self.total_items_added = 0
         self.total_queries = 0
-        self.total_transfers = 0
+        self.total_batch_writes = 0
         
         logger.info(f"BufferService: Initialized for user {user} with Buffer architecture")
         logger.info(f"BufferService: Rerank enabled: {self.use_rerank}")
@@ -190,39 +207,50 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
     
     async def add(self, messages: MessageList, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Add a single list of messages.
-
+        
         Args:
             messages: List of message dictionaries (MessageList)
             session_id: Session ID for context (passed as parameter)
-
+            
         Returns:
             Dictionary with status, data, and message information
         """
-        return await self.write_buffer.add(messages, session_id)
+        return await self.add_batch([messages], session_id=session_id)
     
     async def add_batch(self, message_batch_list: MessageBatchList, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Add a batch of message lists.
-
+        
         Args:
             message_batch_list: List of lists of messages (MessageBatchList)
             session_id: Session ID for context (passed as parameter)
-
+            
         Returns:
             Dictionary with status, data, and message information
         """
         if not self.memory_service:
             return self._error_response("No memory service available")
-
+        
         if not message_batch_list:
             return self._success_response([], "No message lists to add")
-
+        
         try:
-            # Add metadata to messages if needed
+            transfer_triggered = False
+            total_messages = 0
+
+            logger.debug(f"BufferService.add_batch: Processing {len(message_batch_list)} message lists")
+
             for i, message_list in enumerate(message_batch_list):
                 if not message_list:
                     continue
 
+                logger.debug(f"BufferService.add_batch: Processing message_list {i} with {len(message_list)} messages")
+                logger.debug(f"BufferService.add_batch: message_list type: {type(message_list)}")
+
+                total_messages += len(message_list)
+
+                # Add metadata to messages if needed
                 for j, message in enumerate(message_list):
+                    logger.debug(f"BufferService.add_batch: Processing message {j}: type={type(message)}")
                     # Ensure message is a dictionary
                     if isinstance(message, dict):
                         if 'metadata' not in message:
@@ -234,22 +262,35 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     else:
                         logger.warning(f"BufferService: Skipping non-dict message {j}: {type(message)} - {message}")
 
-            # Delegate to WriteBuffer
-            result = await self.write_buffer.add_batch(message_batch_list, session_id)
+                # Add to RoundBuffer (may trigger transfer to HybridBuffer)
+                logger.debug(f"BufferService.add_batch: Adding message_list to RoundBuffer")
+                if await self.round_buffer.add(message_list, session_id):
+                    transfer_triggered = True
+                    self.total_transfers += 1
 
-            # Update statistics
-            total_messages = sum(len(msg_list) for msg_list in message_batch_list if msg_list)
+            # CRITICAL: Also store data via MemoryService for persistent storage and contextual chunking
+            logger.info(f"BufferService.add_batch: Storing {len(message_batch_list)} message lists via MemoryService")
+            memory_result = await self.memory_service.add_batch(message_batch_list, session_id=session_id)
+
+            if memory_result.get("status") == "success":
+                logger.info(f"BufferService.add_batch: MemoryService storage successful")
+                # Extract message IDs from MemoryService response
+                memory_data = memory_result.get("data", {})
+                message_ids = memory_data.get("message_ids", []) if isinstance(memory_data, dict) else []
+            else:
+                logger.error(f"BufferService.add_batch: MemoryService storage failed: {memory_result.get('message')}")
+                message_ids = []
+
             self.total_items_added += total_messages
-            if result.get("total_transfers", 0) > 0:
-                self.total_transfers += result.get("total_transfers", 0)
 
             return self._success_response(
-                {"message_ids": []},  # Buffer doesn't return immediate IDs, but API expects this format
-                f"Added {len(message_batch_list)} message lists to Buffer",
-                transfer_triggered=result.get("total_transfers", 0) > 0,
-                total_messages=total_messages
+                {"message_ids": message_ids},  # Return actual message IDs from MemoryService
+                f"Added {len(message_batch_list)} message lists to Buffer and MemoryService",
+                transfer_triggered=transfer_triggered,
+                total_messages=total_messages,
+                memory_storage_status=memory_result.get("status", "unknown")
             )
-
+            
         except Exception as e:
             logger.error(f"BufferService.add_batch: Error adding message batch: {e}")
             return self._error_response(f"Error adding message batch: {str(e)}")
@@ -293,20 +334,20 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         logger.info(f"BufferService.query: Processing query '{query_preview}' with top_k={top_k}")
 
         try:
-            # Log buffer states before query
-            round_buffer_size = len(self.write_buffer.get_round_buffer().rounds)
-            hybrid_buffer_size = len(self.write_buffer.get_hybrid_buffer().chunks)
+            # Log buffer states before query (similar to V2)
+            round_buffer_size = len(self.round_buffer.rounds)
+            hybrid_buffer_size = len(self.hybrid_buffer.chunks)
 
             logger.info(f"BufferService.query: Buffer states - RoundBuffer: {round_buffer_size} rounds, HybridBuffer: {hybrid_buffer_size} chunks")
 
-            # Query using QueryBuffer with HybridBuffer from WriteBuffer
+            # Query using QueryBuffer (similar to V2's QueryBuffer)
             logger.info("BufferService.query: Calling QueryBuffer.query")
             results = await self.query_buffer.query(
                 query_text=query,
                 top_k=top_k,
                 sort_by=sort_by or "score",
                 order=order or "desc",
-                hybrid_buffer=self.write_buffer.get_hybrid_buffer()
+                hybrid_buffer=self.hybrid_buffer
             )
 
             logger.info(f"BufferService.query: QueryBuffer returned {len(results) if results else 0} results")
@@ -382,7 +423,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         try:
             if buffer_only:
                 # Only return RoundBuffer data
-                return await self.write_buffer.get_round_buffer().get_all_messages_for_read_api(
+                return await self.round_buffer.get_all_messages_for_read_api(
                     limit=limit,
                     sort_by=sort_by,
                     order=order
@@ -392,7 +433,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 all_messages = []
                 
                 # Get messages from HybridBuffer
-                hybrid_messages = await self.write_buffer.get_hybrid_buffer().get_all_messages_for_read_api(
+                hybrid_messages = await self.hybrid_buffer.get_all_messages_for_read_api(
                     limit=None,  # Get all first, apply limit later
                     sort_by=sort_by,
                     order=order
@@ -437,22 +478,23 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
     
     async def get_buffer_stats(self) -> Dict[str, Any]:
         """Get comprehensive statistics about the Buffer system.
-
+        
         Returns:
             Dictionary with detailed buffer statistics
         """
-        write_buffer_stats = self.write_buffer.get_stats()
+        round_stats = self.round_buffer.get_stats()
+        hybrid_stats = self.hybrid_buffer.get_stats()
         query_stats = self.query_buffer.get_stats()
-
+        
         return {
             "version": "0.1.1",
             "total_items_added": self.total_items_added,
             "total_queries": self.total_queries,
             "total_transfers": self.total_transfers,
-            "write_buffer": write_buffer_stats,
+            "round_buffer": round_stats,
+            "hybrid_buffer": hybrid_stats,
             "query_buffer": query_stats,
             "architecture": {
-                "write_buffer": "Unified entry point for RoundBuffer + HybridBuffer",
                 "round_buffer": "Token-based FIFO with automatic transfer",
                 "hybrid_buffer": "Dual-format (chunks + rounds) with FIFO",
                 "query_buffer": "Unified query with sorting and caching"

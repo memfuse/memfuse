@@ -6,9 +6,8 @@ into retrievable chunks with various strategies.
 
 from .base import ChunkData, ChunkStrategy
 from .message import MessageChunkStrategy
-from .contextual import ContextualChunkStrategy
 from .character import CharacterChunkStrategy
-from .message_character import MessageCharacterChunkStrategy
+from .contextual import ContextualChunkStrategy
 
 __all__ = [
     "ChunkData",
@@ -16,5 +15,4 @@ __all__ = [
     "MessageChunkStrategy",
     "ContextualChunkStrategy",
     "CharacterChunkStrategy",
-    "MessageCharacterChunkStrategy",
 ]

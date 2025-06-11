@@ -7,7 +7,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
-from memfuse_core.rag.chunk.message_character import MessageCharacterChunkStrategy
+from memfuse_core.rag.chunk.contextual import ContextualChunkStrategy
 from memfuse_core.rag.chunk.base import ChunkData
 from tests.mocks.llm import MockProvider
 
@@ -26,9 +26,9 @@ class TestChunkingIntegration:
         })
     
     @pytest.mark.asyncio
-    async def test_message_character_chunking_integration(self):
-        """Test complete MessageCharacterChunkStrategy integration."""
-        strategy = MessageCharacterChunkStrategy(
+    async def test_contextual_chunking_integration(self):
+        """Test complete ContextualChunkStrategy integration."""
+        strategy = ContextualChunkStrategy(
             max_words_per_group=50,
             enable_contextual=True,
             llm_provider=self.mock_llm
@@ -63,7 +63,7 @@ class TestChunkingIntegration:
             
             # Verify metadata
             metadata = chunk.metadata
-            assert metadata.get("strategy") == "message_character"
+            assert metadata.get("strategy") == "contextual"
             assert metadata.get("chunk_index") == i
             assert "session_id" in metadata
             assert "gpt_enhanced" in metadata
@@ -80,7 +80,7 @@ class TestChunkingIntegration:
     @pytest.mark.asyncio
     async def test_cjk_language_support_integration(self):
         """Test CJK (Chinese, Japanese, Korean) language support integration."""
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             max_words_per_group=30,
             enable_contextual=False  # Focus on CJK handling
         )
@@ -121,7 +121,7 @@ class TestChunkingIntegration:
     @pytest.mark.asyncio
     async def test_large_conversation_chunking_integration(self):
         """Test chunking of large conversations with multiple rounds."""
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             max_words_per_group=100,
             enable_contextual=True,
             llm_provider=self.mock_llm
@@ -163,7 +163,7 @@ class TestChunkingIntegration:
     @pytest.mark.asyncio
     async def test_contextual_enhancement_integration(self):
         """Test contextual enhancement with previous chunk context."""
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             enable_contextual=True,
             context_window_size=2,
             llm_provider=self.mock_llm
@@ -213,7 +213,7 @@ class TestChunkingIntegration:
             "failure_message": "LLM service unavailable"
         })
         
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             enable_contextual=True,
             llm_provider=failing_llm
         )
@@ -232,7 +232,7 @@ class TestChunkingIntegration:
         assert len(chunks) > 0
         chunk = chunks[0]
         assert chunk.content
-        assert chunk.metadata.get("strategy") == "message_character"
+        assert chunk.metadata.get("strategy") == "contextual"
         
         # Should gracefully handle LLM failure
         assert chunk.metadata.get("gpt_enhanced") is not True
@@ -240,7 +240,7 @@ class TestChunkingIntegration:
     @pytest.mark.asyncio
     async def test_empty_and_edge_cases_integration(self):
         """Test chunking with empty and edge case inputs."""
-        strategy = MessageCharacterChunkStrategy()
+        strategy = ContextualChunkStrategy()
         
         # Test empty input
         empty_chunks = await strategy.create_chunks([])
@@ -270,7 +270,7 @@ class TestChunkingIntegration:
     @pytest.mark.asyncio
     async def test_metadata_consistency_integration(self):
         """Test metadata consistency across different chunking scenarios."""
-        strategy = MessageCharacterChunkStrategy(
+        strategy = ContextualChunkStrategy(
             enable_contextual=True,
             llm_provider=self.mock_llm
         )
@@ -299,7 +299,7 @@ class TestChunkingIntegration:
                 assert field in metadata, f"Missing {field} in chunk {i}"
             
             # Verify field types and values
-            assert metadata["strategy"] == "message_character"
+            assert metadata["strategy"] == "contextual"
             assert isinstance(metadata["chunk_index"], int)
             assert metadata["chunk_index"] == i
             assert isinstance(metadata["word_count"], int)
@@ -321,7 +321,7 @@ if __name__ == "__main__":
         
         print("Running chunking integration tests...")
         
-        await test_instance.test_message_character_chunking_integration()
+        await test_instance.test_contextual_chunking_integration()
         print("✅ Message character chunking integration test passed")
         
         await test_instance.test_cjk_language_support_integration()
