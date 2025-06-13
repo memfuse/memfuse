@@ -124,39 +124,51 @@ graph LR
 2. **Size Limit**: When number of rounds exceeds maximum
 3. **Manual Flush**: Explicit transfer request
 
-### HybridBuffer - Dual-format Storage
+### HybridBuffer - Dual-Queue Storage with Immediate Processing
 
 ```mermaid
 graph TB
     subgraph "HybridBuffer Architecture"
-        A[RoundBuffer Transfer] --> B[Dual Storage]
-        B --> C[Chunk Format]
-        B --> D[Round Format]
-        
-        C --> E[ChunkStrategy Processing]
-        D --> F[Original Round Preservation]
-        
-        E --> G[Embedding Generation]
-        F --> H[Metadata Enhancement]
-        
-        G --> I[Vector Storage Ready]
-        H --> J[Query Processing Ready]
-        
-        I --> K{FIFO Limit<br/>Exceeded?}
-        J --> K
-        K -->|Yes| L[Flush to Storage]
-        K -->|No| M[Memory Buffer]
+        A[RoundBuffer Transfer] --> B[Immediate Processing]
+        B --> C[Chunking & Embedding]
+        B --> D[Queue Management]
+
+        C --> E[VectorCache]
+        D --> F[RoundQueue]
+
+        E --> G[Chunks + Embeddings<br/>Ready for Retrieval]
+        F --> H[Original Rounds<br/>Ready for SQLite]
+
+        G --> I{Queue Size<br/>≥ max_size?}
+        H --> I
+        I -->|Yes| J[Batch Write to Storage]
+        I -->|No| K[Keep in Memory]
+
+        J --> L[SQLite: Original Rounds]
+        J --> M[Qdrant: Pre-calculated Data]
+
+        L --> N[Clear All Queues]
+        M --> N
     end
 ```
 
-**Storage Formats**:
-- **Chunks**: Processed through ChunkStrategy for semantic search
-- **Rounds**: Original message structure for context preservation
+**Dual-Queue Architecture**:
+- **RoundQueue**: Original rounds for SQLite storage (no processing needed)
+- **VectorCache**: Pre-processed chunks and embeddings for instant retrieval
 
-**FIFO Management**:
-- Automatic eviction when size limit exceeded
-- Configurable flush behavior (manual/automatic)
-- Preservation of recent data for fast access
+**Immediate Processing Logic**:
+1. **On Data Arrival**: Immediately perform chunking and embedding calculation
+2. **VectorCache Storage**: Chunks/embeddings cached in memory for instant retrieval
+3. **RoundQueue Management**: Original rounds queued for batch database write
+4. **Batch Write Trigger**: When queue reaches max_size (5 items)
+5. **Complete Clear**: Both queues cleared after successful write
+
+**Key Benefits**:
+- **Instant Retrieval**: Embeddings available immediately for search via VectorCache
+- **No Recomputation**: Embeddings calculated once, reused for storage
+- **Clear Separation**: RoundQueue for persistence, VectorCache for retrieval
+- **Batch Efficiency**: Sequential writes to SQLite then Qdrant
+- **Memory Safety**: Complete queue clearing prevents memory leaks
 
 ### QueryBuffer - Intelligent Query Processing
 
@@ -199,31 +211,44 @@ graph TB
 sequenceDiagram
     participant Client
     participant BufferService
-    participant WriteBuffer
     participant RoundBuffer
     participant HybridBuffer
     participant MemoryService
-    participant Storage
+    participant SQLite
+    participant Qdrant
 
     Client->>BufferService: add(MessageList)
-    BufferService->>WriteBuffer: add(MessageList)
-    WriteBuffer->>RoundBuffer: add(MessageList)
-    
-    Note over RoundBuffer: Accumulate until threshold
-    
+    BufferService->>RoundBuffer: add(MessageList)
+
+    Note over RoundBuffer: Accumulate until token/size threshold
+
     RoundBuffer->>RoundBuffer: check_thresholds()
     RoundBuffer->>HybridBuffer: transfer_and_clear()
-    HybridBuffer->>HybridBuffer: process_rounds()
-    
-    Note over HybridBuffer: FIFO limit exceeded
-    
-    HybridBuffer->>MemoryService: flush_to_storage()
-    MemoryService->>Storage: persist_data()
-    
-    Storage-->>MemoryService: Success
+
+    Note over HybridBuffer: Immediate Processing
+    HybridBuffer->>HybridBuffer: chunking + embedding calculation
+    HybridBuffer->>HybridBuffer: store to VectorCache
+    HybridBuffer->>HybridBuffer: add rounds to RoundQueue
+
+    Note over HybridBuffer: Queue size check
+    HybridBuffer->>HybridBuffer: check queue size ≥ max_size
+
+    Note over HybridBuffer: Batch write triggered
+    par Sequential Storage
+        HybridBuffer->>MemoryService: write rounds to SQLite
+        MemoryService->>SQLite: store with updated_at refresh
+    and
+        HybridBuffer->>Qdrant: write pre-calculated embeddings
+    end
+
+    SQLite-->>MemoryService: Success
     MemoryService-->>HybridBuffer: Success
-    HybridBuffer-->>WriteBuffer: Transfer Complete
-    WriteBuffer-->>BufferService: Success
+    Qdrant-->>HybridBuffer: Success
+
+    Note over HybridBuffer: Clear all queues
+    HybridBuffer->>HybridBuffer: clear RoundQueue + VectorCache
+
+    HybridBuffer-->>BufferService: Transfer Complete
     BufferService-->>Client: 200 OK
 ```
 

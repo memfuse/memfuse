@@ -14,13 +14,18 @@ from ..rag.chunk.base import ChunkData
 
 
 class HybridBuffer:
-    """Hybrid buffer managing both chunks and original rounds.
-    
-    This buffer maintains two parallel data structures:
-    1. chunks: For vector search and retrieval
-    2. original_rounds: For storage and Read API
-    
-    It implements FIFO logic and never fully clears.
+    """HybridBuffer with dual-queue architecture for efficient batch processing.
+
+    This buffer maintains two distinct data structures:
+    1. RoundQueue: Stores original rounds for SQLite storage
+    2. VectorCache: Stores pre-processed chunks and embeddings for retrieval
+
+    Architecture:
+    - Immediate Processing: Chunking and embedding calculation on data arrival
+    - RoundQueue: Original message rounds queued for database persistence
+    - VectorCache: Pre-calculated vectors cached for instant retrieval
+    - Batch Write: Sequential writes to SQLite then Qdrant when queue is full
+    - Complete Clear: Both queues cleared after successful write
     """
     
     def __init__(
@@ -40,9 +45,11 @@ class HybridBuffer:
         self.chunk_strategy_name = chunk_strategy
         self.embedding_model_name = embedding_model
         
-        # Parallel data structures
+        # Dual-queue data structures
+        # VectorCache: Pre-processed chunks and embeddings for instant retrieval
         self.chunks: List[ChunkData] = []
         self.embeddings: List[List[float]] = []
+        # RoundQueue: Original rounds for SQLite storage
         self.original_rounds: List[MessageList] = []
         
         # Strategy and model instances (lazy loaded)
@@ -81,69 +88,83 @@ class HybridBuffer:
     
     async def add_from_rounds(self, rounds: List[MessageList]) -> None:
         """Add rounds from RoundBuffer transfer.
-        
+
+        When Round Messages are transferred from RoundBuffer to HybridBuffer:
+        1. Immediately perform chunking to get chunks list
+        2. Immediately calculate embeddings and store in VectorCache for retrieval use
+        3. Add original rounds to RoundQueue for SQLite storage
+        4. Check if flush operation is needed
+
         Args:
             rounds: List of MessageList objects from RoundBuffer
         """
         if not rounds:
             return
-        
+
         async with self._lock:
             logger.info(f"HybridBuffer: Receiving {len(rounds)} rounds from RoundBuffer")
-            
+
+            # 1. Immediately perform chunking and embedding calculation, store to VectorCache
+            await self._process_rounds_immediately(rounds)
+
+            # 2. Add original rounds to RoundQueue (for SQLite storage)
+            for round_messages in rounds:
+                self.original_rounds.append(round_messages)
+                logger.debug(f"HybridBuffer: Added round to RoundQueue")
+
+            self.total_rounds_received += len(rounds)
+            logger.info(f"HybridBuffer: RoundQueue contains {len(self.original_rounds)} rounds, VectorCache contains {len(self.chunks)} chunks")
+
+            # 3. Check if flush operation is needed
+            if len(self.original_rounds) >= self.max_size:
+                logger.info(f"HybridBuffer: Queue full ({len(self.original_rounds)} >= {self.max_size}), triggering batch flush to storage")
+                flush_success = await self.flush_to_storage()
+                if flush_success:
+                    logger.info("HybridBuffer: Batch flush completed successfully - queues cleared")
+                else:
+                    logger.error("HybridBuffer: Batch flush failed - data retained in queues")
+            else:
+                logger.debug(f"HybridBuffer: Queue not full yet ({len(self.original_rounds)}/{self.max_size}), keeping data in memory")
+
+    async def _process_rounds_immediately(self, rounds: List[MessageList]) -> None:
+        """Immediately process rounds, generate chunks and embeddings stored to VectorCache.
+
+        Args:
+            rounds: List of rounds to process
+        """
+        try:
             # Lazy load chunk strategy
             if self.chunk_strategy is None:
                 await self._load_chunk_strategy()
-            
+
             # Lazy load embedding model
             if self.embedding_model is None:
                 await self._load_embedding_model()
-            
-            for round_messages in rounds:
-                # Create chunks from the round
-                try:
-                    chunks = await self.chunk_strategy.create_chunks([round_messages])
-                    logger.debug(f"HybridBuffer: Created {len(chunks)} chunks from round")
-                    
-                    for chunk in chunks:
-                        # Generate embedding
-                        embedding = await self._generate_embedding(chunk.content)
-                        
-                        # Add to parallel structures
-                        self.chunks.append(chunk)
-                        self.embeddings.append(embedding)
-                        self.original_rounds.append(round_messages)
-                        self.total_chunks_created += 1
-                        
-                        # FIFO removal if over capacity
-                        if len(self.chunks) > self.max_size:
-                            self.chunks.pop(0)
-                            self.embeddings.pop(0)
-                            self.original_rounds.pop(0)
-                            self.total_fifo_removals += 1
-                            logger.debug("HybridBuffer: FIFO removal of oldest item")
-                
-                except Exception as e:
-                    logger.error(f"HybridBuffer: Error processing round: {e}")
-                    # Still add the original round for storage
-                    self.original_rounds.append(round_messages)
-                    if len(self.original_rounds) > self.max_size:
-                        self.original_rounds.pop(0)
-                        self.total_fifo_removals += 1
-            
-            self.total_rounds_received += len(rounds)
-            logger.info(f"HybridBuffer: Now contains {len(self.chunks)} chunks, {len(self.original_rounds)} rounds")
 
-            # TODO: Auto-flush temporarily disabled - the Qdrant handler is causing deadlocks
-            # Need to fix the async issues in BufferService._create_qdrant_handler before re-enabling
-            logger.info("HybridBuffer: Auto-flush disabled - data stored in memory buffer only")
-            logger.warning("HybridBuffer: Data will only be available in memory until flush mechanism is fixed")
-            # flush_success = await self.flush_to_storage()
-            # if flush_success:
-            #     logger.info("HybridBuffer: Auto-flush completed successfully")
-            # else:
-            #     logger.error("HybridBuffer: Auto-flush failed")
-    
+            # Immediately create chunks
+            logger.info(f"HybridBuffer: Creating chunks from {len(rounds)} rounds...")
+            chunks = await self.chunk_strategy.create_chunks(rounds)
+            logger.info(f"HybridBuffer: Created {len(chunks)} chunks")
+
+            # Immediately generate embeddings and store to VectorCache
+            logger.info(f"HybridBuffer: Generating embeddings for {len(chunks)} chunks...")
+            for i, chunk in enumerate(chunks):
+                embedding = await self._generate_embedding(chunk.content)
+
+                # Add to VectorCache
+                self.chunks.append(chunk)
+                self.embeddings.append(embedding)
+                self.total_chunks_created += 1
+
+                if (i + 1) % 10 == 0:  # Log progress every 10 chunks
+                    logger.debug(f"HybridBuffer: Generated {i + 1}/{len(chunks)} embeddings")
+
+            logger.info(f"HybridBuffer: Completed immediate processing - VectorCache now contains {len(self.chunks)} chunks")
+
+        except Exception as e:
+            logger.error(f"HybridBuffer: Error in immediate processing: {e}")
+            # Even if error occurs, ensure data flow continues
+
     async def _load_chunk_strategy(self) -> None:
         """Lazy load the chunk strategy with configuration support."""
         try:
@@ -250,8 +271,8 @@ class HybridBuffer:
             return await self._create_fallback_embedding(text)
     
     async def flush_to_storage(self) -> bool:
-        """Flush all data to persistent storage.
-        
+        """Flush all data to persistent storage using sequential batch writes.
+
         Returns:
             True if flush was successful, False otherwise
         """
@@ -259,47 +280,40 @@ class HybridBuffer:
             if not self.original_rounds:
                 logger.debug("HybridBuffer: No data to flush")
                 return True
-            
+
             try:
-                # Prepare data for storage
+                # Package data for batch write
                 rounds_to_write = self.original_rounds.copy()
                 chunks_to_write = self.chunks.copy()
-                
-                logger.info(f"HybridBuffer: Flushing {len(rounds_to_write)} rounds and {len(chunks_to_write)} chunks")
+                embeddings_to_write = self.embeddings.copy()
 
-                # Parallel write to SQLite and Qdrant
-                write_tasks = []
+                logger.info(f"HybridBuffer: Starting batch write - {len(rounds_to_write)} rounds, {len(chunks_to_write)} chunks")
 
+                # 1. Write to SQLite (original message data from RoundQueue)
                 if self.sqlite_handler and rounds_to_write:
-                    logger.info("HybridBuffer: Adding SQLite write task")
-                    write_tasks.append(self._write_to_sqlite(rounds_to_write))
+                    logger.info("HybridBuffer: Writing RoundQueue data to SQLite...")
+                    await self._write_to_sqlite(rounds_to_write)
+                    logger.info("HybridBuffer: SQLite batch write completed")
 
-                if self.qdrant_handler and chunks_to_write:
-                    logger.info("HybridBuffer: Adding Qdrant write task")
-                    write_tasks.append(self._write_to_qdrant(chunks_to_write))
+                # 2. Write to Qdrant (pre-calculated data from VectorCache)
+                if self.qdrant_handler and chunks_to_write and embeddings_to_write:
+                    logger.info("HybridBuffer: Writing VectorCache data to Qdrant...")
+                    await self._write_to_qdrant(chunks_to_write, embeddings_to_write)
+                    logger.info("HybridBuffer: Qdrant batch write completed")
 
-                if write_tasks:
-                    logger.info(f"HybridBuffer: Executing {len(write_tasks)} write tasks")
-                    results = await asyncio.gather(*write_tasks, return_exceptions=True)
-                    logger.info("HybridBuffer: Write tasks completed")
-                    
-                    # Check for errors
-                    for i, result in enumerate(results):
-                        if isinstance(result, Exception):
-                            logger.error(f"HybridBuffer: Storage write {i} failed: {result}")
-                            return False
-                
-                # Clear original rounds after successful write
-                self.original_rounds.clear()
+                # Clear all queues
+                self.original_rounds.clear()  # Clear RoundQueue
+                self.chunks.clear()           # Clear VectorCache
+                self.embeddings.clear()       # Clear VectorCache
                 self.total_flushes += 1
-                
-                logger.info("HybridBuffer: Flush completed successfully")
+
+                logger.info(f"HybridBuffer: Batch write completed successfully - all queues cleared")
                 return True
-                
+
             except Exception as e:
-                logger.error(f"HybridBuffer: Flush failed: {e}")
+                logger.error(f"HybridBuffer: Batch write failed: {e}")
                 return False
-    
+
     async def _write_to_sqlite(self, rounds: List[MessageList]) -> None:
         """Write rounds to SQLite storage.
         
@@ -311,30 +325,32 @@ class HybridBuffer:
             await self.sqlite_handler(rounds)
             logger.info(f"HybridBuffer: Completed SQLite write for {len(rounds)} rounds")
     
-    async def _write_to_qdrant(self, chunks: List[ChunkData]) -> None:
-        """Write chunks to Qdrant storage.
-        
+    async def _write_to_qdrant(self, chunks: List[ChunkData], embeddings: List[List[float]]) -> None:
+        """Write chunks to Qdrant storage using batch data.
+
         Args:
             chunks: List of ChunkData objects to write
+            embeddings: List of embedding vectors corresponding to chunks
         """
         if self.qdrant_handler:
             # Convert chunks to points format expected by Qdrant
             points = []
             for i, chunk in enumerate(chunks):
-                if i < len(self.embeddings):
+                if i < len(embeddings):
                     point = {
                         "id": f"chunk_{hash(chunk.content)}_{i}",
-                        "vector": self.embeddings[i],
+                        "vector": embeddings[i],
                         "payload": {
                             "content": chunk.content,
                             "metadata": chunk.metadata
                         }
                     }
                     points.append(point)
-            
+
             if points:
+                logger.info(f"HybridBuffer: Writing {len(points)} points to Qdrant in batch")
                 await self.qdrant_handler(points)
-                logger.debug(f"HybridBuffer: Wrote {len(points)} chunks to Qdrant")
+                logger.info(f"HybridBuffer: Successfully wrote {len(points)} chunks to Qdrant")
     
     async def get_all_messages_for_read_api(
         self,

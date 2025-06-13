@@ -646,11 +646,43 @@ class MemoryService(MessageInterface):
         # Create the round in database with pre-created round_id
         self.db.create_round(session_id, round_id)
 
-        # Store messages to database
-        for message in all_messages:
+        # Store messages to database using helper method
+        message_ids.extend(self._store_messages_to_db(all_messages, round_id))
+
+        return message_ids
+
+    def _store_messages_to_db(self, messages: List[Dict], round_id: str) -> List[str]:
+        """Helper method to store messages to database with proper timestamp handling.
+
+        Args:
+            messages: List of message dictionaries
+            round_id: Round ID for the messages
+
+        Returns:
+            List of message IDs
+        """
+        message_ids = []
+
+        for message in messages:
             role = message.get("role", "user")
             content = message.get("content", "")
-            message_id = self.db.add_message(round_id, role, content)
+
+            # Extract existing id and created_at from message if available
+            existing_id = message.get("id")
+            existing_created_at = message.get("created_at")
+
+            # Always update the updated_at timestamp when storing to database
+            from datetime import datetime
+            updated_at = datetime.now().isoformat()
+
+            message_id = self.db.add_message(
+                round_id=round_id,
+                role=role,
+                content=content,
+                message_id=existing_id,
+                created_at=existing_created_at,
+                updated_at=updated_at
+            )
             message_ids.append(message_id)
 
         return message_ids
@@ -704,12 +736,8 @@ class MemoryService(MessageInterface):
         # Create a new round for these messages
         round_id = self.db.create_round(session_id)
 
-        # Store messages to database
-        for message in all_messages:
-            role = message.get("role", "user")
-            content = message.get("content", "")
-            message_id = self.db.add_message(round_id, role, content)
-            message_ids.append(message_id)
+        # Store messages to database using helper method
+        message_ids.extend(self._store_messages_to_db(all_messages, round_id))
 
         return message_ids
 

@@ -199,8 +199,18 @@ async def add_messages(
                 and result.get("data") is not None):
             message_ids = result["data"].get("message_ids", [])
 
+        # Create response data with message IDs
+        response_data = {"message_ids": message_ids}
+
+        # Add any additional fields from the service result (e.g., transfer_triggered)
+        if result and result.get("status") == "success":
+            # Include additional fields like transfer_triggered, total_messages, etc.
+            for key, value in result.items():
+                if key not in ["status", "code", "data", "message", "errors"]:
+                    response_data[key] = value
+
         return ApiResponse.success(
-            data={"message_ids": message_ids},
+            data=response_data,
             message="Messages added successfully",
         )
     except Exception as e:

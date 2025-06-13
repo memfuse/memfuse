@@ -37,34 +37,51 @@ graph TB
     end
 ```
 
-### Data Flow Pipeline
+### Data Flow Pipeline with HybridBuffer Integration
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant BufferService
-    participant MemoryService
+    participant RoundBuffer
+    participant HybridBuffer
     participant ChunkStrategy
-    participant StoreLayer
-    participant Database
+    participant MemoryService
+    participant SQLite
+    participant Qdrant
 
     Client->>BufferService: add(MessageList)
-    BufferService->>BufferService: accumulate to MessageBatchList
-    
-    Note over BufferService: Threshold reached (5 MessageLists)
-    
-    BufferService->>MemoryService: add_batch(MessageBatchList)
-    MemoryService->>ChunkStrategy: create_chunks(MessageBatchList)
-    ChunkStrategy-->>MemoryService: List[ChunkData]
-    
-    par Parallel Storage
-        MemoryService->>StoreLayer: store_chunks(List[ChunkData])
-        StoreLayer->>Database: persist_chunks()
-    and Original Messages
-        MemoryService->>Database: store_original_messages()
+    BufferService->>RoundBuffer: add(MessageList)
+
+    Note over RoundBuffer: Accumulate until token/size threshold
+
+    RoundBuffer->>HybridBuffer: transfer_and_clear()
+
+    Note over HybridBuffer: Immediate Processing Phase
+    HybridBuffer->>ChunkStrategy: create_chunks(rounds)
+    ChunkStrategy-->>HybridBuffer: List[ChunkData]
+    HybridBuffer->>HybridBuffer: generate embeddings
+    HybridBuffer->>HybridBuffer: store to VectorCache
+    HybridBuffer->>HybridBuffer: add rounds to RoundQueue
+
+    Note over HybridBuffer: Queue size check (max_size = 5)
+
+    alt Queue Full
+        Note over HybridBuffer: Batch Write Phase
+        par Sequential Storage
+            HybridBuffer->>MemoryService: write rounds to SQLite
+            MemoryService->>SQLite: store with updated_at refresh
+        and
+            HybridBuffer->>Qdrant: write pre-calculated embeddings
+        end
+
+        Note over HybridBuffer: Clear all queues after successful write
+        HybridBuffer->>HybridBuffer: clear RoundQueue + VectorCache
+    else Queue Not Full
+        Note over HybridBuffer: Keep data in memory for fast retrieval
     end
-    
-    MemoryService-->>BufferService: Success Response
+
+    HybridBuffer-->>BufferService: Success Response
     BufferService-->>Client: 200 OK
 ```
 
@@ -210,23 +227,56 @@ flowchart TD
     style G fill:#e8f5e8
 ```
 
-## Storage Integration
+## Storage Integration with HybridBuffer
+
+### HybridBuffer Chunking Architecture
+
+```mermaid
+graph TB
+    subgraph "HybridBuffer Chunking Flow"
+        A[RoundBuffer Transfer] --> B[Immediate Chunking]
+        B --> C[ChunkStrategy.create_chunks()]
+        C --> D[Embedding Generation]
+        D --> E[VectorCache]
+
+        A --> F[RoundQueue]
+        F --> G[Original Rounds Storage]
+
+        E --> H{Queue Size Check}
+        G --> H
+        H -->|≥ max_size| I[Batch Write Trigger]
+        H -->|< max_size| J[Keep in Memory]
+
+        I --> K[SQLite: Original Messages]
+        I --> L[Qdrant: Pre-calculated Embeddings]
+
+        K --> M[Clear All Queues]
+        L --> M
+    end
+```
+
+**Key Benefits**:
+- **Immediate Availability**: Chunks and embeddings ready for retrieval instantly via VectorCache
+- **No Recomputation**: Embeddings calculated once, reused for storage
+- **Clear Separation**: RoundQueue for persistence, VectorCache for retrieval
+- **Batch Efficiency**: Sequential writes prevent database conflicts
+- **Memory Safety**: Complete queue clearing after successful writes
 
 ### Unified Store Interface
 
 ```python
 class ChunkStoreInterface(ABC):
     """Unified interface for all chunk storage implementations."""
-    
+
     # CRUD Operations
     async def add(self, chunks: List[ChunkData]) -> List[str]
     async def read(self, chunk_ids: List[str]) -> List[ChunkData]
     async def update(self, chunk_id: str, chunk: ChunkData) -> bool
     async def delete(self, chunk_ids: List[str]) -> List[bool]
-    
+
     # Query Operations
     async def query(self, query: Query, top_k: int = 5) -> List[ChunkData]
-    
+
     # Business Operations
     async def get_chunks_by_session(self, session_id: str) -> List[ChunkData]
     async def get_chunks_by_round(self, round_id: str) -> List[ChunkData]

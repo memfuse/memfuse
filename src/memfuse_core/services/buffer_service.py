@@ -89,6 +89,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         self.total_items_added = 0
         self.total_queries = 0
         self.total_batch_writes = 0
+        self.total_transfers = 0
         
         logger.info(f"BufferService: Initialized for user {user} with Buffer architecture")
         logger.info(f"BufferService: Rerank enabled: {self.use_rerank}")
@@ -123,16 +124,22 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
     def _create_sqlite_handler(self):
         """Create SQLite handler for HybridBuffer."""
         async def sqlite_handler(rounds: List[MessageList]) -> None:
-            """Handle SQLite storage operations."""
+            """Handle SQLite storage operations - direct database storage."""
             try:
-                # Convert rounds to MessageBatchList and store via memory service
-                if rounds:
+                if rounds and self.memory_service:
+                    # Store directly to database via MemoryService
+                    # This is the final persistence step from HybridBuffer
+                    logger.info(f"BufferService: Storing {len(rounds)} rounds to database via SQLite handler")
                     result = await self.memory_service.add_batch(rounds)
-                    if result.get("status") != "success":
+                    if result.get("status") == "success":
+                        logger.info(f"BufferService: SQLite storage successful")
+                    else:
                         logger.error(f"BufferService: SQLite storage failed: {result.get('message')}")
+                        raise Exception(f"SQLite storage failed: {result.get('message')}")
             except Exception as e:
                 logger.error(f"BufferService: SQLite handler error: {e}")
-        
+                raise  # Re-raise to signal flush failure
+
         return sqlite_handler
     
     def _create_qdrant_handler(self):
@@ -248,17 +255,22 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
 
                 total_messages += len(message_list)
 
-                # Add metadata to messages if needed
+                # Add metadata and required fields to messages
                 for j, message in enumerate(message_list):
                     logger.debug(f"BufferService.add_batch: Processing message {j}: type={type(message)}")
                     # Ensure message is a dictionary
                     if isinstance(message, dict):
+                        # Add metadata if not present
                         if 'metadata' not in message:
                             message['metadata'] = {}
                         if self.user_id and 'user_id' not in message['metadata']:
                             message['metadata']['user_id'] = self.user_id
                         if session_id and 'session_id' not in message['metadata']:
                             message['metadata']['session_id'] = session_id
+
+                        # Add required fields for buffer consistency (id, created_at, updated_at)
+                        self._ensure_message_fields(message)
+
                     else:
                         logger.warning(f"BufferService: Skipping non-dict message {j}: {type(message)} - {message}")
 
@@ -268,33 +280,57 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     transfer_triggered = True
                     self.total_transfers += 1
 
-            # CRITICAL: Also store data via MemoryService for persistent storage and contextual chunking
-            logger.info(f"BufferService.add_batch: Storing {len(message_batch_list)} message lists via MemoryService")
-            memory_result = await self.memory_service.add_batch(message_batch_list, session_id=session_id)
+            # BufferService only manages buffer data flow
+            # Data will be persisted when HybridBuffer flushes to storage
+            logger.info(f"BufferService.add_batch: Added {len(message_batch_list)} message lists to Buffer system")
 
-            if memory_result.get("status") == "success":
-                logger.info(f"BufferService.add_batch: MemoryService storage successful")
-                # Extract message IDs from MemoryService response
-                memory_data = memory_result.get("data", {})
-                message_ids = memory_data.get("message_ids", []) if isinstance(memory_data, dict) else []
-            else:
-                logger.error(f"BufferService.add_batch: MemoryService storage failed: {memory_result.get('message')}")
-                message_ids = []
+            # Collect message IDs from the processed messages
+            message_ids = []
+            for message_list in message_batch_list:
+                for message in message_list:
+                    if isinstance(message, dict) and message.get('id'):
+                        message_ids.append(message['id'])
 
             self.total_items_added += total_messages
 
             return self._success_response(
-                {"message_ids": message_ids},  # Return actual message IDs from MemoryService
-                f"Added {len(message_batch_list)} message lists to Buffer and MemoryService",
+                {"message_ids": message_ids},  # Return message IDs from buffer
+                f"Added {len(message_batch_list)} message lists to Buffer system",
                 transfer_triggered=transfer_triggered,
                 total_messages=total_messages,
-                memory_storage_status=memory_result.get("status", "unknown")
+                buffer_status="success"
             )
             
         except Exception as e:
             logger.error(f"BufferService.add_batch: Error adding message batch: {e}")
             return self._error_response(f"Error adding message batch: {str(e)}")
-    
+
+    def _ensure_message_fields(self, message: Dict[str, Any]) -> None:
+        """Ensure message has required fields (id, created_at, updated_at).
+
+        For initial creation, created_at and updated_at use the same timestamp.
+        When storing to SQLite database, updated_at will be refreshed.
+
+        Args:
+            message: Message dictionary to update
+        """
+        import uuid
+        from datetime import datetime
+
+        # Add ID if missing
+        if 'id' not in message or not message['id']:
+            message['id'] = str(uuid.uuid4())
+
+        # Add created_at if missing
+        if 'created_at' not in message or not message['created_at']:
+            now = datetime.now().isoformat()
+            message['created_at'] = now
+
+        # Add updated_at if missing - use same timestamp as created_at for initial creation
+        if 'updated_at' not in message or not message['updated_at']:
+            # For initial creation, use the same timestamp as created_at
+            message['updated_at'] = message['created_at']
+
     async def query(
         self,
         query: str,
@@ -429,22 +465,24 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     order=order
                 )
             else:
-                # Return HybridBuffer + SQLite data (excluding RoundBuffer)
+                # Return HybridBuffer + Database data
+                # With new architecture, HybridBuffer should be mostly empty (auto-flushed)
+                # But we still check both sources for completeness
                 all_messages = []
-                
-                # Get messages from HybridBuffer
+
+                # Get messages from HybridBuffer (should be minimal due to auto-flush)
                 hybrid_messages = await self.hybrid_buffer.get_all_messages_for_read_api(
                     limit=None,  # Get all first, apply limit later
                     sort_by=sort_by,
                     order=order
                 )
-                
-                # Filter by session_id
+
+                # Filter by session_id and add to results
                 for msg in hybrid_messages:
                     if msg.get('metadata', {}).get('session_id') == session_id:
                         all_messages.append(msg)
-                
-                # Get messages from storage via memory service
+
+                # Get messages from database via memory service (primary source)
                 if hasattr(self.memory_service, 'get_messages_by_session'):
                     stored_messages = await self.memory_service.get_messages_by_session(
                         session_id=session_id,
@@ -453,7 +491,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                         order=order
                     )
                     all_messages.extend(stored_messages)
-                
+
                 # Sort combined messages
                 if sort_by == 'timestamp':
                     all_messages.sort(
@@ -465,11 +503,11 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                         key=lambda x: x.get('id', ''),
                         reverse=(order == 'desc')
                     )
-                
+
                 # Apply limit
                 if limit is not None and limit > 0:
                     all_messages = all_messages[:limit]
-                
+
                 return all_messages
                 
         except Exception as e:

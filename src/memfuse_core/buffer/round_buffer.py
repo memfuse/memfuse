@@ -100,50 +100,84 @@ class RoundBuffer:
             # Calculate tokens for new messages
             new_tokens = self.token_counter.count_message_tokens(messages)
             
-            # Check token limit
+            # Check if new message is too large for RoundBuffer
+            if new_tokens > self.max_tokens:
+                logger.info(f"RoundBuffer: Single message too large ({new_tokens} > {self.max_tokens}), transferring directly to HybridBuffer")
+                # Transfer existing data first if any
+                if self.rounds:
+                    logger.info(f"RoundBuffer: Transferring existing {len(self.rounds)} rounds first")
+                    await self._transfer_and_clear("large_message_existing_data")
+
+                # Transfer the large message directly to HybridBuffer
+                logger.info(f"RoundBuffer: Transferring large message directly to HybridBuffer")
+                if self.transfer_handler:
+                    await self.transfer_handler([messages])
+                    self.total_transfers += 1
+
+                return True  # Transfer was triggered
+
+            # Check if adding new messages would exceed token limit
+            transfer_triggered = False
+
             if self.current_tokens + new_tokens > self.max_tokens:
-                logger.info(f"RoundBuffer: Token limit exceeded ({self.current_tokens + new_tokens} > {self.max_tokens})")
+                logger.info(f"RoundBuffer: Token limit would be exceeded ({self.current_tokens + new_tokens} > {self.max_tokens})")
+                logger.info(f"RoundBuffer: Transferring existing {len(self.rounds)} rounds before adding new data")
                 await self._transfer_and_clear("token_limit")
-            
+                transfer_triggered = True
+
             # Check size limit
             elif len(self.rounds) >= self.max_size:
                 logger.info(f"RoundBuffer: Size limit exceeded ({len(self.rounds)} >= {self.max_size})")
+                logger.info(f"RoundBuffer: Transferring existing {len(self.rounds)} rounds before adding new data")
                 await self._transfer_and_clear("size_limit")
-            
-            # Add messages to buffer
+                transfer_triggered = True
+
+            # Add new messages to buffer (now empty if transfer occurred)
             self.rounds.append(messages)
-            self.current_tokens += new_tokens
+            if transfer_triggered:
+                self.current_tokens = new_tokens  # Reset to just the new tokens
+            else:
+                self.current_tokens += new_tokens  # Add to existing tokens
             self.total_rounds_added += 1
-            
-            logger.debug(f"RoundBuffer: Added round with {new_tokens} tokens, total: {self.current_tokens}")
-            return False
+
+            if transfer_triggered:
+                logger.info(f"RoundBuffer: Added new round after transfer with {new_tokens} tokens")
+            else:
+                logger.debug(f"RoundBuffer: Added round with {new_tokens} tokens, total: {self.current_tokens}")
+
+            return transfer_triggered
     
     async def _transfer_and_clear(self, reason: str) -> None:
         """Transfer all data to HybridBuffer and clear the buffer.
-        
+
         Args:
             reason: Reason for the transfer (for logging)
         """
+        logger.info(f"RoundBuffer: _transfer_and_clear called with reason '{reason}', rounds count: {len(self.rounds)}")
+
         if not self.rounds:
-            logger.debug(f"RoundBuffer: No data to transfer (reason: {reason})")
+            logger.info(f"RoundBuffer: No data to transfer (reason: {reason})")
             return
-        
+
+        logger.info(f"RoundBuffer: Transfer handler exists: {self.transfer_handler is not None}")
+
         if self.transfer_handler:
             try:
                 logger.info(f"RoundBuffer: Transferring {len(self.rounds)} rounds to HybridBuffer (reason: {reason})")
                 await self.transfer_handler(self.rounds.copy())
                 self.total_transfers += 1
+                logger.info(f"RoundBuffer: Transfer completed successfully")
             except Exception as e:
                 logger.error(f"RoundBuffer: Transfer failed: {e}")
                 # Don't clear on transfer failure to avoid data loss
                 return
         else:
             logger.warning("RoundBuffer: No transfer handler set, data will be lost")
-        
+
         # Clear buffer
         self.rounds.clear()
         self.current_tokens = 0
-        logger.debug("RoundBuffer: Buffer cleared after transfer")
+        logger.info("RoundBuffer: Buffer cleared after transfer")
     
     def _extract_session_id(self, messages: MessageList) -> Optional[str]:
         """Extract session_id from messages metadata.
