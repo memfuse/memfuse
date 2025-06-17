@@ -235,7 +235,7 @@ flowchart TD
 graph TB
     subgraph "HybridBuffer Chunking Flow"
         A[RoundBuffer Transfer] --> B[Immediate Chunking]
-        B --> C[ChunkStrategy.create_chunks()]
+        B --> C["ChunkStrategy.create_chunks()"]
         C --> D[Embedding Generation]
         D --> E[VectorCache]
 
