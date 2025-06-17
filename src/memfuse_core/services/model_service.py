@@ -167,12 +167,24 @@ class ModelService(BaseService, ModelProviderInterface):
     async def _preload_rerank_model(self, cfg: DictConfig) -> None:
         """Pre-load the rerank model based on configuration.
 
+        Only preloads the rerank model when rerank functionality is enabled.
+        When use_rerank is false, the model is not preloaded to save resources.
+
         Args:
             cfg: Configuration from Hydra
         """
         try:
-            # Check if rerank model preloading is enabled
-            preload_rerank = True  # Default to True
+            # Check if rerank functionality is enabled
+            use_rerank = False  # Default to False
+            if hasattr(cfg, 'retrieval') and hasattr(cfg.retrieval, 'use_rerank'):
+                use_rerank = cfg.retrieval.use_rerank
+
+            if not use_rerank:
+                logger.info("Rerank functionality is disabled, skipping rerank model preloading")
+                return
+
+            # Check if rerank model preloading is explicitly disabled
+            preload_rerank = True  # Default to True when rerank is enabled
             if hasattr(cfg, 'retrieval') and hasattr(cfg.retrieval, 'preload_model'):
                 preload_rerank = cfg.retrieval.preload_model
 

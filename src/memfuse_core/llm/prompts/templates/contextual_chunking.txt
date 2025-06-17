@@ -1,0 +1,11 @@
+<conversation_context>
+$past_messages
+$current_messages
+</conversation_context>
+
+Here is the message chunk we want to situate within the conversation flow
+<message_chunk>
+$chunk_content
+</message_chunk>
+
+Please give a short succinct context to situate this message chunk within the overall conversation for the purposes of improving search retrieval of the chunk. Consider the conversation flow, topics being discussed, and how this chunk relates to previous messages. Answer only with the succinct context and nothing else.

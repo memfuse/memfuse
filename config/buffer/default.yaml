@@ -1,17 +1,48 @@
 # @package buffer
-# Buffer system configuration aligned with actual implementation
+# Buffer configuration for MemFuse
 
-# Write buffer configuration
-write:
-  max_size: 5
-  batch_threshold: 5
+# Buffer system enabled
+enabled: true
 
-# Speculative buffer configuration
-speculative:
-  max_size: 10
-  context_window: 3
+# RoundBuffer configuration - Token-based FIFO buffer
+round_buffer:
+  max_tokens: 800               # Token limit before transfer to HybridBuffer
+  max_size: 5                   # Maximum number of rounds before forced transfer
+  token_model: "gpt-4o-mini"  # Model for token counting
 
-# Query buffer configuration
+# HybridBuffer configuration - Dual-format buffer with FIFO
+hybrid_buffer:
+  max_size: 5                   # Maximum number of items in buffer (FIFO)
+  chunk_strategy: "contextual"  # Chunking strategy: "message" or "contextual"
+  embedding_model: "all-MiniLM-L6-v2"  # Embedding model for vector generation
+
+# Token counter configuration
+token_counter:
+  model: "gpt-4o-mini"       # Default model for token counting
+  fallback_multiplier: 1.3     # Multiplier for word-based fallback
+
+# Query configuration
 query:
-  max_size: 15
-  cache_size: 100
+  default_sort_by: "score"     # Default sort field: "score" or "timestamp"
+  default_order: "desc"        # Default sort order: "asc" or "desc"
+  max_size: 15                 # Maximum results per query
+  cache_size: 100              # Query cache size
+
+# Performance settings
+performance:
+  batch_write_threshold: 5     # Threshold for batch writes
+  flush_interval: 60           # Auto-flush interval in seconds (reduced from 300 to 60)
+  enable_async_processing: true # Enable async chunk processing
+  enable_auto_flush: true      # Enable automatic flushing
+
+  # FlushManager settings
+  max_flush_workers: 3         # Maximum number of concurrent flush workers
+  max_flush_queue_size: 100    # Maximum size of the flush queue
+  flush_timeout: 30.0          # Default timeout for flush operations (seconds)
+  flush_strategy: "hybrid"     # Flush strategy: "size_based", "time_based", "hybrid"
+
+# Monitoring and logging
+monitoring:
+  enable_stats: true           # Enable statistics collection
+  log_level: "INFO"           # Log level for buffer operations
+  performance_tracking: true  # Track performance metrics

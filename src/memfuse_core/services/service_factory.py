@@ -214,8 +214,8 @@ class ServiceFactory:
     ) -> Optional[Any]:
         """Get a user-level BufferService instance.
 
-        OPTIMIZED REFACTOR: Returns a user-level optimized buffer service that provides
-        minimal overhead (<5%) while maintaining full MemoryInterface compatibility.
+        BUFFER: Returns BufferService with RoundBuffer, HybridBuffer, and QueryBuffer
+        for improved performance and functionality.
 
         Args:
             user: User name (default: "user_default")
@@ -228,7 +228,7 @@ class ServiceFactory:
         from ..utils.config import config_manager
         from omegaconf import OmegaConf
 
-        # Check if we already have an BufferService instance for this user
+        # Check if we already have a BufferService instance for this user
         if user in cls._buffer_service_instances:
             logger.info(f"✅ Using existing user-level BufferService for user {user}")
             return cls._buffer_service_instances[user]
@@ -239,7 +239,32 @@ class ServiceFactory:
         # Get configuration
         config_dict = config_manager.get_config()
         cfg = OmegaConf.create(config_dict)
+
+        # Check if Buffer is enabled
         buffer_config = cfg.get("buffer", {})
+        if not buffer_config.get("enabled", True):
+            logger.warning("Buffer is disabled, falling back to legacy BufferService")
+            memory_service = cls.get_memory_service_for_user(user)
+            if memory_service is None:
+                logger.error(f"Cannot create BufferService for user {user}: MemoryService not available")
+                return None
+
+            # Ensure MemoryService is properly initialized
+            try:
+                if memory_service.multi_path_retrieval is None:
+                    await memory_service.initialize()
+                    logger.debug(f"MemoryService initialized for BufferService user {user}")
+            except Exception as e:
+                logger.error(f"Failed to initialize MemoryService for BufferService user {user}: {e}")
+                return None
+
+            buffer_service = BufferService(
+                memory_service=memory_service,
+                user=user,
+                config=buffer_config,
+            )
+            cls._buffer_service_instances[user] = buffer_service
+            return buffer_service
 
         # Get the user-specific MemoryService instance
         memory_service = cls.get_memory_service_for_user(user)
@@ -263,7 +288,7 @@ class ServiceFactory:
         buffer_service = BufferService(
             memory_service=memory_service,
             user=user,
-            config=buffer_config,
+            config=cfg,  # Pass full config including buffer
         )
 
         # Store the instance for future use
@@ -280,11 +305,10 @@ class ServiceFactory:
         session: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> Optional[Any]:
-        """Get an BufferService instance for the specified user, agent, and session.
+        """Get a BufferService instance for the specified user, agent, and session.
 
-        OPTIMIZED REFACTOR: This method now returns a user-level optimized buffer service
-        with minimal overhead (<5%) and session context should be passed to individual
-        method calls rather than stored in the service.
+        BUFFER: This method now returns BufferService with RoundBuffer, HybridBuffer,
+        and QueryBuffer for improved performance and functionality.
 
         Args:
             user: User name (default: "user_default")
@@ -295,7 +319,7 @@ class ServiceFactory:
         Returns:
             BufferService instance or None if memory service is not available
         """
-        # OPTIMIZED REFACTOR: Return user-level optimized buffer service instead of session-specific
+        # BUFFER: Return user-level BufferService instead of session-specific
         return await cls.get_buffer_service_for_user(user)
 
     @classmethod

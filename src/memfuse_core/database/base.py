@@ -709,7 +709,8 @@ class Database:
 
     # Message methods
 
-    def add_message(self, round_id: str, role: str, content: str, message_id: Optional[str] = None) -> str:
+    def add_message(self, round_id: str, role: str, content: str, message_id: Optional[str] = None,
+                   created_at: Optional[str] = None, updated_at: Optional[str] = None) -> str:
         """Add a message to a round.
 
         Args:
@@ -717,6 +718,8 @@ class Database:
             role: Message role (user, assistant, system, memfuse)
             content: Message content
             message_id: Message ID (optional, will be auto-generated if not provided)
+            created_at: Creation timestamp (optional, will be auto-generated if not provided)
+            updated_at: Update timestamp (optional, will be auto-generated if not provided)
 
         Returns:
             Message ID
@@ -724,18 +727,28 @@ class Database:
         import uuid
         from datetime import datetime
 
+        # Generate defaults only if needed
         if message_id is None:
             message_id = str(uuid.uuid4())
 
-        now = datetime.now().isoformat()
+        # Use single timestamp for both if both are None (new message)
+        if created_at is None and updated_at is None:
+            now = datetime.now().isoformat()
+            created_at = updated_at = now
+        else:
+            # Generate individual timestamps if only one is missing
+            if created_at is None:
+                created_at = datetime.now().isoformat()
+            if updated_at is None:
+                updated_at = datetime.now().isoformat()
 
         data = {
             'id': message_id,
             'round_id': round_id,
             'role': role,
             'content': content,
-            'created_at': now,
-            'updated_at': now
+            'created_at': created_at,
+            'updated_at': updated_at
         }
 
         return self.backend.insert('messages', data)

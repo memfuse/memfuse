@@ -9,9 +9,12 @@ from ..store.factory import StoreFactory
 from ..utils.config import config_manager
 from ..utils.path_manager import PathManager
 from ..rag.rerank import MiniLMReranker
+from ..interfaces import MessageInterface, MessageList, MessageBatchList
+from ..rag.chunk import ChunkStrategy, MessageChunkStrategy
+from ..rag.chunk.base import ChunkData
 
 
-class MemoryService:
+class MemoryService(MessageInterface):
     """Memory service for managing user-agent interactions."""
 
     def __init__(
@@ -106,6 +109,9 @@ class MemoryService:
         self.multi_path_retrieval = None
         self.reranker = None
 
+        # Initialize chunk strategy (will be configured in initialize method)
+        self.chunk_strategy = MessageChunkStrategy()
+
         # Log initialization
         logger.info(f"MemoryService: Initialized for user: {user}")
 
@@ -137,13 +143,19 @@ class MemoryService:
             logger.error(f"Failed to create vector store: {e}")
             self.vector_store = None
 
-        try:
-            self.graph_store = await StoreFactory.create_graph_store(
-                data_dir=self.user_dir,
-                existing_model=existing_model
-            )
-        except Exception as e:
-            logger.error(f"Failed to create graph store: {e}")
+        # Only create graph store if enabled in configuration
+        if self.config.get("store", {}).get("multi_path", {}).get("use_graph", False):
+            try:
+                self.graph_store = await StoreFactory.create_graph_store(
+                    data_dir=self.user_dir,
+                    existing_model=existing_model
+                )
+                logger.info("Graph store created successfully")
+            except Exception as e:
+                logger.error(f"Failed to create graph store: {e}")
+                self.graph_store = None
+        else:
+            logger.info("Graph store disabled in configuration")
             self.graph_store = None
 
         try:
@@ -246,7 +258,51 @@ class MemoryService:
             # Store the newly created reranker as global instance for future use
             ServiceFactory.set_global_models(reranker_instance=self.reranker)
 
+        # Configure chunk strategy based on configuration
+        await self._configure_chunk_strategy()
+
         return self
+
+    async def _configure_chunk_strategy(self):
+        """Configure chunk strategy based on configuration and inject dependencies."""
+        try:
+            # Get buffer configuration to determine chunk strategy
+            buffer_config = self.config.get("buffer", {})
+            hybrid_config = buffer_config.get("hybrid_buffer", {})
+            chunk_strategy_name = hybrid_config.get("chunk_strategy", "message")
+
+            logger.info(f"Configuring chunk strategy: {chunk_strategy_name}")
+
+            if chunk_strategy_name == "contextual":
+                # Use advanced ContextualChunkStrategy
+                from ..rag.chunk.contextual import ContextualChunkStrategy
+
+                # Get chunking configuration
+                chunking_config = buffer_config.get("chunking", {})
+                strategy_config = chunking_config.get(chunk_strategy_name, {})
+
+                # Create strategy with configuration and inject dependencies
+                self.chunk_strategy = ContextualChunkStrategy(
+                    max_words_per_group=strategy_config.get("max_words_per_group", 800),
+                    max_words_per_chunk=strategy_config.get("max_words_per_chunk", 800),
+                    role_format=strategy_config.get("role_format", "[{role}]"),
+                    chunk_separator=strategy_config.get("chunk_separator", "\n\n"),
+                    enable_contextual=strategy_config.get("enable_contextual", True),
+                    context_window_size=strategy_config.get("context_window_size", 2),
+                    gpt_model=strategy_config.get("gpt_model", "gpt-4o-mini"),
+                    vector_store=self.vector_store,  # Inject vector store for context retrieval
+                    llm_provider=None  # TODO: Inject LLM provider when available
+                )
+
+                logger.info(f"Configured {chunk_strategy_name} strategy with contextual enhancement: "
+                           f"enable_contextual={strategy_config.get('enable_contextual', True)}")
+            else:
+                # Keep existing MessageChunkStrategy for "message" strategy
+                logger.info("Using basic MessageChunkStrategy")
+
+        except Exception as e:
+            logger.error(f"Failed to configure chunk strategy: {e}")
+            # Keep the default strategy on error
 
     def _get_retrieval_method(
         self,
@@ -304,256 +360,499 @@ class MemoryService:
 
         return retrieval_info
 
-    async def add_batch(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Add a batch of messages to memory in a single operation.
+    async def add_batch(self, message_batch_list: MessageBatchList, **kwargs) -> Dict[str, Any]:
+        """Add a batch of message lists.
 
-        This method implements true batch processing, writing all messages in a single
-        database transaction where possible, significantly improving performance.
+        This is the core processing method that handles MessageBatchList.
+        Applies chunking strategy and stores chunks to various stores.
+        Uses async parallel processing to reduce latency.
 
         Args:
-            messages: List of message dictionaries with role and content
+            message_batch_list: List of lists of messages (MessageBatchList)
+            **kwargs: Additional keyword arguments
 
         Returns:
-            Dictionary with status, code, and message IDs
+            Dictionary with status, data, and message information
         """
-        # P1 OPTIMIZATION: Get session_id from message metadata (not from self._session_id)
+        try:
+            if not message_batch_list:
+                return self._success_response([], "No message lists to process")
+
+            logger.info(f"MemoryService.add_batch: Processing {len(message_batch_list)} message lists")
+
+            # Fast preparation: get session_id and create round_id (no DB writes yet)
+            session_id, round_id = await self._prepare_session_and_round(message_batch_list)
+            logger.info(f"MemoryService.add_batch: Prepared session_id={session_id}, round_id={round_id}")
+
+            # Parallel processing to reduce latency
+            async def store_messages_task():
+                """Store original messages to database."""
+                return await self._store_original_messages_with_round(message_batch_list, session_id, round_id)
+
+            async def process_chunks_task():
+                """Create and store chunks."""
+                chunks = await self.chunk_strategy.create_chunks(message_batch_list)
+                logger.info(f"MemoryService.add_batch: Created {len(chunks)} chunks")
+                await self._store_chunks_enhanced(chunks, session_id, round_id)
+                return chunks
+
+            # Execute both tasks in parallel
+            message_ids_task = asyncio.create_task(store_messages_task())
+            chunks_task = asyncio.create_task(process_chunks_task())
+
+            # Wait for both to complete
+            message_ids, chunks = await asyncio.gather(message_ids_task, chunks_task)
+
+            logger.info(f"MemoryService.add_batch: Successfully processed {len(chunks)} chunks and {len(message_ids)} messages")
+            return self._success_response(
+                message_ids,
+                f"Processed {len(message_batch_list)} message lists into {len(chunks)} chunks",
+                chunk_count=len(chunks)
+            )
+
+        except Exception as e:
+            logger.error(f"MemoryService.add_batch: Error processing message batch: {e}")
+            return self._error_response(f"Error processing message batch: {str(e)}")
+
+    # Chunks Query Methods
+    async def get_chunks_by_session(self, session_id: str, store_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all chunks for a specific session from all or specific stores.
+
+        Args:
+            session_id: Session ID to filter chunks
+            store_type: Optional store type filter ('vector', 'keyword', 'graph', 'hybrid')
+
+        Returns:
+            List of chunk dictionaries with store_type metadata
+        """
+        all_chunks = []
+
+        try:
+            # Determine which stores to query based on store_type
+            if store_type == "hybrid":
+                # Hybrid: prioritize vector > keyword > graph
+                stores_to_query = [
+                    ("vector", self.vector_store),
+                    ("keyword", self.keyword_store),
+                    ("graph", self.graph_store)
+                ]
+            elif store_type is None:
+                # All stores
+                stores_to_query = [
+                    ("vector", self.vector_store),
+                    ("keyword", self.keyword_store),
+                    ("graph", self.graph_store)
+                ]
+            else:
+                # Specific store
+                store_map = {
+                    "vector": self.vector_store,
+                    "keyword": self.keyword_store,
+                    "graph": self.graph_store
+                }
+                stores_to_query = [(store_type, store_map.get(store_type))]
+
+            # Query stores in order (important for hybrid)
+            for store_name, store in stores_to_query:
+                if store and hasattr(store, 'get_chunks_by_session'):
+                    store_chunks = await store.get_chunks_by_session(session_id)
+                    for chunk in store_chunks:
+                        chunk.metadata["store_type"] = store_name
+                        all_chunks.append({
+                            "chunk_id": chunk.chunk_id,
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        })
+
+            logger.info(f"Retrieved {len(all_chunks)} chunks for session {session_id} (store_type: {store_type or 'all'})")
+            return all_chunks
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by session {session_id}: {e}")
+            return []
+
+    async def get_chunks_by_round(self, round_id: str, store_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all chunks for a specific round from all or specific stores.
+
+        Args:
+            round_id: Round ID to filter chunks
+            store_type: Optional store type filter ('vector', 'keyword', 'graph')
+
+        Returns:
+            List of chunk dictionaries with store_type metadata
+        """
+        all_chunks = []
+
+        try:
+            if store_type is None or store_type == "vector":
+                if self.vector_store and hasattr(self.vector_store, 'get_chunks_by_round'):
+                    vector_chunks = await self.vector_store.get_chunks_by_round(round_id)
+                    for chunk in vector_chunks:
+                        chunk.metadata["store_type"] = "vector"
+                        all_chunks.append({
+                            "chunk_id": chunk.chunk_id,
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        })
+
+            if store_type is None or store_type == "keyword":
+                if self.keyword_store and hasattr(self.keyword_store, 'get_chunks_by_round'):
+                    keyword_chunks = await self.keyword_store.get_chunks_by_round(round_id)
+                    for chunk in keyword_chunks:
+                        chunk.metadata["store_type"] = "keyword"
+                        all_chunks.append({
+                            "chunk_id": chunk.chunk_id,
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        })
+
+            if store_type is None or store_type == "graph":
+                if self.graph_store and hasattr(self.graph_store, 'get_chunks_by_round'):
+                    graph_chunks = await self.graph_store.get_chunks_by_round(round_id)
+                    for chunk in graph_chunks:
+                        chunk.metadata["store_type"] = "graph"
+                        all_chunks.append({
+                            "chunk_id": chunk.chunk_id,
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        })
+
+            logger.info(f"Retrieved {len(all_chunks)} chunks for round {round_id}")
+            return all_chunks
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by round {round_id}: {e}")
+            return []
+
+    async def get_chunks_stats(self, store_type: Optional[str] = None) -> Dict[str, Any]:
+        """Get statistics about chunks from all or specific stores.
+
+        Args:
+            store_type: Optional store type filter ('vector', 'keyword', 'graph')
+
+        Returns:
+            Dictionary containing aggregated statistics
+        """
+        all_stats = {}
+
+        try:
+            if store_type is None or store_type == "vector":
+                if self.vector_store and hasattr(self.vector_store, 'get_chunks_stats'):
+                    vector_stats = await self.vector_store.get_chunks_stats()
+                    all_stats["vector"] = vector_stats
+
+            if store_type is None or store_type == "keyword":
+                if self.keyword_store and hasattr(self.keyword_store, 'get_chunks_stats'):
+                    keyword_stats = await self.keyword_store.get_chunks_stats()
+                    all_stats["keyword"] = keyword_stats
+
+            if store_type is None or store_type == "graph":
+                if self.graph_store and hasattr(self.graph_store, 'get_chunks_stats'):
+                    graph_stats = await self.graph_store.get_chunks_stats()
+                    all_stats["graph"] = graph_stats
+
+            # Aggregate total chunks
+            total_chunks = sum(stats.get("total_chunks", 0) for stats in all_stats.values())
+
+            return {
+                "total_chunks": total_chunks,
+                "by_store": all_stats,
+                "store_type_filter": store_type or "all"
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting chunks stats: {e}")
+            return {
+                "total_chunks": 0,
+                "by_store": {},
+                "store_type_filter": store_type or "all",
+                "error": str(e)
+            }
+
+    async def _prepare_session_and_round(self, message_batch_list: MessageBatchList) -> tuple[str, str]:
+        """Fast preparation: extract session_id and create round_id without DB writes.
+
+        Args:
+            message_batch_list: List of lists of messages
+
+        Returns:
+            Tuple of (session_id, round_id)
+
+        Raises:
+            ValueError: If no session_id found in messages
+        """
+        # Flatten message_batch_list to get all messages
+        all_messages = []
+        for message_list in message_batch_list:
+            all_messages.extend(message_list)
+
+        if not all_messages:
+            raise ValueError("No messages found in message_batch_list")
+
+        # Get session_id from first message metadata
         session_id = None
+        first_message = all_messages[0]
+        if isinstance(first_message, dict) and 'metadata' in first_message:
+            metadata = first_message['metadata']
+            if isinstance(metadata, dict) and 'session_id' in metadata:
+                session_id = metadata['session_id']
 
-        # Try to get session_id from message metadata
-        if messages and len(messages) > 0:
-            # Check first message metadata for session_id
-            first_message = messages[0]
-            logger.debug(f"MemoryService.add_batch: First message: {first_message}")
-            if isinstance(first_message, dict) and 'metadata' in first_message:
-                metadata = first_message['metadata']
-                if isinstance(metadata, dict) and 'session_id' in metadata:
-                    session_id = metadata['session_id']
-                    logger.debug(f"MemoryService.add_batch: Found session_id in metadata: {session_id}")
+        # Also check the message itself for session_id (for backward compatibility)
+        if session_id is None and isinstance(first_message, dict) and 'session_id' in first_message:
+            session_id = first_message['session_id']
 
-            # Also check the message itself for session_id (for backward compatibility)
-            if session_id is None and isinstance(first_message, dict) and 'session_id' in first_message:
-                session_id = first_message['session_id']
-                logger.debug(f"MemoryService.add_batch: Found session_id in message: {session_id}")
-
-        # Still no session_id, return error
         if session_id is None:
-            logger.error("MemoryService.add_batch: No session_id found, returning error")
-            return {
-                "status": "error",
-                "code": 400,
-                "data": None,
-                "message": "Cannot add messages without a session",
-                "errors": [{"field": "general", "message": "Cannot add messages without a session"}],
-            }
+            raise ValueError("No session_id found in messages")
 
-        # Return early if no messages
-        if not messages:
-            return {
-                "status": "success",
-                "code": 200,
-                "data": {"message_ids": []},
-                "message": "No messages to add",
-                "errors": None,
-            }
+        # Create round_id immediately (just a UUID, no DB operation)
+        import uuid
+        round_id = str(uuid.uuid4())
 
-        # Add session_id to message metadata if not already present
-        for message in messages:
+        return session_id, round_id
+
+    async def _store_original_messages_with_round(self, message_batch_list: MessageBatchList,
+                                                 session_id: str, round_id: str) -> List[str]:
+        """Store original messages to database with pre-created round_id.
+
+        Args:
+            message_batch_list: List of lists of messages
+            session_id: Pre-extracted session ID
+            round_id: Pre-created round ID
+
+        Returns:
+            List of message IDs
+        """
+        message_ids = []
+
+        # Flatten message_batch_list to get all messages
+        all_messages = []
+        for message_list in message_batch_list:
+            all_messages.extend(message_list)
+
+        if not all_messages:
+            return message_ids
+
+        # Add metadata to all messages
+        for message in all_messages:
             if 'metadata' not in message:
                 message['metadata'] = {}
-
-            # Add session_id to metadata (use resolved session_id, not self._session_id)
             if 'session_id' not in message['metadata']:
                 message['metadata']['session_id'] = session_id
-
-            # Add user_id and agent_id to metadata
             if 'user_id' not in message['metadata']:
                 message['metadata']['user_id'] = self._user_id
-
             if 'agent_id' not in message['metadata']:
                 message['metadata']['agent_id'] = self._agent_id
 
-        # Create a new round for these messages
-        logger.debug(f"MemoryService.add_batch: Session ID: {session_id}")
-        if not session_id:
-            logger.error("MemoryService.add_batch: Session ID is None or empty")
-            return {
-                "status": "error",
-                "code": 400,
-                "data": None,
-                "message": "Cannot add messages without a session",
-                "errors": [{"field": "general", "message": "Cannot add messages without a session"}],
-            }
+        # Create the round in database with pre-created round_id
+        self.db.create_round(session_id, round_id)
 
-        round_id = self.db.create_round(session_id)
+        # Store messages to database using helper method
+        message_ids.extend(self._store_messages_to_db(all_messages, round_id))
 
-        # Prepare data for batch operations
+        return message_ids
+
+    def _store_messages_to_db(self, messages: List[Dict], round_id: str) -> List[str]:
+        """Helper method to store messages to database with proper timestamp handling.
+
+        Args:
+            messages: List of message dictionaries
+            round_id: Round ID for the messages
+
+        Returns:
+            List of message IDs
+        """
         message_ids = []
-        vector_items = []
-        graph_nodes = []
-        keyword_items = []
 
-        # Process all messages and prepare data structures for batch operations
         for message in messages:
             role = message.get("role", "user")
             content = message.get("content", "")
 
-            # Add message to database (this is still individual since SQLite doesn't have true batch insert)
-            message_id = self.db.add_message(round_id, role, content)
+            # Extract existing id and created_at from message if available
+            existing_id = message.get("id")
+            existing_created_at = message.get("created_at")
+
+            # Always update the updated_at timestamp when storing to database
+            from datetime import datetime
+            updated_at = datetime.now().isoformat()
+
+            message_id = self.db.add_message(
+                round_id=round_id,
+                role=role,
+                content=content,
+                message_id=existing_id,
+                created_at=existing_created_at,
+                updated_at=updated_at
+            )
             message_ids.append(message_id)
 
-            # Get user_id and agent_id from message metadata if available
-            user_id = message.get('metadata', {}).get('user_id', self._user_id)
-            agent_id = message.get('metadata', {}).get(
-                'agent_id', self._agent_id)
+        return message_ids
 
-            # Prepare item for vector store
-            vector_items.append(Item(
-                id=message_id,
-                content=content,
-                metadata={
-                    "type": "message",
-                    "role": role,
-                    "user_id": user_id,
-                    "agent_id": agent_id,
-                    "session_id": session_id,
-                    "round_id": round_id,
-                }
-            ))
-
-            # Prepare node for graph store
-            graph_nodes.append(Node(
-                id=message_id,
-                content=content,
-                metadata={
-                    "type": "message",
-                    "role": role,
-                    "user_id": user_id,
-                    "agent_id": agent_id,
-                    "session_id": session_id,
-                    "round_id": round_id,
-                }
-            ))
-
-            # Prepare item for keyword store
-            keyword_items.append(Item(
-                id=message_id,
-                content=content,
-                metadata={
-                    "type": "message",
-                    "role": role,
-                    "user_id": user_id,
-                    "agent_id": agent_id,
-                    "session_id": session_id,
-                    "round_id": round_id,
-                }
-            ))
-
-        # Perform batch operations on each store
-        try:
-            # Batch add to vector store with timeout
-            if self.vector_store and hasattr(self.vector_store, 'add_batch'):
-                logger.info(
-                    f"MemoryService.add_batch: Adding {len(vector_items)} items to vector store in batch")
-                try:
-                    await asyncio.wait_for(self.vector_store.add_batch(vector_items), timeout=30.0)
-                except asyncio.TimeoutError:
-                    logger.error(
-                        "MemoryService.add_batch: Vector store batch operation timed out after 30.0 seconds")
-                except Exception as e:
-                    logger.error(
-                        f"MemoryService.add_batch: Error adding items to vector store: {e}")
-            elif self.vector_store:
-
-                for item in vector_items:
-                    try:
-                        await asyncio.wait_for(self.vector_store.add(item), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        logger.error(
-                            f"MemoryService.add_batch: Vector store add operation timed out after 5.0 seconds for item {item.id}")
-                    except Exception as e:
-                        logger.error(
-                            f"MemoryService.add_batch: Error adding item to vector store: {e}")
-
-            # Batch add to graph store with timeout
-            if self.graph_store and hasattr(self.graph_store, 'add_nodes'):
-                logger.info(
-                    f"MemoryService.add_batch: Adding {len(graph_nodes)} nodes to graph store in batch")
-                try:
-                    await asyncio.wait_for(self.graph_store.add_nodes(graph_nodes), timeout=30.0)
-                except asyncio.TimeoutError:
-                    logger.error(
-                        "MemoryService.add_batch: Graph store batch operation timed out after 30.0 seconds")
-                except Exception as e:
-                    logger.error(
-                        f"MemoryService.add_batch: Error adding nodes to graph store: {e}")
-            elif self.graph_store:
-
-                for node in graph_nodes:
-                    try:
-                        await asyncio.wait_for(self.graph_store.add_node(node), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        logger.error(
-                            f"MemoryService.add_batch: Graph store add operation timed out after 5.0 seconds for node {node.id}")
-                    except Exception as e:
-                        logger.error(
-                            f"MemoryService.add_batch: Error adding node to graph store: {e}")
-
-            # Batch add to keyword store with timeout
-            if self.keyword_store and hasattr(self.keyword_store, 'add_batch'):
-                logger.info(
-                    f"MemoryService.add_batch: Adding {len(keyword_items)} items to keyword store in batch")
-                try:
-                    await asyncio.wait_for(self.keyword_store.add_batch(keyword_items), timeout=30.0)
-                except asyncio.TimeoutError:
-                    logger.error(
-                        "MemoryService.add_batch: Keyword store batch operation timed out after 30.0 seconds")
-                except Exception as e:
-                    logger.error(
-                        f"MemoryService.add_batch: Error adding items to keyword store: {e}")
-            elif self.keyword_store:
-
-                for item in keyword_items:
-                    try:
-                        await asyncio.wait_for(self.keyword_store.add(item), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        logger.error(
-                            f"MemoryService.add_batch: Keyword store add operation timed out after 5.0 seconds for item {item.id}")
-                    except Exception as e:
-                        logger.error(
-                            f"MemoryService.add_batch: Error adding item to keyword store: {e}")
-
-            logger.info(
-                f"MemoryService.add_batch: Successfully added {len(messages)} messages in batch")
-            return {
-                "status": "success",
-                "code": 200,
-                "data": {"message_ids": message_ids},
-                "message": f"Added {len(messages)} messages in batch",
-                "errors": None,
-            }
-        except Exception as e:
-            logger.error(
-                f"MemoryService.add_batch: Error adding messages in batch: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return {
-                "status": "error",
-                "code": 500,
-                "data": None,
-                "message": f"Error adding messages in batch: {str(e)}",
-                "errors": [{"field": "general", "message": f"Error adding messages in batch: {str(e)}"}],
-            }
-
-    async def add(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Add messages to memory.
-
-        This method delegates to add_batch for better performance.
+    async def _store_original_messages(self, message_batch_list: MessageBatchList) -> List[str]:
+        """Store original messages to database and return message IDs.
 
         Args:
-            messages: List of message dictionaries with role and content
+            message_batch_list: List of lists of messages
 
         Returns:
-            Dictionary with status, code, and message IDs
+            List of message IDs
+        """
+        message_ids = []
+
+        # Flatten message_batch_list to get all messages
+        all_messages = []
+        for message_list in message_batch_list:
+            all_messages.extend(message_list)
+
+        if not all_messages:
+            return message_ids
+
+        # Get session_id from first message metadata
+        session_id = None
+        first_message = all_messages[0]
+        if isinstance(first_message, dict) and 'metadata' in first_message:
+            metadata = first_message['metadata']
+            if isinstance(metadata, dict) and 'session_id' in metadata:
+                session_id = metadata['session_id']
+
+        # Also check the message itself for session_id (for backward compatibility)
+        if session_id is None and isinstance(first_message, dict) and 'session_id' in first_message:
+            session_id = first_message['session_id']
+
+        if session_id is None:
+            logger.error("MemoryService._store_original_messages: No session_id found")
+            return message_ids
+
+        # Add metadata to all messages
+        for message in all_messages:
+            if 'metadata' not in message:
+                message['metadata'] = {}
+            if 'session_id' not in message['metadata']:
+                message['metadata']['session_id'] = session_id
+            if 'user_id' not in message['metadata']:
+                message['metadata']['user_id'] = self._user_id
+            if 'agent_id' not in message['metadata']:
+                message['metadata']['agent_id'] = self._agent_id
+
+        # Create a new round for these messages
+        round_id = self.db.create_round(session_id)
+
+        # Store messages to database using helper method
+        message_ids.extend(self._store_messages_to_db(all_messages, round_id))
+
+        return message_ids
+
+    async def _store_chunks_enhanced(self, chunks, session_id: str, round_id: str) -> None:
+        """Store chunks to various stores with enhanced metadata including session_id and round_id.
+
+        Args:
+            chunks: List of ChunkData objects
+            session_id: Session ID for the chunks
+            round_id: Round ID for the chunks
+        """
+        if not chunks:
+            return
+
+        # Add comprehensive metadata to chunk metadata for all stores
+        from datetime import datetime
+        user_chunks = []
+        for chunk in chunks:
+            user_chunk = ChunkData(
+                content=chunk.content,
+                chunk_id=chunk.chunk_id,
+                metadata={
+                    **chunk.metadata,  # Preserve original strategy-specific metadata
+                    "type": "chunk",
+                    "user_id": self._user_id,
+                    "session_id": session_id,      # New: session association
+                    "round_id": round_id,          # New: round association
+                    "agent_id": self._agent_id,    # New: agent association
+                    "created_at": datetime.now().isoformat(),  # New: timestamp
+                }
+            )
+            user_chunks.append(user_chunk)
+
+        # Store chunks to vector store
+        if self.vector_store:
+            try:
+                await asyncio.wait_for(self.vector_store.add(user_chunks), timeout=30.0)
+                logger.debug(f"Successfully stored {len(user_chunks)} chunks to vector store")
+            except Exception as e:
+                logger.error(f"Error adding chunks to vector store: {e}")
+
+        # Store chunks to keyword store
+        if self.keyword_store:
+            try:
+                await asyncio.wait_for(self.keyword_store.add(user_chunks), timeout=30.0)
+                logger.debug(f"Successfully stored {len(user_chunks)} chunks to keyword store")
+            except Exception as e:
+                logger.error(f"Error adding chunks to keyword store: {e}")
+
+        # Store chunks to graph store
+        if self.graph_store:
+            try:
+                await asyncio.wait_for(self.graph_store.add(user_chunks), timeout=30.0)
+                logger.debug(f"Successfully stored {len(user_chunks)} chunks to graph store")
+            except Exception as e:
+                logger.error(f"Error adding chunks to graph store: {e}")
+
+    async def _store_chunks(self, chunks) -> None:
+        """Store chunks to various stores using unified chunk interface.
+
+        Legacy method - kept for backward compatibility.
+
+        Args:
+            chunks: List of ChunkData objects
+        """
+        if not chunks:
+            return
+
+        # Add user_id to chunk metadata for all stores
+        user_chunks = []
+        for chunk in chunks:
+            user_chunk = ChunkData(
+                content=chunk.content,
+                chunk_id=chunk.chunk_id,
+                metadata={
+                    **chunk.metadata,
+                    "type": "chunk",
+                    "user_id": self._user_id,
+                }
+            )
+            user_chunks.append(user_chunk)
+
+        # Store chunks to vector store
+        if self.vector_store:
+            try:
+                await asyncio.wait_for(self.vector_store.add(user_chunks), timeout=30.0)
+            except Exception as e:
+                logger.error(f"Error adding chunks to vector store: {e}")
+
+        # Store chunks to keyword store
+        if self.keyword_store:
+            try:
+                await asyncio.wait_for(self.keyword_store.add(user_chunks), timeout=30.0)
+            except Exception as e:
+                logger.error(f"Error adding chunks to keyword store: {e}")
+
+        # Store chunks to graph store
+        if self.graph_store:
+            try:
+                await asyncio.wait_for(self.graph_store.add(user_chunks), timeout=30.0)
+            except Exception as e:
+                logger.error(f"Error adding chunks to graph store: {e}")
+
+    # Legacy add method - now delegates to add_batch with proper wrapping
+    async def add(self, messages: MessageList, **kwargs) -> Dict[str, Any]:
+        """Add a single list of messages.
+
+        This method wraps the MessageList in a MessageBatchList and calls add_batch().
+
+        Args:
+            messages: List of message dictionaries (MessageList)
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            Dictionary with status, data, and message information
         """
         # Ensure messages contain necessary metadata
         for message in messages:
@@ -572,10 +871,8 @@ class MemoryService:
             if 'agent_id' not in message['metadata'] and self._agent_id:
                 message['metadata']['agent_id'] = self._agent_id
 
-        # Use direct batch store
-        logger.info(
-            f"MemoryService.add: Using batch store for {len(messages)} messages")
-        return await self.add_batch(messages)
+        # Wrap in MessageBatchList and call add_batch
+        return await self.add_batch([messages], **kwargs)
 
     async def read(self, message_ids: List[str]) -> Dict[str, Any]:
         """Read messages from memory.
@@ -933,6 +1230,7 @@ class MemoryService:
         store_type: Optional[str] = None,
         include_messages: bool = True,
         include_knowledge: bool = True,
+        include_chunks: bool = True,  # Include chunks by default
         use_rerank: bool = True,
         session_id: Optional[str] = None,  # P1 OPTIMIZATION: Allow session_id override
     ) -> Dict[str, Any]:
@@ -983,6 +1281,7 @@ class MemoryService:
             metadata={
                 "include_messages": include_messages,
                 "include_knowledge": include_knowledge,
+                "include_chunks": include_chunks,
                 "user_id": self._user_id,
             }
         )

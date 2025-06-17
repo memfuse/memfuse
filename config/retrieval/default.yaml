@@ -2,12 +2,16 @@
 # Retrieval configuration aligned with actual implementation
 
 # Rerank configuration (as specified in memories - cross encoder as default)
-use_rerank: true
+# When use_rerank is true, the rerank model will be preloaded at startup for better performance
+# When use_rerank is false, the rerank model will not be preloaded to save resources
+use_rerank: false
 rerank_model: "cross-encoder/ms-marco-MiniLM-L6-v2"
 rerank_strategy: "rrf"
 normalize_scores: true
 
 # Performance optimization (as specified in memories - preload models at startup)
+# This setting only applies when use_rerank is true
+# When use_rerank is false, rerank model preloading is automatically disabled
 preload_model: true
 
 # RRF configuration

@@ -35,13 +35,17 @@ class MiniLMReranker(RerankerBase):
         self,
         model_name: Optional[str] = None,
         existing_model: Any = None,
+        use_rerank: Optional[bool] = None,
+        rerank_strategy: Optional[str] = None,
         **kwargs
     ):
         """Initialize the reranker.
-        
+
         Args:
             model_name: Name of the model to use (e.g., 'cross-encoder/ms-marco-MiniLM-L6-v2')
             existing_model: An existing CrossEncoder model instance to reuse
+            use_rerank: Whether reranking is enabled (overrides config if provided)
+            rerank_strategy: Reranking strategy (overrides config if provided)
             **kwargs: Additional arguments
         """
         # Get configuration
@@ -94,15 +98,21 @@ class MiniLMReranker(RerankerBase):
             logger.warning("sentence_transformers not available, reranking will not work")
             self.model = None
             
-        # Store rerank configuration
-        self.rerank_strategy = "rrf"  # Default strategy
-        if hasattr(cfg, 'retrieval') and hasattr(cfg.retrieval, 'rerank_strategy'):
+        # Store rerank configuration - prioritize external parameters over config
+        if rerank_strategy is not None:
+            self.rerank_strategy = rerank_strategy
+        elif hasattr(cfg, 'retrieval') and hasattr(cfg.retrieval, 'rerank_strategy'):
             self.rerank_strategy = cfg.retrieval.rerank_strategy
-            
-        # Store whether reranking is enabled by default
-        self.use_rerank = False  # Default setting
-        if hasattr(cfg, 'retrieval') and hasattr(cfg.retrieval, 'use_rerank'):
+        else:
+            self.rerank_strategy = "rrf"  # Default strategy
+
+        # Store whether reranking is enabled - prioritize external parameters over config
+        if use_rerank is not None:
+            self.use_rerank = use_rerank
+        elif hasattr(cfg, 'retrieval') and hasattr(cfg.retrieval, 'use_rerank'):
             self.use_rerank = cfg.retrieval.use_rerank
+        else:
+            self.use_rerank = False  # Default setting
             
         logger.info(
             f"MiniLM rerank configuration: strategy={self.rerank_strategy}, "
@@ -136,16 +146,21 @@ class MiniLMReranker(RerankerBase):
         source: str = "default"
     ) -> List[Any]:
         """Rerank items based on their relevance to the query.
-        
+
         Args:
             query: The query string
             items: List of items to rerank
             top_k: Number of top items to return
             source: Source of the items
-            
+
         Returns:
             List of reranked items
         """
+        # Check if reranking is enabled
+        if not self.use_rerank:
+            logger.debug(f"MiniLMReranker.rerank: Reranking disabled, returning original items limited to top_k={top_k}")
+            return items[:top_k] if items else []
+
         if not self.model or not items:
             return items[:top_k] if items else []
             
@@ -163,6 +178,15 @@ class MiniLMReranker(RerankerBase):
                     texts.append(item["content"])
                 elif isinstance(item, dict) and "text" in item:
                     texts.append(item["text"])
+                elif isinstance(item, list):
+                    # Handle MessageList format (List of Messages)
+                    message_texts = []
+                    for message in item:
+                        if isinstance(message, dict):
+                            role = message.get("role", "unknown")
+                            content = message.get("content", "")
+                            message_texts.append(f"[{role}]: {content}")
+                    texts.append("\n".join(message_texts))
                 else:
                     logger.warning(f"Could not extract text from item: {item}")
                     texts.append(str(item))

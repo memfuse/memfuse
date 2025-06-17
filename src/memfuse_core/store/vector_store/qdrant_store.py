@@ -11,6 +11,7 @@ from ...models.core import Item, Query, QueryResult, StoreType
 from ...utils.path_manager import PathManager
 from .base import VectorStore
 from ...rag.encode.base import EncoderBase
+from ...rag.chunk.base import ChunkData
 
 
 class QdrantVectorStore(VectorStore):
@@ -376,56 +377,7 @@ class QdrantVectorStore(VectorStore):
             logger.error(f"Error updating batch in Qdrant: {e}")
             return [False] * len(item_ids)
 
-    async def delete(self, item_id: str) -> bool:
-        """Delete an item.
 
-        Args:
-            item_id: ID of the item to delete
-
-        Returns:
-            True if successful, False otherwise
-        """
-        await self.ensure_initialized()
-
-        try:
-            # Delete from Qdrant
-            self.client.delete(
-                collection_name=self.collection_name,
-                points_selector=rest.PointIdsList(
-                    points=[item_id]
-                )
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error deleting item from Qdrant: {e}")
-            return False
-
-    async def delete_batch(self, item_ids: List[str]) -> List[bool]:
-        """Delete multiple items.
-
-        Args:
-            item_ids: IDs of the items to delete
-
-        Returns:
-            List of success flags
-        """
-        if not item_ids:
-            return []
-
-        await self.ensure_initialized()
-
-        try:
-            # Delete from Qdrant
-            self.client.delete(
-                collection_name=self.collection_name,
-                points_selector=rest.PointIdsList(
-                    points=item_ids
-                )
-            )
-            return [True] * len(item_ids)
-        except Exception as e:
-            logger.error(f"Error deleting batch from Qdrant: {e}")
-            return [False] * len(item_ids)
 
     async def query_by_embedding(self, embedding: np.ndarray, top_k: int = 5, query: Optional[Query] = None) -> List[QueryResult]:
         """Query the store by embedding.
@@ -605,3 +557,519 @@ class QdrantVectorStore(VectorStore):
             logger.error(f"Error getting Qdrant stats: {e}")
 
         return stats
+
+    # New ChunkStoreInterface methods
+    async def add_with_embeddings(self, chunks: List[ChunkData], embeddings: List[np.ndarray]) -> List[str]:
+        """Add chunks with pre-computed embeddings.
+
+        Args:
+            chunks: Chunks to add
+            embeddings: Pre-computed embeddings
+
+        Returns:
+            List of IDs of the added chunks
+        """
+        if not chunks:
+            return []
+
+        await self.ensure_initialized()
+
+        try:
+            # Add to Qdrant
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=[
+                    rest.PointStruct(
+                        id=chunk.chunk_id,
+                        vector=embedding.tolist(),
+                        payload={
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        }
+                    )
+                    for chunk, embedding in zip(chunks, embeddings)
+                ]
+            )
+            return [chunk.chunk_id for chunk in chunks]
+        except Exception as e:
+            logger.error(f"Error adding chunks to Qdrant: {e}")
+            raise
+
+    async def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Optional[ChunkData]]:
+        """Get chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to retrieve
+
+        Returns:
+            List of ChunkData objects, None for chunks not found
+        """
+        if not chunk_ids:
+            return []
+
+        await self.ensure_initialized()
+
+        try:
+            # Get from Qdrant
+            points = self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=chunk_ids
+            )
+
+            # Create a map of ID to point
+            point_map = {point.id: point for point in points}
+
+            # Return chunks in the same order as chunk_ids
+            return [
+                ChunkData(
+                    content=point_map[chunk_id].payload["content"],
+                    chunk_id=chunk_id,
+                    metadata=point_map[chunk_id].payload["metadata"]
+                )
+                if chunk_id in point_map else None
+                for chunk_id in chunk_ids
+            ]
+        except Exception as e:
+            logger.error(f"Error getting chunks from Qdrant: {e}")
+            return [None] * len(chunk_ids)
+
+    async def update_chunk_with_embedding(self, chunk_id: str, chunk: ChunkData, embedding: np.ndarray) -> bool:
+        """Update a chunk with pre-computed embedding.
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+            embedding: Pre-computed embedding
+
+        Returns:
+            True if successful, False if chunk not found
+        """
+        await self.ensure_initialized()
+
+        try:
+            # Update in Qdrant
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=[
+                    rest.PointStruct(
+                        id=chunk_id,
+                        vector=embedding.tolist(),
+                        payload={
+                            "content": chunk.content,
+                            "metadata": chunk.metadata
+                        }
+                    )
+                ]
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating chunk in Qdrant: {e}")
+            return False
+
+    async def delete_chunks_by_ids(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to delete
+
+        Returns:
+            List of deletion success flags
+        """
+        if not chunk_ids:
+            return []
+
+        await self.ensure_initialized()
+
+        try:
+            # Delete from Qdrant
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=rest.PointIdsList(
+                    points=chunk_ids
+                )
+            )
+            return [True] * len(chunk_ids)
+        except Exception as e:
+            logger.error(f"Error deleting chunks from Qdrant: {e}")
+            return [False] * len(chunk_ids)
+
+    async def query_by_embedding_chunks(self, embedding: np.ndarray, top_k: int = 5, query: Optional[Query] = None) -> List[ChunkData]:
+        """Query the store by embedding and return chunks.
+
+        Args:
+            embedding: Query embedding
+            top_k: Number of results to return
+            query: Original query object for filtering (optional)
+
+        Returns:
+            List of ChunkData objects
+        """
+        await self.ensure_initialized()
+
+        try:
+            # Prepare filter if user_id is provided
+            filter_condition = None
+            if query and query.metadata and "user_id" in query.metadata:
+                user_id = query.metadata["user_id"]
+                filter_condition = rest.Filter(
+                    must=[
+                        rest.FieldCondition(
+                            key="metadata.user_id",
+                            match=rest.MatchValue(value=user_id)
+                        )
+                    ]
+                )
+                logger.debug(f"Applying Qdrant filter for user_id: {user_id}")
+
+            # Search in Qdrant with filter
+            if filter_condition:
+                search_results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=embedding.tolist(),
+                    limit=top_k,
+                    query_filter=filter_condition
+                )
+            else:
+                search_results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=embedding.tolist(),
+                    limit=top_k
+                )
+
+            # Convert to ChunkData objects
+            results = []
+            for result in search_results:
+                # Double-check user_id filter
+                if query and query.metadata and "user_id" in query.metadata:
+                    user_id = query.metadata["user_id"]
+                    result_user_id = result.payload["metadata"].get("user_id")
+                    if result_user_id != user_id:
+                        # Skip results that don't match the user_id
+                        logger.debug(
+                            f"Filtering out result with user_id={result_user_id}, expected {user_id}")
+                        continue
+
+                # Add score to metadata for ranking
+                chunk_metadata = result.payload["metadata"].copy()
+                chunk_metadata["score"] = result.score
+
+                results.append(
+                    ChunkData(
+                        content=result.payload["content"],
+                        chunk_id=result.id,
+                        metadata=chunk_metadata
+                    )
+                )
+
+            return results
+        except Exception as e:
+            logger.error(f"Error querying Qdrant by embedding: {e}")
+            return []
+
+    async def get_chunk_count(self) -> int:
+        """Get the total number of chunks in the store.
+
+        Returns:
+            Total number of chunks stored
+        """
+        await self.ensure_initialized()
+
+        try:
+            collection_info = self.client.get_collection(self.collection_name)
+            return collection_info.vectors_count or 0
+        except Exception as e:
+            logger.error(f"Error getting chunk count from Qdrant: {e}")
+            return 0
+
+    async def clear_all_chunks(self) -> bool:
+        """Clear all chunks from the store.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        await self.ensure_initialized()
+
+        try:
+            # Delete the collection and recreate it
+            self.client.delete_collection(collection_name=self.collection_name)
+            self._create_collection()
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing Qdrant store: {e}")
+            return False
+
+    # Business Query Operations
+    async def get_chunks_by_session(self, session_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific session.
+
+        Args:
+            session_id: Session ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the session
+        """
+        await self.ensure_initialized()
+
+        try:
+            filter_condition = rest.Filter(
+                must=[
+                    rest.FieldCondition(
+                        key="metadata.session_id",
+                        match=rest.MatchValue(value=session_id)
+                    )
+                ]
+            )
+
+            # Use search with a dummy vector to get all matching chunks
+            dummy_vector = [0.0] * self.embedding_dim
+            search_results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=dummy_vector,
+                limit=10000,  # Large limit to get all results
+                query_filter=filter_condition,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            results = []
+            for result in search_results:
+                results.append(
+                    ChunkData(
+                        content=result.payload["content"],
+                        chunk_id=str(result.id),
+                        metadata=result.payload["metadata"]
+                    )
+                )
+
+            logger.info(f"Retrieved {len(results)} chunks for session {session_id}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by session from Qdrant: {e}")
+            return []
+
+    async def get_chunks_by_round(self, round_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific round.
+
+        Args:
+            round_id: Round ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the round
+        """
+        await self.ensure_initialized()
+
+        try:
+            filter_condition = rest.Filter(
+                must=[
+                    rest.FieldCondition(
+                        key="metadata.round_id",
+                        match=rest.MatchValue(value=round_id)
+                    )
+                ]
+            )
+
+            # Use search with a dummy vector to get all matching chunks
+            dummy_vector = [0.0] * self.embedding_dim
+            search_results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=dummy_vector,
+                limit=10000,  # Large limit to get all results
+                query_filter=filter_condition,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            results = []
+            for result in search_results:
+                results.append(
+                    ChunkData(
+                        content=result.payload["content"],
+                        chunk_id=str(result.id),
+                        metadata=result.payload["metadata"]
+                    )
+                )
+
+            logger.info(f"Retrieved {len(results)} chunks for round {round_id}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by round from Qdrant: {e}")
+            return []
+
+    async def get_chunks_by_user(self, user_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific user.
+
+        Args:
+            user_id: User ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the user
+        """
+        await self.ensure_initialized()
+
+        try:
+            filter_condition = rest.Filter(
+                must=[
+                    rest.FieldCondition(
+                        key="metadata.user_id",
+                        match=rest.MatchValue(value=user_id)
+                    )
+                ]
+            )
+
+            # Use search with a dummy vector to get all matching chunks
+            # This is a workaround since scroll might not be available in all Qdrant versions
+            dummy_vector = [0.0] * self.embedding_dim
+            search_results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=dummy_vector,
+                limit=10000,  # Large limit to get all results
+                query_filter=filter_condition,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            results = []
+            for result in search_results:
+                results.append(
+                    ChunkData(
+                        content=result.payload["content"],
+                        chunk_id=str(result.id),
+                        metadata=result.payload["metadata"]
+                    )
+                )
+
+            logger.info(f"Retrieved {len(results)} chunks for user {user_id}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by user from Qdrant: {e}")
+            return []
+
+    async def get_chunks_by_strategy(self, strategy_type: str) -> List[ChunkData]:
+        """Get all chunks created by a specific strategy.
+
+        Args:
+            strategy_type: Strategy type to filter chunks
+
+        Returns:
+            List of ChunkData objects for the strategy
+        """
+        await self.ensure_initialized()
+
+        try:
+            filter_condition = rest.Filter(
+                must=[
+                    rest.FieldCondition(
+                        key="metadata.strategy",
+                        match=rest.MatchValue(value=strategy_type)
+                    )
+                ]
+            )
+
+            # Use search with a dummy vector to get all matching chunks
+            dummy_vector = [0.0] * self.embedding_dim
+            search_results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=dummy_vector,
+                limit=10000,  # Large limit to get all results
+                query_filter=filter_condition,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            results = []
+            for result in search_results:
+                results.append(
+                    ChunkData(
+                        content=result.payload["content"],
+                        chunk_id=str(result.id),
+                        metadata=result.payload["metadata"]
+                    )
+                )
+
+            logger.info(f"Retrieved {len(results)} chunks for strategy {strategy_type}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by strategy from Qdrant: {e}")
+            return []
+
+    async def get_chunks_stats(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Get statistics about chunks in the store.
+
+        Args:
+            filters: Optional filters to apply (e.g., session_id, user_id)
+
+        Returns:
+            Dictionary containing statistics
+        """
+        await self.ensure_initialized()
+
+        try:
+            # Get total count
+            total_chunks = await self.get_chunk_count()
+
+            # Basic stats
+            stats = {
+                "total_chunks": total_chunks,
+                "store_type": "vector",
+                "by_session": {},
+                "by_strategy": {},
+                "by_user": {},
+                "storage_size": "N/A"  # Qdrant doesn't provide easy storage size info
+            }
+
+            # If we have a reasonable number of chunks, get detailed stats
+            if total_chunks > 0 and total_chunks < 10000:
+                # Get all chunks to compute detailed stats
+                dummy_vector = [0.0] * self.embedding_dim
+                all_results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=dummy_vector,
+                    limit=total_chunks,
+                    with_payload=True,
+                    with_vectors=False
+                )
+
+                # Count by different dimensions
+                session_counts = {}
+                strategy_counts = {}
+                user_counts = {}
+
+                for result in all_results:
+                    metadata = result.payload.get("metadata", {})
+
+                    # Count by session
+                    session_id = metadata.get("session_id")
+                    if session_id:
+                        session_counts[session_id] = session_counts.get(session_id, 0) + 1
+
+                    # Count by strategy
+                    strategy = metadata.get("strategy")
+                    if strategy:
+                        strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
+
+                    # Count by user
+                    user_id = metadata.get("user_id")
+                    if user_id:
+                        user_counts[user_id] = user_counts.get(user_id, 0) + 1
+
+                stats["by_session"] = session_counts
+                stats["by_strategy"] = strategy_counts
+                stats["by_user"] = user_counts
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"Error getting chunks stats from Qdrant: {e}")
+            return {
+                "total_chunks": 0,
+                "store_type": "vector",
+                "by_session": {},
+                "by_strategy": {},
+                "by_user": {},
+                "storage_size": "N/A",
+                "error": str(e)
+            }

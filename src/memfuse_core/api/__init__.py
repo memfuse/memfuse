@@ -1,6 +1,6 @@
 """API endpoints for MemFuse core services."""
 
-from . import health, users, agents, sessions, messages, knowledge, api_keys
+from . import health, users, agents, sessions, messages, knowledge, api_keys, chunks
 __all__ = [
     "health",
     "users",
@@ -8,5 +8,6 @@ __all__ = [
     "sessions",
     "messages",
     "knowledge",
-    "api_keys"
+    "api_keys",
+    "chunks"
 ]
