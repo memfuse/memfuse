@@ -31,8 +31,15 @@ query:
 # Performance settings
 performance:
   batch_write_threshold: 5     # Threshold for batch writes
-  flush_interval: 300          # Auto-flush interval in seconds (0 = disabled)
+  flush_interval: 60           # Auto-flush interval in seconds (reduced from 300 to 60)
   enable_async_processing: true # Enable async chunk processing
+  enable_auto_flush: true      # Enable automatic flushing
+
+  # FlushManager settings
+  max_flush_workers: 3         # Maximum number of concurrent flush workers
+  max_flush_queue_size: 100    # Maximum size of the flush queue
+  flush_timeout: 30.0          # Default timeout for flush operations (seconds)
+  flush_strategy: "hybrid"     # Flush strategy: "size_based", "time_based", "hybrid"
 
 # Monitoring and logging
 monitoring:

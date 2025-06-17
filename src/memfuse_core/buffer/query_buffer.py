@@ -184,7 +184,7 @@ class QueryBuffer(BufferComponentInterface):
             query_lower = query_text.lower()
             results = []
 
-            async with hybrid_buffer._lock:
+            async with hybrid_buffer._data_lock:
                 logger.info(f"QueryBuffer: Searching {len(hybrid_buffer.chunks)} chunks in HybridBuffer")
                 for i, chunk in enumerate(hybrid_buffer.chunks):
                     logger.debug(f"QueryBuffer: Chunk {i} content preview: {chunk.content[:100]}...")
@@ -345,7 +345,7 @@ class QueryBuffer(BufferComponentInterface):
         buffer_to_use = hybrid_buffer or self.hybrid_buffer
         if buffer_to_use:
             try:
-                async with buffer_to_use._lock:
+                async with buffer_to_use._data_lock:
                     total_messages = sum(len(round_msgs) for round_msgs in buffer_to_use.original_rounds)
                     metadata.update({
                         "buffer_messages_available": total_messages > 0,
