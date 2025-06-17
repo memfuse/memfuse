@@ -155,7 +155,7 @@ class ServiceInitializer:
                 if config_dict is None:
                     config_dict = {}
                 retrieval_config = config_dict.get('retrieval', {})
-                use_rerank = retrieval_config.get('use_rerank', True)
+                use_rerank = retrieval_config.get('use_rerank', False)  # Default to False
                 rerank_strategy = retrieval_config.get('rerank_strategy', 'rrf')
 
                 logger.info(f"Global reranker configuration: use_rerank={use_rerank}, strategy={rerank_strategy}")
@@ -173,6 +173,8 @@ class ServiceInitializer:
                 # Store as global instance
                 ServiceFactory.set_global_models(reranker_instance=global_reranker)
                 logger.info("Global reranker instance created and cached")
+            else:
+                logger.info("No rerank model preloaded, skipping global reranker instance creation")
 
             logger.info("Global models set in ServiceFactory successfully")
 
