@@ -246,6 +246,8 @@ buffer:
 3. ✅ Data retrieval from HybridBuffer functional
 4. ✅ Context preservation across conversations
 5. ✅ No timeout errors during extended testing
+6. ✅ PriorityQueue comparison errors completely resolved
+7. ✅ Task ordering working correctly with sequence numbers
 
 ### Performance Benchmarks
 
@@ -301,14 +303,15 @@ class FlushManager:
         self.task_queue = asyncio.PriorityQueue(maxsize=max_queue_size)
         self.workers = []
         self.pending_tasks = {}
-        self.task_counter = 0
+        self._task_counter = 0  # Unique sequence for deterministic ordering
 
     async def _worker(self, worker_id: int):
         """Worker coroutine that processes flush tasks."""
         while self.running:
             try:
-                priority, task_id, task_data = await self.task_queue.get()
-                await self._execute_task(task_id, task_data)
+                # Three-tuple format: (priority, sequence, task)
+                priority, sequence, task = await self.task_queue.get()
+                await self._execute_task(task.task_id, task)
             except Exception as e:
                 logger.error(f"Worker {worker_id} error: {e}")
 ```
@@ -376,6 +379,64 @@ async def _flush_callback(self, success: bool, message: str):
         # Could implement retry logic here
 ```
 
+### Critical Bug Fix: PriorityQueue Comparison Error
+
+#### Problem Description
+During implementation, we encountered a critical error:
+```
+'<' not supported between instances of 'FlushTask' and 'FlushTask'
+```
+
+This error occurred when multiple FlushTask objects with the same priority were added to the PriorityQueue. Python's PriorityQueue uses tuple comparison, and when the first element (priority) is equal, it attempts to compare the second element (FlushTask objects).
+
+#### Root Cause Analysis
+```python
+# Original problematic code
+await self.task_queue.put((task.priority.value, task))  # Two-tuple format
+
+# When two tasks have same priority:
+# Python tries: task1 < task2  # This fails!
+```
+
+The `@dataclass` FlushTask class didn't implement comparison methods, causing the comparison to fail.
+
+#### Solution: Dual-Layer Fix
+
+**Primary Fix: Three-Tuple with Sequence Number**
+```python
+class FlushManager:
+    def __init__(self):
+        self._task_counter = 0  # Unique sequence number
+
+    async def _add_task_to_queue(self, task):
+        self._task_counter += 1
+        # Three-tuple: (priority, sequence, task)
+        await self.task_queue.put((task.priority.value, self._task_counter, task))
+
+    async def _worker_loop(self):
+        _, _, task = await self.task_queue.get()  # Unpack three elements
+```
+
+**Secondary Fix: FlushTask Comparison Method**
+```python
+@dataclass
+class FlushTask:
+    # ... other fields ...
+
+    def __lt__(self, other):
+        """Enable comparison for PriorityQueue when priorities are equal."""
+        if not isinstance(other, FlushTask):
+            return NotImplemented
+        return self.created_at < other.created_at
+```
+
+#### Benefits of This Fix
+1. **Eliminates Comparison Errors**: Python never needs to compare FlushTask objects
+2. **Maintains Priority Ordering**: High-priority tasks still execute first
+3. **Ensures Deterministic Ordering**: Same-priority tasks execute in FIFO order
+4. **Provides Redundancy**: Two-layer protection against edge cases
+5. **Zero Performance Impact**: Minimal overhead from sequence counter
+
 ### Performance Monitoring
 
 #### Metrics Collection
@@ -414,7 +475,14 @@ class HybridBuffer:
 2025-06-17 22:14:40 | INFO | API response time: 1.2 seconds
 2025-06-17 22:15:45 | INFO | Non-blocking flush initiated - task_id=hybrid-1750168589-1
 2025-06-17 22:15:45 | INFO | QueryBuffer returned 3 results from HybridBuffer
+2025-06-17 23:22:06 | INFO | HybridBuffer: Triggering non-blocking flush - size_limit (5 >= 5)
+2025-06-17 23:22:06 | INFO | HybridBuffer: Non-blocking flush initiated - task_id=hybrid-1750173726-1
 ```
+
+**Critical Bug Resolution:**
+- ✅ No more `'<' not supported between instances of 'FlushTask' and 'FlushTask'` errors
+- ✅ PriorityQueue operations working smoothly with three-tuple format
+- ✅ Task ordering maintained with sequence numbers for deterministic execution
 
 ### Client Experience Improvement
 - **Before**: Frequent "Request timeout" errors, poor user experience
@@ -433,6 +501,7 @@ class HybridBuffer:
 2. **Synchronous I/O in Async Context**: Moved all I/O to background workers
 3. **No Error Recovery**: Implemented comprehensive rollback mechanisms
 4. **Resource Starvation**: Added timeout protection and queue limits
+5. **Object Comparison Issues**: Resolved PriorityQueue comparison errors with proper task ordering
 
 ## Conclusion
 

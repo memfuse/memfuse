@@ -45,6 +45,13 @@ class FlushTask:
     max_retries: int = 3
     retry_count: int = 0
 
+    def __lt__(self, other):
+        """Enable comparison for PriorityQueue when priorities are equal."""
+        if not isinstance(other, FlushTask):
+            return NotImplemented
+        # Compare by creation time if priorities are equal
+        return self.created_at < other.created_at
+
 
 @dataclass
 class FlushMetrics:
@@ -107,6 +114,7 @@ class FlushManager:
         self.task_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(maxsize=max_queue_size)
         self.workers: List[asyncio.Task] = []
         self.worker_semaphore = asyncio.Semaphore(max_workers)
+        self._task_counter = 0  # Unique sequence number for queue ordering
         
         # Auto-flush timer
         self.auto_flush_task: Optional[asyncio.Task] = None
@@ -340,9 +348,11 @@ class FlushManager:
             asyncio.QueueFull: If queue is full
         """
         try:
-            # Priority queue uses tuple (priority, task)
+            # Priority queue uses tuple (priority, sequence, task)
             # Lower priority value = higher priority
-            await self.task_queue.put((task.priority.value, task))
+            # Sequence number ensures deterministic ordering for same priority
+            self._task_counter += 1
+            await self.task_queue.put((task.priority.value, self._task_counter, task))
 
             async with self._lock:
                 self.metrics.queue_size = self.task_queue.qsize()
@@ -363,7 +373,7 @@ class FlushManager:
             try:
                 # Get task from queue with timeout
                 try:
-                    _, task = await asyncio.wait_for(
+                    _, _, task = await asyncio.wait_for(
                         self.task_queue.get(),
                         timeout=1.0
                     )
