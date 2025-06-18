@@ -45,12 +45,12 @@ async def test_minimal_server():
         from memfuse_core.services.buffer_service import BufferService
 
         # Create minimal app
-        app = FastAPI(title="MemFuse Test", version="0.1.1")
+        app = FastAPI(title="MemFuse Test", version="0.2.0")
 
         # Add a simple health endpoint
         @app.get("/health")
         async def health():
-            return {"status": "ok", "version": "0.1.1"}
+            return {"status": "ok", "version": "0.2.0"}
 
         print("✓ Minimal server created with health endpoint")
 

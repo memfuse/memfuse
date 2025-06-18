@@ -6,4 +6,4 @@ This package contains comprehensive tests for the MemFuse system including:
 - End-to-end tests for full system functionality
 """
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
