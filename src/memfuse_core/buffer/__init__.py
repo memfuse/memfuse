@@ -19,12 +19,13 @@ improving performance and enabling advanced features:
 The buffer system serves as a foundation for the hierarchical memory system (L0/L1/L2).
 """
 
-from .write_buffer import WriteBuffer
-from .speculative_buffer import SpeculativeBuffer
+# Buffer components
+from .round_buffer import RoundBuffer
+from .hybrid_buffer import HybridBuffer
 from .query_buffer import QueryBuffer
 
 __all__ = [
-    "WriteBuffer",
-    "SpeculativeBuffer",
+    "RoundBuffer",
+    "HybridBuffer",
     "QueryBuffer",
 ]

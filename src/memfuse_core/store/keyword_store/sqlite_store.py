@@ -8,7 +8,7 @@ clean and focused on raw data storage.
 import os
 import sqlite3
 import asyncio
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import time
 from loguru import logger
 import json
@@ -16,6 +16,7 @@ import json
 from ...models.core import Item, QueryResult
 from ...utils.path_manager import PathManager
 from .base import KeywordStore
+from ...rag.chunk.base import ChunkData
 
 
 class SQLiteKeywordStore(KeywordStore):
@@ -758,3 +759,443 @@ class SQLiteKeywordStore(KeywordStore):
         if self.conn:
             self.conn.close()
             self.conn = None
+
+    # New ChunkStoreInterface methods
+    async def add_chunks_to_index(self, chunks: List[ChunkData]) -> List[str]:
+        """Add chunks to the keyword index.
+
+        Args:
+            chunks: Chunks to add to the index
+
+        Returns:
+            List of added chunk IDs
+        """
+        if not chunks:
+            return []
+
+        async with self.write_lock:
+            # Convert chunks to items and add to write buffer
+            for chunk in chunks:
+                item = Item(
+                    id=chunk.chunk_id,
+                    content=chunk.content,
+                    metadata=chunk.metadata
+                )
+                self.write_buffer.append(("add", item))
+
+            # Flush buffer if it's full
+            if len(self.write_buffer) >= self.buffer_size:
+                await self._flush_buffer()
+
+            return [chunk.chunk_id for chunk in chunks]
+
+    async def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Optional[ChunkData]]:
+        """Get chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to retrieve
+
+        Returns:
+            List of ChunkData objects, None for chunks not found
+        """
+        if not chunk_ids:
+            return []
+
+        # Flush buffer to ensure we have the latest data
+        await self._flush_buffer()
+
+        # Prepare placeholders for the query
+        placeholders = ", ".join(["?"] * len(chunk_ids))
+
+        cursor = self.conn.cursor()
+        cursor.execute(f"""
+        SELECT i.id, f.content, i.type, i.created_at, i.updated_at, i.metadata
+        FROM items i
+        JOIN items_fts f ON i.id = f.id
+        WHERE i.id IN ({placeholders})
+        """, chunk_ids)
+
+        rows = cursor.fetchall()
+        result = {row["id"]: ChunkData(
+            content=row["content"],
+            chunk_id=row["id"],
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {}
+        ) for row in rows}
+
+        # Return chunks in the same order as chunk_ids
+        return [result.get(chunk_id) for chunk_id in chunk_ids]
+
+    async def update_chunk_in_index(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update a chunk in the keyword index.
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+
+        Returns:
+            True if successful, False if chunk not found
+        """
+        async with self.write_lock:
+            # Convert chunk to item and add to write buffer
+            item = Item(
+                id=chunk.chunk_id,
+                content=chunk.content,
+                metadata=chunk.metadata
+            )
+            self.write_buffer.append(("update", chunk_id, item))
+
+            # Flush buffer if it's full
+            if len(self.write_buffer) >= self.buffer_size:
+                await self._flush_buffer()
+
+            return True
+
+    async def search_chunks(self, query_text: str, top_k: int = 5, user_id: Optional[str] = None) -> List[ChunkData]:
+        """Search chunks using keyword matching.
+
+        Args:
+            query_text: Query text
+            top_k: Number of results to return
+            user_id: User ID to filter by (optional)
+
+        Returns:
+            List of ChunkData objects sorted by relevance
+        """
+        # Use existing search method and convert results
+        query_results = await self.search(query_text, top_k, user_id)
+
+        # Convert QueryResult objects to ChunkData objects
+        chunks = []
+        for result in query_results:
+            # Add score to metadata
+            metadata_with_score = result.metadata.copy()
+            metadata_with_score["score"] = result.score
+
+            chunks.append(ChunkData(
+                content=result.content,
+                chunk_id=result.id,
+                metadata=metadata_with_score
+            ))
+
+        return chunks
+
+    async def get_chunk_count(self) -> int:
+        """Get the total number of chunks in the store.
+
+        Returns:
+            Total number of chunks stored
+        """
+        # Flush buffer to ensure we have the latest data
+        await self._flush_buffer()
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM items")
+        return cursor.fetchone()[0]
+
+    async def clear_all_chunks(self) -> bool:
+        """Clear all chunks from the store.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            async with self.write_lock:
+                # Clear write buffer
+                self.write_buffer.clear()
+
+                # Clear database tables
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM items_fts")
+                cursor.execute("DELETE FROM items")
+                self.conn.commit()
+
+                return True
+        except Exception as e:
+            logger.error(f"Error clearing keyword store: {e}")
+            return False
+
+    async def delete_chunks_by_ids(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to delete
+
+        Returns:
+            List of deletion success flags
+        """
+        if not chunk_ids:
+            return []
+
+        async with self.write_lock:
+            # Add all chunks to delete buffer
+            for chunk_id in chunk_ids:
+                self.write_buffer.append(("delete", chunk_id))
+
+            # Flush buffer if it's full
+            if len(self.write_buffer) >= self.buffer_size:
+                await self._flush_buffer()
+
+            return [True] * len(chunk_ids)
+
+    # Business Query Operations
+    async def get_chunks_by_session(self, session_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific session.
+
+        Args:
+            session_id: Session ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the session
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Query chunks by session_id in metadata
+                cursor.execute("""
+                SELECT id, content, metadata FROM items_fts
+                WHERE metadata LIKE ?
+                """, (f'%"session_id": "{session_id}"%',))
+
+                results = []
+                for row in cursor.fetchall():
+                    item_id, content, metadata_str = row
+                    try:
+                        metadata = json.loads(metadata_str) if metadata_str else {}
+                        # Double-check session_id match
+                        if metadata.get("session_id") == session_id:
+                            results.append(
+                                ChunkData(
+                                    content=content,
+                                    chunk_id=item_id,
+                                    metadata=metadata
+                                )
+                            )
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON metadata for item {item_id}")
+                        continue
+
+                logger.info(f"Retrieved {len(results)} chunks for session {session_id} from keyword store")
+                return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by session from keyword store: {e}")
+            return []
+
+    async def get_chunks_by_round(self, round_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific round.
+
+        Args:
+            round_id: Round ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the round
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Query chunks by round_id in metadata
+                cursor.execute("""
+                SELECT id, content, metadata FROM items_fts
+                WHERE metadata LIKE ?
+                """, (f'%"round_id": "{round_id}"%',))
+
+                results = []
+                for row in cursor.fetchall():
+                    item_id, content, metadata_str = row
+                    try:
+                        metadata = json.loads(metadata_str) if metadata_str else {}
+                        # Double-check round_id match
+                        if metadata.get("round_id") == round_id:
+                            results.append(
+                                ChunkData(
+                                    content=content,
+                                    chunk_id=item_id,
+                                    metadata=metadata
+                                )
+                            )
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON metadata for item {item_id}")
+                        continue
+
+                logger.info(f"Retrieved {len(results)} chunks for round {round_id} from keyword store")
+                return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by round from keyword store: {e}")
+            return []
+
+    async def get_chunks_by_user(self, user_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific user.
+
+        Args:
+            user_id: User ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the user
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Query chunks by user_id in metadata
+                cursor.execute("""
+                SELECT id, content, metadata FROM items_fts
+                WHERE metadata LIKE ?
+                """, (f'%"user_id": "{user_id}"%',))
+
+                results = []
+                for row in cursor.fetchall():
+                    item_id, content, metadata_str = row
+                    try:
+                        metadata = json.loads(metadata_str) if metadata_str else {}
+                        # Double-check user_id match
+                        if metadata.get("user_id") == user_id:
+                            results.append(
+                                ChunkData(
+                                    content=content,
+                                    chunk_id=item_id,
+                                    metadata=metadata
+                                )
+                            )
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON metadata for item {item_id}")
+                        continue
+
+                logger.info(f"Retrieved {len(results)} chunks for user {user_id} from keyword store")
+                return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by user from keyword store: {e}")
+            return []
+
+    async def get_chunks_by_strategy(self, strategy_type: str) -> List[ChunkData]:
+        """Get all chunks created by a specific strategy.
+
+        Args:
+            strategy_type: Strategy type to filter chunks
+
+        Returns:
+            List of ChunkData objects for the strategy
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Query chunks by strategy in metadata
+                cursor.execute("""
+                SELECT id, content, metadata FROM items_fts
+                WHERE metadata LIKE ?
+                """, (f'%"strategy": "{strategy_type}"%',))
+
+                results = []
+                for row in cursor.fetchall():
+                    item_id, content, metadata_str = row
+                    try:
+                        metadata = json.loads(metadata_str) if metadata_str else {}
+                        # Double-check strategy match
+                        if metadata.get("strategy") == strategy_type:
+                            results.append(
+                                ChunkData(
+                                    content=content,
+                                    chunk_id=item_id,
+                                    metadata=metadata
+                                )
+                            )
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON metadata for item {item_id}")
+                        continue
+
+                logger.info(f"Retrieved {len(results)} chunks for strategy {strategy_type} from keyword store")
+                return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by strategy from keyword store: {e}")
+            return []
+
+    async def get_chunks_stats(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Get statistics about chunks in the store.
+
+        Args:
+            filters: Optional filters to apply (e.g., session_id, user_id)
+
+        Returns:
+            Dictionary containing statistics
+        """
+        await self.ensure_initialized()
+
+        try:
+            with sqlite3.connect(self.index_db_path) as conn:
+                cursor = conn.cursor()
+
+                # Get total count
+                cursor.execute("SELECT COUNT(*) FROM items_fts")
+                total_chunks = cursor.fetchone()[0]
+
+                # Get detailed stats if reasonable number of chunks
+                stats = {
+                    "total_chunks": total_chunks,
+                    "store_type": "keyword",
+                    "by_session": {},
+                    "by_strategy": {},
+                    "by_user": {},
+                    "storage_size": "N/A"
+                }
+
+                if total_chunks > 0 and total_chunks < 10000:
+                    # Get all metadata for detailed stats
+                    cursor.execute("SELECT metadata FROM items_fts")
+
+                    session_counts = {}
+                    strategy_counts = {}
+                    user_counts = {}
+
+                    for row in cursor.fetchall():
+                        metadata_str = row[0]
+                        try:
+                            metadata = json.loads(metadata_str) if metadata_str else {}
+
+                            # Count by session
+                            session_id = metadata.get("session_id")
+                            if session_id:
+                                session_counts[session_id] = session_counts.get(session_id, 0) + 1
+
+                            # Count by strategy
+                            strategy = metadata.get("strategy")
+                            if strategy:
+                                strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
+
+                            # Count by user
+                            user_id = metadata.get("user_id")
+                            if user_id:
+                                user_counts[user_id] = user_counts.get(user_id, 0) + 1
+
+                        except json.JSONDecodeError:
+                            continue
+
+                    stats["by_session"] = session_counts
+                    stats["by_strategy"] = strategy_counts
+                    stats["by_user"] = user_counts
+
+                return stats
+
+        except Exception as e:
+            logger.error(f"Error getting chunks stats from keyword store: {e}")
+            return {
+                "total_chunks": 0,
+                "store_type": "keyword",
+                "by_session": {},
+                "by_strategy": {},
+                "by_user": {},
+                "storage_size": "N/A",
+                "error": str(e)
+            }

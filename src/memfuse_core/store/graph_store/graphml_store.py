@@ -9,13 +9,14 @@ import asyncio
 import time
 import numpy as np
 from loguru import logger
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import networkx as nx
 
 from ...models.core import Node, Edge, Item, Query, QueryResult
 from ...utils.path_manager import PathManager
 from .base import GraphStore
 from ..adapters.model_adapter import ModelAdapterFactory
+from ...rag.chunk.base import ChunkData
 
 
 class GraphMLStore(GraphStore):
@@ -663,12 +664,14 @@ class GraphMLStore(GraphStore):
         if query.metadata:
             include_messages = query.metadata.get("include_messages", True)
             include_knowledge = query.metadata.get("include_knowledge", True)
+            include_chunks = query.metadata.get("include_chunks", True)
 
             filtered_scores = []
             for node_id, content, metadata, score in node_scores:
                 item_type = metadata.get("type")
-                if ((item_type == "message" and include_messages)
-                        or (item_type == "knowledge" and include_knowledge)):
+                if ((item_type == "message" and include_messages) or
+                    (item_type == "knowledge" and include_knowledge) or
+                    (item_type == "chunk" and include_chunks)):
                     filtered_scores.append((node_id, content, metadata, score))
 
             node_scores = filtered_scores
@@ -1013,3 +1016,470 @@ class GraphMLStore(GraphStore):
 
         # Print statistics
         logger.info(f"GraphMLStore statistics: {self.stats}")
+
+    # New ChunkStoreInterface methods
+    async def add_chunks_as_nodes(self, chunks: List[ChunkData]) -> List[str]:
+        """Add chunks as nodes to the graph.
+
+        Args:
+            chunks: Chunks to add as nodes
+
+        Returns:
+            List of added chunk IDs
+        """
+        if not chunks:
+            return []
+
+        async with self.write_lock:
+            # Add all chunks as nodes to buffer
+            for chunk in chunks:
+                # Convert ChunkData to Node
+                node = Node(
+                    id=chunk.chunk_id,
+                    content=chunk.content,
+                    metadata=chunk.metadata
+                )
+                self.node_buffer.append(("add", node))
+
+            # Flush buffer if it's full
+            if len(self.node_buffer) >= self.buffer_size:
+                await self._flush_node_buffer()
+
+            self.stats["nodes_added"] += len(chunks)
+            return [chunk.chunk_id for chunk in chunks]
+
+    async def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Optional[ChunkData]]:
+        """Get chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to retrieve
+
+        Returns:
+            List of ChunkData objects, None for chunks not found
+        """
+        if not chunk_ids:
+            return []
+
+        # Flush buffer to ensure we have the latest data
+        await self._flush_node_buffer()
+
+        result = []
+        for chunk_id in chunk_ids:
+            if chunk_id in self.graph.nodes:
+                node_data = self.graph.nodes[chunk_id]
+                result.append(ChunkData(
+                    content=node_data.get("content", ""),
+                    chunk_id=chunk_id,
+                    metadata=json.loads(node_data.get("metadata", "{}"))
+                ))
+            else:
+                result.append(None)
+
+        return result
+
+    async def update_chunk_in_graph(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update a chunk in the graph.
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+
+        Returns:
+            True if successful, False if chunk not found
+        """
+        async with self.write_lock:
+            # Convert ChunkData to Node
+            node = Node(
+                id=chunk.chunk_id,
+                content=chunk.content,
+                metadata=chunk.metadata
+            )
+
+            # Add to buffer
+            self.node_buffer.append(("update", chunk_id, node))
+
+            # Flush buffer if it's full
+            if len(self.node_buffer) >= self.buffer_size:
+                await self._flush_node_buffer()
+
+            self.stats["nodes_updated"] += 1
+            return True
+
+    async def delete_chunks_and_edges(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks and their associated edges.
+
+        Args:
+            chunk_ids: List of chunk IDs to delete
+
+        Returns:
+            List of deletion success flags
+        """
+        if not chunk_ids:
+            return []
+
+        async with self.write_lock:
+            # Add all chunks to delete buffer
+            for chunk_id in chunk_ids:
+                self.node_buffer.append(("delete", chunk_id))
+
+            # Flush buffer if it's full
+            if len(self.node_buffer) >= self.buffer_size:
+                await self._flush_node_buffer()
+
+            self.stats["nodes_deleted"] += len(chunk_ids)
+            return [True] * len(chunk_ids)
+
+    async def search_graph(self, query_text: str, top_k: int = 5, user_id: Optional[str] = None) -> List[ChunkData]:
+        """Search chunks using graph traversal.
+
+        Args:
+            query_text: Query text
+            top_k: Number of results to return
+            user_id: User ID to filter by (optional)
+
+        Returns:
+            List of ChunkData objects sorted by relevance
+        """
+        start_time = time.time()
+
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+            await self._flush_edge_buffer()
+
+            # Generate embedding for the query
+            query_embedding = await self.embedding_adapter.encode([query_text])
+            if not query_embedding:
+                return []
+
+            query_embedding = query_embedding[0]
+
+            # Calculate similarity scores for all nodes
+            node_scores = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata = json.loads(node_data.get("metadata", "{}"))
+
+                # Apply user_id filter if provided
+                if user_id and metadata.get("user_id") != user_id:
+                    continue
+
+                # Generate embedding for the node content
+                node_embedding = await self.embedding_adapter.encode([content])
+                if not node_embedding:
+                    continue
+
+                node_embedding = node_embedding[0]
+
+                # Calculate cosine similarity
+                similarity = np.dot(query_embedding, node_embedding) / (
+                    np.linalg.norm(query_embedding) * np.linalg.norm(node_embedding)
+                )
+
+                node_scores.append((node_id, content, metadata, similarity))
+
+            # Sort by similarity score (descending)
+            node_scores.sort(key=lambda x: x[3], reverse=True)
+
+            # Take top_k results
+            top_results = node_scores[:top_k]
+
+            # Convert to ChunkData objects
+            results = []
+            for node_id, content, metadata, score in top_results:
+                # Add score to metadata
+                metadata_with_score = metadata.copy()
+                metadata_with_score["score"] = score
+
+                results.append(ChunkData(
+                    content=content,
+                    chunk_id=node_id,
+                    metadata=metadata_with_score
+                ))
+
+            self.stats["queries"] += 1
+            self.stats["query_time"] += time.time() - start_time
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Error searching graph: {e}")
+            return []
+
+    async def get_node_count(self) -> int:
+        """Get the total number of nodes in the graph.
+
+        Returns:
+            Total number of nodes stored
+        """
+        # Flush buffer to ensure we have the latest data
+        await self._flush_node_buffer()
+        return len(self.graph.nodes)
+
+    async def clear_graph(self) -> bool:
+        """Clear all nodes and edges from the graph.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            async with self.write_lock:
+                # Clear buffers
+                self.node_buffer.clear()
+                self.edge_buffer.clear()
+
+                # Clear graph
+                self.graph.clear()
+
+                # Save empty graph
+                nx.write_graphml(self.graph, self.graph_file)
+
+                # Reset statistics
+                self.stats = {
+                    "nodes_added": 0,
+                    "edges_added": 0,
+                    "nodes_updated": 0,
+                    "edges_updated": 0,
+                    "nodes_deleted": 0,
+                    "edges_deleted": 0,
+                    "queries": 0,
+                    "query_time": 0,
+                }
+
+                return True
+        except Exception as e:
+            logger.error(f"Error clearing graph: {e}")
+            return False
+
+    # Business Query Operations
+    async def get_chunks_by_session(self, session_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific session.
+
+        Args:
+            session_id: Session ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the session
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            results = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata_str = node_data.get("metadata", "{}")
+
+                try:
+                    metadata = json.loads(metadata_str)
+                    # Check if this chunk belongs to the session
+                    if metadata.get("session_id") == session_id:
+                        results.append(
+                            ChunkData(
+                                content=content,
+                                chunk_id=node_id,
+                                metadata=metadata
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON metadata for node {node_id}")
+                    continue
+
+            logger.info(f"Retrieved {len(results)} chunks for session {session_id} from graph store")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by session from graph store: {e}")
+            return []
+
+    async def get_chunks_by_round(self, round_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific round.
+
+        Args:
+            round_id: Round ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the round
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            results = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata_str = node_data.get("metadata", "{}")
+
+                try:
+                    metadata = json.loads(metadata_str)
+                    # Check if this chunk belongs to the round
+                    if metadata.get("round_id") == round_id:
+                        results.append(
+                            ChunkData(
+                                content=content,
+                                chunk_id=node_id,
+                                metadata=metadata
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON metadata for node {node_id}")
+                    continue
+
+            logger.info(f"Retrieved {len(results)} chunks for round {round_id} from graph store")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by round from graph store: {e}")
+            return []
+
+    async def get_chunks_by_user(self, user_id: str) -> List[ChunkData]:
+        """Get all chunks for a specific user.
+
+        Args:
+            user_id: User ID to filter chunks
+
+        Returns:
+            List of ChunkData objects for the user
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            results = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata_str = node_data.get("metadata", "{}")
+
+                try:
+                    metadata = json.loads(metadata_str)
+                    # Check if this chunk belongs to the user
+                    if metadata.get("user_id") == user_id:
+                        results.append(
+                            ChunkData(
+                                content=content,
+                                chunk_id=node_id,
+                                metadata=metadata
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON metadata for node {node_id}")
+                    continue
+
+            logger.info(f"Retrieved {len(results)} chunks for user {user_id} from graph store")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by user from graph store: {e}")
+            return []
+
+    async def get_chunks_by_strategy(self, strategy_type: str) -> List[ChunkData]:
+        """Get all chunks created by a specific strategy.
+
+        Args:
+            strategy_type: Strategy type to filter chunks
+
+        Returns:
+            List of ChunkData objects for the strategy
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            results = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                content = node_data.get("content", "")
+                metadata_str = node_data.get("metadata", "{}")
+
+                try:
+                    metadata = json.loads(metadata_str)
+                    # Check if this chunk was created by the strategy
+                    if metadata.get("strategy") == strategy_type:
+                        results.append(
+                            ChunkData(
+                                content=content,
+                                chunk_id=node_id,
+                                metadata=metadata
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON metadata for node {node_id}")
+                    continue
+
+            logger.info(f"Retrieved {len(results)} chunks for strategy {strategy_type} from graph store")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by strategy from graph store: {e}")
+            return []
+
+    async def get_chunks_stats(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Get statistics about chunks in the store.
+
+        Args:
+            filters: Optional filters to apply (e.g., session_id, user_id)
+
+        Returns:
+            Dictionary containing statistics
+        """
+        try:
+            # Flush buffers to ensure we have the latest data
+            await self._flush_node_buffer()
+
+            total_chunks = len(self.graph.nodes)
+
+            # Basic stats
+            stats = {
+                "total_chunks": total_chunks,
+                "store_type": "graph",
+                "by_session": {},
+                "by_strategy": {},
+                "by_user": {},
+                "storage_size": "N/A"
+            }
+
+            # Get detailed stats if reasonable number of chunks
+            if total_chunks > 0 and total_chunks < 10000:
+                session_counts = {}
+                strategy_counts = {}
+                user_counts = {}
+
+                for node_id, node_data in self.graph.nodes(data=True):
+                    metadata_str = node_data.get("metadata", "{}")
+                    try:
+                        metadata = json.loads(metadata_str)
+
+                        # Count by session
+                        session_id = metadata.get("session_id")
+                        if session_id:
+                            session_counts[session_id] = session_counts.get(session_id, 0) + 1
+
+                        # Count by strategy
+                        strategy = metadata.get("strategy")
+                        if strategy:
+                            strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
+
+                        # Count by user
+                        user_id = metadata.get("user_id")
+                        if user_id:
+                            user_counts[user_id] = user_counts.get(user_id, 0) + 1
+
+                    except json.JSONDecodeError:
+                        continue
+
+                stats["by_session"] = session_counts
+                stats["by_strategy"] = strategy_counts
+                stats["by_user"] = user_counts
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"Error getting chunks stats from graph store: {e}")
+            return {
+                "total_chunks": 0,
+                "store_type": "graph",
+                "by_session": {},
+                "by_strategy": {},
+                "by_user": {},
+                "storage_size": "N/A",
+                "error": str(e)
+            }

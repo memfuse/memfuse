@@ -44,6 +44,12 @@ from .embeddings import (
 from .performance_monitor import PerformanceMonitor
 from .cache import Cache
 from .buffer import Buffer
+from .token_counter import (
+    TokenCounter,
+    get_token_counter,
+    count_tokens,
+    count_message_tokens
+)
 
 __all__ = [
     # From validation
@@ -80,4 +86,9 @@ __all__ = [
     # From cache and buffer (previously in models/common)
     "Cache",
     "Buffer",
+    # From token_counter
+    "TokenCounter",
+    "get_token_counter",
+    "count_tokens",
+    "count_message_tokens",
 ]

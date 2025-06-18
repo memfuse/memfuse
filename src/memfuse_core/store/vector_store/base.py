@@ -8,13 +8,14 @@ from typing import List, Optional, Dict, Any
 import numpy as np
 
 from ..base import StoreBase
-from ...models.core import Item, Query, QueryResult
-from ...models.core import StoreType
+from ...models.core import Query, StoreType
 from ...rag.encode.base import EncoderBase
 from ...rag.encode.MiniLM import MiniLMEncoder
+from ...rag.chunk.base import ChunkData
+from ...interfaces.chunk_store import ChunkStoreInterface, StorageError
 
 
-class VectorStore(StoreBase):
+class VectorStore(StoreBase, ChunkStoreInterface):
     """Base class for vector store implementations.
 
     This class provides a common interface and default implementations for vector stores.
@@ -22,6 +23,8 @@ class VectorStore(StoreBase):
     implementations if needed.
 
     The registry pattern has been moved to the factory for better separation of concerns.
+
+    Implements ChunkStoreInterface for unified chunk handling across all store types.
     """
 
     def __init__(
@@ -139,100 +142,177 @@ class VectorStore(StoreBase):
                     # Last resort: return 384-dimensional vectors
                     return [np.zeros(384) for _ in texts]
 
-    async def add(self, item: Item) -> str:
-        """Add an item to the store.
+    async def add(self, chunks: List[ChunkData]) -> List[str]:
+        """Add chunks to the vector store.
 
         Args:
-            item: Item to add
+            chunks: List of chunks to add to the store
 
         Returns:
-            ID of the added item
+            List of added chunk IDs
+
+        Raises:
+            StorageError: If chunks cannot be added
         """
-        start_time = time.time()
-        try:
-            # Generate embedding
-            embedding = await self._generate_embedding(item.content)
-
-            # Add with embedding
-            result = await self.add_with_embedding(item, embedding)
-
-            # Update metrics
-            self.metrics["add_time"] += time.time() - start_time
-            self.metrics["add_count"] += 1
-
-            # Invalidate query cache
-            self.query_cache = {}
-
-            return result
-        except Exception as e:
-            logger.error(f"Error adding item: {e}")
-            raise
-
-    async def add_batch(self, items: List[Item]) -> List[str]:
-        """Add multiple items to the store.
-
-        Args:
-            items: Items to add
-
-        Returns:
-            List of IDs of the added items
-        """
-        if not items:
+        if not chunks:
             return []
 
         start_time = time.time()
         try:
-            # Generate embeddings
-            contents = [item.content for item in items]
+            # Generate embeddings for all chunks
+            contents = [chunk.content for chunk in chunks]
             embeddings = await self._generate_embeddings(contents)
 
-            # Add with embeddings
-            result = await self.add_batch_with_embeddings(items, embeddings)
+            # Add chunks with embeddings
+            result = await self.add_with_embeddings(chunks, embeddings)
 
             # Update metrics
             self.metrics["add_time"] += time.time() - start_time
-            self.metrics["add_count"] += len(items)
+            self.metrics["add_count"] += len(chunks)
 
             # Invalidate query cache
             self.query_cache = {}
 
             return result
+
         except Exception as e:
-            logger.error(f"Error adding batch: {e}")
-            raise
+            logger.error(f"Error adding chunks to vector store: {e}")
+            raise StorageError(
+                f"Failed to add chunks: {e}",
+                store_type="vector",
+                operation="add"
+            )
 
     @abstractmethod
-    async def add_with_embedding(self, item: Item, embedding: np.ndarray) -> str:
-        """Add an item with a pre-computed embedding.
+    async def add_with_embeddings(self, chunks: List[ChunkData], embeddings: List[np.ndarray]) -> List[str]:
+        """Add chunks with pre-computed embeddings.
 
         Args:
-            item: Item to add
-            embedding: Pre-computed embedding
-
-        Returns:
-            ID of the added item
-        """
-        pass
-
-    @abstractmethod
-    async def add_batch_with_embeddings(self, items: List[Item], embeddings: List[np.ndarray]) -> List[str]:
-        """Add multiple items with pre-computed embeddings.
-
-        Args:
-            items: Items to add
+            chunks: Chunks to add
             embeddings: Pre-computed embeddings
 
         Returns:
-            List of IDs of the added items
+            List of IDs of the added chunks
+        """
+        pass
+
+    async def read(self, chunk_ids: List[str], filters: Optional[Dict[str, Any]] = None) -> List[Optional[ChunkData]]:
+        """Read: Get chunks by their IDs with optional metadata filters.
+
+        This is a database-level read operation that retrieves chunks by exact IDs
+        and optionally filters by metadata conditions.
+
+        Args:
+            chunk_ids: List of chunk IDs to retrieve
+            filters: Optional metadata filters (e.g., {"user_id": "123", "type": "chunk"})
+
+        Returns:
+            List of ChunkData objects, None for chunks not found or filtered out
+
+        Raises:
+            StorageError: If chunks cannot be retrieved
+        """
+        try:
+            chunks = await self.get_chunks_by_ids(chunk_ids)
+
+            # Apply metadata filters if provided
+            if filters:
+                filtered_chunks = []
+                for chunk in chunks:
+                    if chunk is None:
+                        filtered_chunks.append(None)
+                        continue
+
+                    # Check if chunk matches all filter conditions
+                    matches = True
+                    for key, value in filters.items():
+                        if chunk.metadata.get(key) != value:
+                            matches = False
+                            break
+
+                    if matches:
+                        filtered_chunks.append(chunk)
+                    else:
+                        filtered_chunks.append(None)
+
+                return filtered_chunks
+
+            return chunks
+
+        except Exception as e:
+            logger.error(f"Error reading chunks from vector store: {e}")
+            raise StorageError(
+                f"Failed to read chunks: {e}",
+                store_type="vector",
+                operation="read"
+            )
+
+    async def update(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update: Modify an existing chunk.
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+
+        Returns:
+            True if successful, False if chunk not found
+
+        Raises:
+            StorageError: If chunk cannot be updated
+        """
+        try:
+            # Generate new embedding for updated content
+            embedding = await self._generate_embedding(chunk.content)
+
+            # Update chunk with new embedding
+            success = await self.update_chunk_with_embedding(chunk_id, chunk, embedding)
+
+            if success:
+                # Invalidate query cache
+                self.query_cache = {}
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Error updating chunk in vector store: {e}")
+            raise StorageError(
+                f"Failed to update chunk: {e}",
+                store_type="vector",
+                operation="update"
+            )
+
+    @abstractmethod
+    async def update_chunk_with_embedding(self, chunk_id: str, chunk: ChunkData, embedding: np.ndarray) -> bool:
+        """Update a chunk with pre-computed embedding (implementation specific).
+
+        Args:
+            chunk_id: ID of the chunk to update
+            chunk: New chunk data
+            embedding: Pre-computed embedding
+
+        Returns:
+            True if successful, False if chunk not found
         """
         pass
 
     @abstractmethod
-    async def get_embedding(self, item_id: str) -> Optional[np.ndarray]:
-        """Get the embedding for an item.
+    async def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Optional[ChunkData]]:
+        """Get chunks by their IDs (implementation specific).
 
         Args:
-            item_id: ID of the item
+            chunk_ids: List of chunk IDs to retrieve
+
+        Returns:
+            List of ChunkData objects, None for chunks not found
+        """
+        pass
+
+    @abstractmethod
+    async def get_embedding(self, chunk_id: str) -> Optional[np.ndarray]:
+        """Get the embedding for a chunk.
+
+        Args:
+            chunk_id: ID of the chunk
 
         Returns:
             Embedding if found, None otherwise
@@ -240,8 +320,8 @@ class VectorStore(StoreBase):
         pass
 
     @abstractmethod
-    async def query_by_embedding(self, embedding: np.ndarray, top_k: int = 5, query: Optional[Query] = None) -> List[QueryResult]:
-        """Query the store by embedding.
+    async def query_by_embedding_chunks(self, embedding: np.ndarray, top_k: int = 5, query: Optional[Query] = None) -> List[ChunkData]:
+        """Query the store by embedding and return chunks.
 
         Args:
             embedding: Query embedding
@@ -249,96 +329,112 @@ class VectorStore(StoreBase):
             query: Original query object for filtering (optional)
 
         Returns:
-            List of query results
+            List of ChunkData objects
         """
         pass
 
-    @abstractmethod
-    async def get_nearest_neighbors(self, item_id: str, top_k: int = 5) -> List[QueryResult]:
-        """Get the nearest neighbors of an item.
-
-        Args:
-            item_id: ID of the item
-            top_k: Number of results to return
+    async def count(self) -> int:
+        """Get the total number of chunks in the store.
 
         Returns:
-            List of query results
+            Total number of chunks stored
+
+        Raises:
+            StorageError: If count cannot be retrieved
+        """
+        try:
+            return await self.get_chunk_count()
+        except Exception as e:
+            logger.error(f"Error counting chunks in vector store: {e}")
+            raise StorageError(
+                f"Failed to count chunks: {e}",
+                store_type="vector",
+                operation="count"
+            )
+
+    @abstractmethod
+    async def get_chunk_count(self) -> int:
+        """Get the total number of chunks in the store (implementation specific).
+
+        Returns:
+            Total number of chunks stored
         """
         pass
 
-    async def update(self, item_id: str, item: Item) -> bool:
-        """Update an item.
+    async def clear(self) -> bool:
+        """Clear all chunks from the store.
 
-        Args:
-            item_id: ID of the item to update
-            item: New item data
+        Returns:
+            True if successful, False otherwise
+
+        Raises:
+            StorageError: If store cannot be cleared
+        """
+        try:
+            return await self.clear_all_chunks()
+        except Exception as e:
+            logger.error(f"Error clearing vector store: {e}")
+            raise StorageError(
+                f"Failed to clear store: {e}",
+                store_type="vector",
+                operation="clear"
+            )
+
+    @abstractmethod
+    async def clear_all_chunks(self) -> bool:
+        """Clear all chunks from the store (implementation specific).
 
         Returns:
             True if successful, False otherwise
         """
-        try:
-            # Generate embedding
-            embedding = await self._generate_embedding(item.content)
+        pass
 
-            # Update with embedding
-            if hasattr(self, 'update_with_embedding'):
-                return await self.update_with_embedding(item_id, item, embedding)
-            else:
-                # Default implementation: delete and add
-                await self.delete(item_id)
-                await self.add_with_embedding(item, embedding)
-                return True
-        except Exception as e:
-            logger.error(f"Error updating item: {e}")
-            return False
-
-    async def update_batch(self, item_ids: List[str], items: List[Item]) -> List[bool]:
-        """Update multiple items.
+    async def delete(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks by their IDs.
 
         Args:
-            item_ids: IDs of the items to update
-            items: New item data
+            chunk_ids: List of chunk IDs to delete
 
         Returns:
-            List of success flags
+            List of deletion success flags (True if deleted, False if not found)
+
+        Raises:
+            StorageError: If chunks cannot be deleted
         """
-        if not items:
-            return []
-
         try:
-            # Generate embeddings
-            contents = [item.content for item in items]
-            embeddings = await self._generate_embeddings(contents)
-
-            # Update with embeddings
-            if hasattr(self, 'update_batch_with_embeddings'):
-                return await self.update_batch_with_embeddings(item_ids, items, embeddings)
-            else:
-                # Default implementation: update one by one
-                results = []
-                for item_id, item, embedding in zip(item_ids, items, embeddings):
-                    if hasattr(self, 'update_with_embedding'):
-                        result = await self.update_with_embedding(item_id, item, embedding)
-                    else:
-                        # Delete and add
-                        await self.delete(item_id)
-                        await self.add_with_embedding(item, embedding)
-                        result = True
-                    results.append(result)
-                return results
+            return await self.delete_chunks_by_ids(chunk_ids)
         except Exception as e:
-            logger.error(f"Error updating batch: {e}")
-            return [False] * len(items)
+            logger.error(f"Error deleting chunks from vector store: {e}")
+            raise StorageError(
+                f"Failed to delete chunks: {e}",
+                store_type="vector",
+                operation="delete"
+            )
 
-    async def query(self, query: Query, top_k: int = 5) -> List[QueryResult]:
-        """Query the store.
+    @abstractmethod
+    async def delete_chunks_by_ids(self, chunk_ids: List[str]) -> List[bool]:
+        """Delete chunks by their IDs (implementation specific).
 
         Args:
-            query: Query to execute
-            top_k: Number of results to return
+            chunk_ids: List of chunk IDs to delete
 
         Returns:
-            List of query results
+            List of deletion success flags
+        """
+        pass
+
+    async def query(self, query: Query, top_k: int = 5) -> List[ChunkData]:
+        """Query relevant chunks based on the query.
+
+        Args:
+            query: Query object containing search text and metadata
+            top_k: Maximum number of results to return
+
+        Returns:
+            List of relevant ChunkData objects, sorted by relevance score
+
+        Raises:
+            StorageError: If query cannot be executed
         """
         start_time = time.time()
         try:
@@ -358,42 +454,43 @@ class VectorStore(StoreBase):
             # Generate embedding
             embedding = await self._generate_embedding(query.text)
 
-            # Query by embedding with the original query object for filtering
-            # The query object contains user_id which will be used for filtering at the database level
-            results = await self.query_by_embedding(embedding, top_k, query)
+            # Query by embedding
+            chunks = await self.query_by_embedding_chunks(embedding, top_k, query)
             logger.debug(
-                f"Retrieved results with user_id filter: {user_id}, got {len(results)} results")
+                f"Retrieved {len(chunks)} chunks with user_id filter: {user_id}")
 
-            # Apply user_id filter as a post-processing step
+            # Apply user_id filter
             if query.metadata and "user_id" in query.metadata:
                 user_id = query.metadata["user_id"]
-                filtered_results = []
-                for result in results:
-                    result_user_id = result.metadata.get("user_id")
-                    if result_user_id == user_id:
-                        filtered_results.append(result)
+                filtered_chunks = []
+                for chunk in chunks:
+                    chunk_user_id = chunk.metadata.get("user_id")
+                    if chunk_user_id == user_id:
+                        filtered_chunks.append(chunk)
                     else:
                         logger.debug(
-                            f"Post-filtering: Removing result with user_id={result_user_id}, expected {user_id}")
+                            f"Post-filtering: Removing chunk with user_id={chunk_user_id}, expected {user_id}")
 
-                results = filtered_results
+                chunks = filtered_chunks
 
-            # Apply other filters (include_messages, include_knowledge)
+            # Apply type filters
             if query.metadata:
                 include_messages = query.metadata.get("include_messages", True)
-                include_knowledge = query.metadata.get(
-                    "include_knowledge", True)
+                include_knowledge = query.metadata.get("include_knowledge", True)
+                include_chunks = query.metadata.get("include_chunks", True)
 
-                filtered_results = []
-                for result in results:
-                    item_type = result.metadata.get("type")
-                    if (item_type == "message" and include_messages) or (item_type == "knowledge" and include_knowledge):
-                        filtered_results.append(result)
+                filtered_chunks = []
+                for chunk in chunks:
+                    chunk_type = chunk.metadata.get("type")
+                    if ((chunk_type == "message" and include_messages) or
+                        (chunk_type == "knowledge" and include_knowledge) or
+                            (chunk_type == "chunk" and include_chunks)):
+                        filtered_chunks.append(chunk)
 
-                results = filtered_results[:top_k]
+                chunks = filtered_chunks[:top_k]
 
             # Cache results
-            self.query_cache[cache_key] = results
+            self.query_cache[cache_key] = chunks
 
             # Limit cache size
             if len(self.query_cache) > self.cache_size:
@@ -405,10 +502,15 @@ class VectorStore(StoreBase):
             self.metrics["query_time"] += time.time() - start_time
             self.metrics["query_count"] += 1
 
-            return results
+            return chunks
+
         except Exception as e:
-            logger.error(f"Error querying store: {e}")
-            return []
+            logger.error(f"Error querying chunks from vector store: {e}")
+            raise StorageError(
+                f"Failed to query chunks: {e}",
+                store_type="vector",
+                operation="query"
+            )
 
     def get_metrics(self) -> Dict[str, Any]:
         """Get performance metrics.

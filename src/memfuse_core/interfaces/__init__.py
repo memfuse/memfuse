@@ -33,6 +33,9 @@ from .buffer_component_interface import BufferComponentInterface
 # Storage handler
 from .storage_handler import MemoryServiceStorageHandler
 
+# Message interface
+from .message_interface import MessageInterface, MessageList, MessageBatchList
+
 __all__ = [
     # Model provider interfaces
     "ModelProvider",
@@ -60,4 +63,9 @@ __all__ = [
 
     # Storage handler
     "MemoryServiceStorageHandler",
+
+    # Message interface
+    "MessageInterface",
+    "MessageList",
+    "MessageBatchList",
 ]

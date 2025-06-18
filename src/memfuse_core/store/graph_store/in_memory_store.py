@@ -645,11 +645,13 @@ class InMemoryGraphStore(GraphStore):
             # Filter results based on metadata
             if query.metadata:
                 include_messages = query.metadata.get("include_messages", True)
-                include_knowledge = query.metadata.get(
-                    "include_knowledge", True)
+                include_knowledge = query.metadata.get("include_knowledge", True)
+                include_chunks = query.metadata.get("include_chunks", True)
 
                 item_type = node.metadata.get("type")
-                if (item_type == "message" and not include_messages) or (item_type == "knowledge" and not include_knowledge):
+                if ((item_type == "message" and not include_messages) or
+                    (item_type == "knowledge" and not include_knowledge) or
+                    (item_type == "chunk" and not include_chunks)):
                     continue
 
             results.append(
