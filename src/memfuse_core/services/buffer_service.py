@@ -626,7 +626,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         query_stats = self.query_buffer.get_stats()
         
         return {
-            "version": "0.1.1",
+            "version": "0.2.0",
             "total_items_added": self.total_items_added,
             "total_queries": self.total_queries,
             "total_transfers": self.total_transfers,
