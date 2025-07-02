@@ -40,7 +40,7 @@ _model_cache: Dict[str, Any] = {}
 
 
 def get_model(model_name: str) -> Any:
-    """Get a model by name.
+    """Get a model by name with global service priority.
 
     Args:
         model_name: Name of the model to load
@@ -48,11 +48,38 @@ def get_model(model_name: str) -> Any:
     Returns:
         Loaded model
     """
+
+    # Priority 1: 全局服务管理器
+    try:
+        from ..services.global_service_manager import get_global_service_manager
+        global_manager = get_global_service_manager()
+        global_embedding = global_manager.get_embedding_model()
+
+        if global_embedding is not None:
+            logger.debug(f"Using global embedding model from service manager")
+            return global_embedding
+    except Exception as e:
+        logger.debug(f"Could not get global embedding model: {e}")
+
+    # Priority 2: ServiceFactory共享模型
+    try:
+        from ..services.service_factory import ServiceFactory
+        shared_embedding = ServiceFactory.get_global_embedding_model()
+        if shared_embedding is not None:
+            logger.debug(f"Using shared embedding model from ServiceFactory")
+            return shared_embedding
+    except Exception as e:
+        logger.debug(f"Could not get shared embedding model: {e}")
+
+    # Priority 3: 本地缓存 (最后选择)
     if model_name in _model_cache:
+        logger.debug(f"Using cached model: {model_name}")
         return _model_cache[model_name]
 
+    # Priority 4: 创建新模型 (性能警告)
     if SENTENCE_TRANSFORMERS_AVAILABLE:
         try:
+            logger.warning(f"Creating new embedding model: {model_name} (performance impact)")
             model = SentenceTransformer(model_name, trust_remote_code=True)
             _model_cache[model_name] = model
             return model

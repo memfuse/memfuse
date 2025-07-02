@@ -4,6 +4,8 @@
 
 MemFuse implements a three-layer hierarchical memory system positioned between the Memory Service and Storage Layer, inspired by human cognitive memory processes. This system organizes information at different levels of abstraction to enable sophisticated memory processing, consolidation, and retrieval that mirrors human memory cognition.
 
+The memory hierarchy follows the design philosophy of **"Service Layer Perceives, Memory Layer Thinks, Storage Layer Remembers"**, implementing a progressive information processing pipeline from raw experiences to structured knowledge.
+
 ## Architecture Principles
 
 ### Human Memory Cognitive Theory Foundation
@@ -20,20 +22,22 @@ Based on established cognitive neuroscience research, human memory consists of d
 
 ### MemFuse Memory Layer Mapping
 
+The three-layer architecture implements a progressive information processing pipeline:
+
 **Layer 0 - Episodic Memory Layer**:
-- Stores raw conversational episodes with full contextual information
-- Maintains temporal sequences and experiential details
-- Provides immediate access to recent experiences
+- **Core Function**: Records "what happened" - preserves raw conversational episodes with complete contextual information
+- **Implementation Status**: ✅ **Active** - Fully implemented with Multi-Path indexing (vector, keyword, temporal/metadata)
+- **Key Features**: Maintains temporal sequences, experiential details, and provides immediate access to recent experiences
 
 **Layer 1 - Semantic Memory Layer**:
-- Extracts and consolidates factual knowledge from episodic experiences
-- Performs conflict detection and temporal reasoning
-- Creates structured, validated knowledge representations
+- **Core Function**: Extracts "what is" - transforms episodic experiences into decontextualized, verifiable facts
+- **Implementation Status**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT activated in MemoryService
+- **Key Features**: Designed for knowledge abstraction, conflict resolution, and structured knowledge representations (not currently used)
 
 **Layer 2 - Relational Knowledge Layer**:
-- Builds interconnected knowledge networks from semantic facts
-- Enables complex reasoning through relationship modeling
-- Supports cross-session knowledge integration and inference
+- **Core Function**: Understands "why and how" - builds interconnected knowledge networks enabling complex reasoning
+- **Implementation Status**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT activated in MemoryService
+- **Key Features**: Designed for relationship modeling, cross-session integration, and sophisticated inference capabilities (not currently used)
 
 ### Architectural Positioning
 
@@ -46,13 +50,29 @@ This positioning allows for:
 - **Storage Abstraction**: Database-agnostic architectural design
 - **Service Integration**: Seamless integration with existing memory services
 
+### Current Implementation Status
+
+The MemFuse memory hierarchy is currently **partially operational** with only L0 layer actively processing data:
+
+- **L0 (Episodic)**: ✅ **Active** - Handles immediate message storage and retrieval through MemoryService
+- **L1 (Semantic)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
+- **L2 (Relational)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
+
+**Current Data Flow**: `API → BufferService → MemoryService → L0 Processing Only → Store Classes`
+
+**Processing Model**: MemoryService currently only processes L0 episodic memory. L1 and L2 layers exist as complete implementations in the hierarchy/ directory but are not activated or integrated into the main execution flow.
+
+**Future Vision**: The architecture is designed for eventual unified Memory Layer abstraction where MemoryService would call a single Memory Layer that handles parallel L0/L1/L2 processing internally, completely decoupled from MemoryService logic.
+
 ## Layer Architecture
 
 ### Layer 0: Episodic Memory Layer
 
 **Purpose**: Store and maintain raw conversational episodes with full contextual and temporal information, mirroring human episodic memory for specific experiences and events.
 
-**Cognitive Function**: Episodic memory in humans stores autobiographical events with rich contextual details including time, place, emotions, and associated circumstances. This layer preserves the experiential nature of conversations.
+**Cognitive Analogy**: Human Episodic Memory - stores specific, autobiographical events with temporal, spatial, and emotional context, preserving the complete experiential nature of conversations.
+
+**Core Function**: Faithfully records everything, preserving complete snapshots of every conversation with all contextual metadata and enabling multi-path indexing for different query optimization paths.
 
 #### Core Components
 
@@ -63,12 +83,12 @@ This positioning allows for:
 - **Temporal Sequences**: Chronological ordering and relationship between episodes
 - **Source Attribution**: Complete provenance tracking for each conversational episode
 
-**Multi-Modal Indexing Infrastructure**:
+**Multi-Path Indexing Infrastructure**:
 - **Vector Indexing**: Semantic embedding-based similarity search across episodes
 - **Keyword Indexing**: Full-text search capabilities for content-based retrieval
-- **Graph Indexing**: Relationship-based indexing for contextual connections
-- **Temporal Indexing**: Time-based access patterns and chronological retrieval
-- **Metadata Indexing**: Structured search across contextual attributes
+- **Temporal/Metadata Indexing**: Time-based access patterns and structured contextual search
+
+**Key Technology**: Parallel establishment of Vector and Keyword indices to support both semantic similarity and exact text matching retrieval, enabling comprehensive episode access patterns for different query optimization paths.
 
 **Storage Abstraction Layer**:
 - **Database-Agnostic Design**: Support for multiple storage backends without architectural changes
@@ -79,7 +99,7 @@ This positioning allows for:
 
 #### Key Features
 
-**Multi-Modal Indexing Strategy**:
+**Multi-Path Indexing Strategy**:
 - **Parallel Processing**: Simultaneous indexing across all store types
 - **Consistency Guarantees**: ACID transactions for metadata operations
 - **Incremental Updates**: Efficient updates without full reindexing
@@ -105,20 +125,59 @@ This positioning allows for:
 
 #### Data Flow Architecture
 
+**L0 Episodic Memory Ingestion Flow**:
+
+```mermaid
+---
+config:
+  layout: dagre
+  theme: neo
+---
+flowchart TD
+ subgraph indexing_sub["Multi-Path Indexing"]
+    direction LR
+        VectorIndex["Vector Index<br>(Semantic Similarity)"]
+        KeywordIndex["Keyword Index<br>(Text Matching)"]
+        TemporalIndex["Temporal/Meta Index<br>(Time & Context)"]
+  end
+ subgraph l0_flow["L0: Episodic Memory Ingestion Flow"]
+        EpisodeFormation["Episode Formation<br>(Conversation Segmentation)"]
+        Input["Conversation Data<br>(Raw Dialogue)"]
+        indexing_sub
+        Storage["Persist to Storage Layer<br>(Multi-Path Storage)"]
+        TriggerL1["Trigger L1 Fact Extraction<br>(Semantic Processing)"]
+  end
+    Input --> EpisodeFormation
+    EpisodeFormation --> indexing_sub
+    indexing_sub --> Storage
+    Storage --> TriggerL1
+     VectorIndex:::node_style
+     KeywordIndex:::node_style
+     TemporalIndex:::node_style
+     EpisodeFormation:::node_style
+     Input:::node_style
+     indexing_sub:::header_style
+     Storage:::node_style
+     TriggerL1:::node_style
+     l0_flow:::header_style
+    classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap
+    classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap
+    classDef node_style fill:#E3F2FD,stroke:#42A5F5
+```
+
 **Episode Ingestion Pipeline**:
 ```
-Memory Service → Episode Formation → Contextual Enrichment → Multi-Modal Indexing → Layer 1 Trigger
+Memory Service → Episode Formation → Contextual Enrichment → Multi-Path Indexing → Layer 1 Trigger
                         ↓                    ↓                        ↓
                 Episode Boundaries    Temporal Context      Parallel Processing:
                 Session Context       Metadata Extraction   - Vector Embeddings
                 User Context         Emotional Context      - Keyword Indexing
-                                                           - Graph Relationships
                                                            - Temporal Sequences
 ```
 
 **Episodic Retrieval Pipeline**:
 ```
-Memory Service Query → Context Analysis → Multi-Modal Search → Episode Reconstruction → Response
+Memory Service Query → Context Analysis → Multi-Path Search → Episode Reconstruction → Response
                               ↓                  ↓                    ↓
                       Session Context    - Semantic Similarity    Full Episode Context
                       Temporal Context   - Keyword Matching       Temporal Relationships
@@ -189,7 +248,9 @@ l0_performance:
 
 **Purpose**: Extract and consolidate semantic knowledge from episodic experiences, mirroring the human semantic memory system that stores general knowledge and facts independent of specific experiential contexts.
 
-**Cognitive Function**: Semantic memory in humans contains general knowledge, facts, and concepts that have been abstracted from specific episodic experiences. This layer transforms contextual episodes into decontextualized, generalizable knowledge.
+**Cognitive Analogy**: Human Semantic Memory - stores decontextualized, universal facts that have been abstracted from specific episodic experiences, creating a repository of general knowledge.
+
+**Core Function**: Extracts universal knowledge from L0 episodes through LLM-based abstraction, performing knowledge validation, conflict detection, temporal processing, and memory consolidation to produce high-quality, structured fact repositories.
 
 #### Core Components
 
@@ -223,13 +284,15 @@ l0_performance:
 - **Temporal Anchoring**: Linking relative times to absolute timestamps
 - **Timeline Construction**: Building coherent timelines from facts
 
-**Consolidation Engine**:
-- **Background Scheduler**: Configurable periodic consolidation tasks
+**Memory Consolidation Engine**:
+- **Background Scheduler**: Configurable periodic consolidation tasks (analogous to sleep-time memory consolidation)
 - **Fact Verification**: Re-validation of historical facts with new context
 - **Redundancy Detection**: Identification and merging of duplicate facts
 - **Confidence Updates**: Dynamic confidence score adjustments
 - **Source Integration**: Incorporation of new sources for existing facts
 - **Performance Monitoring**: Consolidation effectiveness tracking
+
+**Key Process**: Memory Consolidation - a critical background process where the system periodically reviews, validates, merges, and optimizes existing facts, similar to how the human brain organizes memories during sleep.
 
 #### Key Features
 
@@ -269,6 +332,32 @@ l0_performance:
 - **Adaptive Scheduling**: Dynamic consolidation frequency based on activity
 
 #### Processing Workflows
+
+**L1 Semantic Memory Abstraction & Consolidation Flow**:
+
+```mermaid
+---
+config:
+  theme: neo
+---
+graph TD
+    subgraph l1_flow ["L1: Semantic Memory Abstraction & Consolidation Flow"]
+        Input["L0 Episodic Chunks<br/>(Conversation Episodes)"] --> AbstractionEngine["Knowledge Abstraction Engine (LLM)<br/>(Fact Extraction)"]
+        subgraph processing_sub ["Fact Processing Pipeline"]
+            direction LR
+            ConflictDetection["Conflict Detection"] --> TemporalProcessing["Temporal Processing"] --> Consolidation["Memory Consolidation"]
+        end
+        AbstractionEngine -- "Extract Raw Facts" --> processing_sub
+        processing_sub --> Output["Structured Facts<br/>(Knowledge Repository)<br/>Store in Database"]
+        Output --> TriggerL2["Trigger L2 Relationship Building<br/>(Graph Construction)"]
+    end
+    classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap;
+    classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap;
+    classDef node_style fill:#E8F5E9,stroke:#66BB6A;
+    class Input,AbstractionEngine,ConflictDetection,TemporalProcessing,Consolidation,Output,TriggerL2 node_style;
+    l1_flow:::header_style;
+    processing_sub:::header_style;
+```
 
 **Real-Time Fact Extraction**:
 ```
@@ -354,7 +443,9 @@ l1:
 
 **Purpose**: Build and maintain interconnected knowledge networks that model complex relationships between semantic concepts, enabling sophisticated reasoning and inference capabilities that extend beyond individual facts.
 
-**Cognitive Function**: This layer represents the human brain's ability to form complex associative networks between concepts, enabling analogical reasoning, inference, and the discovery of implicit relationships between seemingly unrelated knowledge domains.
+**Cognitive Analogy**: Higher Cognitive Functions - represents the human brain's ability to form complex associative networks between concepts, enabling analogical reasoning, inference, and discovery of implicit relationships.
+
+**Core Function**: Extracts entities and relationships from L1 facts to construct knowledge graphs, enabling advanced reasoning (multi-hop queries) and advanced retrieval (DPR/PPR) for contextual answers and insights generation.
 
 #### Core Components
 
@@ -399,12 +490,14 @@ l1:
 - **Person Analytics**: Individual knowledge pattern analysis
 
 **Advanced Retrieval System**:
-- **Dense Passage Retrieval (DPR)**: Semantic similarity-based retrieval
-- **Personalized PageRank (PPR)**: Relationship-importance based ranking
-- **Graph Neural Networks**: Advanced graph embedding and reasoning
-- **Multi-Hop Reasoning**: Complex relationship chain traversal
-- **Contextual Ranking**: Query context-aware result ranking
-- **Hybrid Retrieval**: Combination of multiple retrieval strategies
+- **Dense Passage Retrieval (DPR)**: Semantic similarity-based retrieval for precise content matching
+- **Personalized PageRank (PPR)**: Relationship-importance based ranking for contextual relevance
+- **Graph Neural Networks**: Advanced graph embedding and reasoning capabilities
+- **Multi-Hop Reasoning**: Complex relationship chain traversal for deep insights
+- **Contextual Ranking**: Query context-aware result ranking and optimization
+- **Hybrid Retrieval**: Combination of multiple retrieval strategies for comprehensive results
+
+**Key Value**: Knowledge graphs enable advanced reasoning capabilities and sophisticated retrieval mechanisms that go beyond simple fact lookup to provide contextual understanding and insights.
 
 #### Key Features
 
@@ -433,7 +526,7 @@ l1:
 - **Explanation Generation**: Reasoning path explanation and visualization
 
 **Sophisticated Retrieval Strategies**:
-- **Multi-Modal Queries**: Support for various query types and modalities
+- **Multi-Path Queries**: Support for various query types and modalities
 - **Contextual Adaptation**: Query adaptation based on session/person context
 - **Relevance Feedback**: Learning from user feedback and interactions
 - **Diversity Optimization**: Ensuring diverse and comprehensive results
@@ -441,6 +534,34 @@ l1:
 - **Explainable Results**: Transparent reasoning paths for retrieved results
 
 #### Processing Workflows
+
+**L2 Relational Knowledge Construction & Reasoning Flow**:
+
+```mermaid
+---
+config:
+  theme: neo
+---
+graph TD
+    subgraph l2_flow ["L2: Relational Knowledge Construction & Reasoning Flow"]
+        Input["L1 Structured Facts<br/>(Semantic Knowledge)"] --> Extraction["Entity & Relationship Extraction<br/>(Graph Element Identification)"]
+        Extraction --> KG["Knowledge Graph Construction & Maintenance<br/>(Network Building)"]
+        subgraph reasoning_sub ["Advanced Applications"]
+            direction LR
+            Reasoning["Multi-hop Reasoning<br/>(Complex Inference)"]
+            Retrieval["Advanced Retrieval (DPR/PPR)<br/>(Contextual Search)"]
+            Insights["Insight Generation<br/>(Knowledge Discovery)"]
+        end
+        KG --> reasoning_sub
+        reasoning_sub --> Output["Contextual Answers & Insights<br/>(Intelligent Responses)"]
+    end
+    classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap;
+    classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap;
+    classDef node_style fill:#F3E5F5,stroke:#AB47BC;
+    class Input,Extraction,KG,Reasoning,Retrieval,Insights,Output node_style;
+    l2_flow:::header_style;
+    reasoning_sub:::header_style;
+```
 
 **Knowledge Graph Construction**:
 ```
@@ -880,6 +1001,50 @@ hierarchy:
 
 ### Overall Architecture Flow
 
+The following diagram shows the three-layer memory hierarchy implementing the progressive information processing pipeline from experiences to knowledge to wisdom:
+
+```mermaid
+---
+config:
+  layout: dagre
+  theme: neo
+---
+flowchart TD
+ subgraph service_sub["Service Layer"]
+        MS["Memory Service<br>(Interface)"]
+  end
+ subgraph hierarchy_sub["3-Layer Memory System"]
+    direction TB
+        L0["L0: Episodic Memory<br>(Experience Layer)"]
+        L1["L1: Semantic Memory<br>(Knowledge Layer)"]
+        L2["L2: Relational Knowledge<br>(Reasoning Layer)"]
+  end
+ subgraph storage_sub["Storage Layer"]
+        SL["Database Agnostic Storage<br>(Backend)"]
+  end
+    L0 -- "Abstraction & Extraction" --> L1
+    L1 -- "Relationship Modeling & Reasoning" --> L2
+    MS -- "Raw Data I/O & Query" --> L0
+    L0 -- "Persistence" --> SL
+    L1 -- "Persistence" --> SL
+    L2 -- "Persistence" --> SL
+    MS -- "Advanced Memory Query" --> L2
+     MS:::service_style
+     L0:::l0_style
+     L1:::l1_style
+     L2:::l2_style
+     SL:::service_style
+     service_sub:::header_style
+     hierarchy_sub:::header_style
+     storage_sub:::header_style
+    classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap
+    classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap
+    classDef l0_style fill:#E3F2FD,stroke:#42A5F5
+    classDef l1_style fill:#E8F5E9,stroke:#66BB6A
+    classDef l2_style fill:#F3E5F5,stroke:#AB47BC
+    classDef service_style fill:#FFFDE7,stroke:#FDD835
+```
+
 The following diagram shows the cognitive memory hierarchy positioned between Memory Service and Storage Layer:
 
 ```mermaid
@@ -890,7 +1055,7 @@ graph TB
     %% Layer 0: Episodic Memory
     HM --> L0[Layer 0: Episodic Memory<br/>Raw Conversational Episodes]
     L0 --> ES[Episode Storage<br/>Contextual & Temporal]
-    L0 --> MI[Multi-Modal Indexing<br/>Vector, Keyword, Graph, Temporal]
+    L0 --> MI[Multi-Path Indexing<br/>Vector, Keyword, Graph, Temporal]
 
     %% Layer 1: Semantic Memory
     L0 --> L1[Layer 1: Semantic Memory<br/>Decontextualized Knowledge]
@@ -1138,7 +1303,7 @@ hierarchy_metrics:
 ## Future Enhancements
 
 ### Advanced Features
-- **Multi-Modal Support**: Integration with image, audio, and video processing
+- **Multi-Path Support**: Integration with image, audio, and video processing
 - **Federated Learning**: Distributed knowledge graph construction
 - **Causal Reasoning**: Advanced temporal and causal relationship modeling
 - **Adaptive Consolidation**: ML-driven optimization of consolidation schedules

@@ -83,6 +83,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             token_model=round_config.get('token_model', 'gpt-4o-mini')
         )
 
+        # Initialize HybridBuffer
         self.hybrid_buffer = HybridBuffer(
             max_size=hybrid_config.get('max_size', 5),
             chunk_strategy=hybrid_config.get('chunk_strategy', 'message'),
@@ -102,10 +103,6 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         
         # Set up component connections
         self.round_buffer.set_transfer_handler(self.hybrid_buffer.add_from_rounds)
-        self.hybrid_buffer.set_storage_handlers(
-            self._create_sqlite_handler(),
-            self._create_qdrant_handler()
-        )
         self.query_buffer.set_hybrid_buffer(self.hybrid_buffer)
         
         # Statistics

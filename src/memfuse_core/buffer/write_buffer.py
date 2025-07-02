@@ -57,10 +57,6 @@ class WriteBuffer:
         # Set up component connections
         self.round_buffer.set_transfer_handler(self.hybrid_buffer.add_from_rounds)
         
-        # Set up storage handlers
-        if sqlite_handler or qdrant_handler:
-            self.hybrid_buffer.set_storage_handlers(sqlite_handler, qdrant_handler)
-        
         # Statistics
         self.total_writes = 0
         self.total_transfers = 0

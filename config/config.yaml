@@ -13,4 +13,5 @@ defaults:
   - embedding: default
   - buffer: default
   - retrieval: default
+  - memory: default
   - _self_

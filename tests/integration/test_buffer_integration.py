@@ -66,11 +66,7 @@ class TestBufferIntegration:
         hybrid_buffer = HybridBuffer(max_size=3)
         query_buffer = QueryBuffer(retrieval_handler=mock_retrieval_handler)
         
-        # Set up storage handlers
-        hybrid_buffer.set_storage_handlers(
-            mock_storage_handlers["sqlite"],
-            mock_storage_handlers["qdrant"]
-        )
+
         
         # Set up transfer handler
         round_buffer.set_transfer_handler(hybrid_buffer.add_from_rounds)
@@ -146,7 +142,6 @@ class TestBufferIntegration:
         
         # Set up transfer handler
         round_buffer.set_transfer_handler(hybrid_buffer.add_from_rounds)
-        hybrid_buffer.set_storage_handlers(mock_storage_handlers["sqlite"], mock_storage_handlers["qdrant"])
         
         # Mock components
         with patch.object(hybrid_buffer, '_load_chunk_strategy'):
@@ -189,7 +184,6 @@ class TestBufferIntegration:
         
         # Set up transfer handler
         round_buffer.set_transfer_handler(hybrid_buffer.add_from_rounds)
-        hybrid_buffer.set_storage_handlers(mock_storage_handlers["sqlite"], mock_storage_handlers["qdrant"])
         
         # Mock components
         with patch.object(hybrid_buffer, '_load_chunk_strategy'):
@@ -224,7 +218,6 @@ class TestBufferIntegration:
     async def test_storage_flush_workflow(self, sample_messages, mock_storage_handlers):
         """Test storage flush workflow."""
         hybrid_buffer = HybridBuffer()
-        hybrid_buffer.set_storage_handlers(mock_storage_handlers["sqlite"], mock_storage_handlers["qdrant"])
         
         # Mock components
         with patch.object(hybrid_buffer, '_load_chunk_strategy'):
@@ -318,7 +311,6 @@ class TestBufferIntegration:
         
         # Set up components
         round_buffer.set_transfer_handler(hybrid_buffer.add_from_rounds)
-        hybrid_buffer.set_storage_handlers(mock_storage_handlers["sqlite"], mock_storage_handlers["qdrant"])
         
         # Mock components
         with patch.object(hybrid_buffer, '_load_chunk_strategy'):
@@ -404,7 +396,6 @@ class TestBufferPerformance:
         hybrid_buffer = HybridBuffer(max_size=20)
         
         round_buffer.set_transfer_handler(hybrid_buffer.add_from_rounds)
-        hybrid_buffer.set_storage_handlers(mock_storage_handlers["sqlite"], mock_storage_handlers["qdrant"])
         
         # Mock components for performance
         with patch.object(hybrid_buffer, '_load_chunk_strategy'):

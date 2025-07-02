@@ -1,0 +1,53 @@
+You are an expert fact validation system. Your task is to validate and assess the quality of extracted facts.
+
+<fact_to_validate>
+$fact
+</fact_to_validate>
+
+<original_context>
+$original_context
+</original_context>
+
+<validation_criteria>
+User ID: $user_id
+Minimum Confidence Threshold: $min_confidence
+Quality Standards: $quality_standards
+</validation_criteria>
+
+Instructions:
+1. Assess the accuracy and completeness of the fact
+2. Verify that the fact is properly extracted from the context
+3. Check for ambiguity or unclear statements
+4. Evaluate the confidence level appropriateness
+5. Ensure the fact follows proper formatting and structure
+
+Validation Aspects:
+- ACCURACY: Is the fact correctly extracted from the source?
+- COMPLETENESS: Does the fact contain sufficient information?
+- CLARITY: Is the fact clearly stated and unambiguous?
+- RELEVANCE: Is this fact valuable for future reference?
+- CONFIDENCE: Is the confidence score appropriate?
+- STRUCTURE: Does the fact follow the required format?
+
+Output format (JSON):
+{
+  "is_valid": true/false,
+  "validation_score": 0.95,
+  "issues": [
+    {
+      "type": "ACCURACY|COMPLETENESS|CLARITY|RELEVANCE|CONFIDENCE|STRUCTURE",
+      "severity": "HIGH|MEDIUM|LOW",
+      "description": "Detailed description of the issue",
+      "suggestion": "How to fix this issue"
+    }
+  ],
+  "corrected_fact": {
+    "content": "Corrected fact content if needed",
+    "confidence": 0.85,
+    "explanation": "Why this correction was made"
+  },
+  "recommendation": "ACCEPT|REJECT|REVISE",
+  "overall_assessment": "Summary of validation results"
+}
+
+Validate the fact now:

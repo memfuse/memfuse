@@ -97,7 +97,13 @@ class ServiceInitializer:
         # 2. Set global models in ServiceFactory BEFORE creating MemoryService
         await self._set_global_models_in_factory(model_service)
 
-        # 3. Initialize memory service (will now use global models)
+        # 3. Initialize global services (LLM, Conflict Detection, etc.)
+        await self._initialize_global_services(cfg)
+
+        # 4. Set global models in global service manager
+        await self._set_global_models_in_service_manager(model_service)
+
+        # 4. Initialize memory service (will now use global models and services)
         memory_service = await self._initialize_memory_service(cfg)
         if memory_service is None:
             return False
@@ -180,6 +186,65 @@ class ServiceInitializer:
 
         except Exception as e:
             logger.warning(f"Failed to set global models in ServiceFactory: {e}")
+
+    async def _initialize_global_services(self, cfg: DictConfig) -> bool:
+        """Initialize global singleton services.
+
+        Args:
+            cfg: Configuration from Hydra
+
+        Returns:
+            True if initialization successful, False otherwise
+        """
+        try:
+            from .global_service_manager import initialize_global_services
+            from omegaconf import OmegaConf
+
+            # Convert OmegaConf to dict for global services
+            config_dict = OmegaConf.to_container(cfg, resolve=True)
+
+            # Initialize global services
+            success = await initialize_global_services(config_dict)
+            if success:
+                logger.info("Global singleton services initialized successfully")
+            else:
+                logger.warning("Failed to initialize some global services")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Failed to initialize global services: {e}")
+            return False
+
+    async def _set_global_models_in_service_manager(self, model_service) -> bool:
+        """Set global models in the global service manager.
+
+        Args:
+            model_service: The model service instance
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            from .global_service_manager import get_global_service_manager
+
+            global_manager = get_global_service_manager()
+
+            # Set global embedding model
+            if hasattr(model_service, 'encoder') and model_service.encoder:
+                global_manager.set_global_models(embedding_model=model_service.encoder.model)
+                logger.info("Global service manager: Set global embedding model")
+
+            # Set global reranker
+            if hasattr(model_service, 'reranker') and model_service.reranker:
+                global_manager.set_global_models(reranker_instance=model_service.reranker)
+                logger.info("Global service manager: Set global reranker instance")
+
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to set global models in service manager: {e}")
+            return False
 
     async def _initialize_memory_service(self, cfg: DictConfig) -> Optional[MemoryService]:
         """Initialize the memory service with model integration.

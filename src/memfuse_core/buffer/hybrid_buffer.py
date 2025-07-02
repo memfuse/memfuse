@@ -9,7 +9,7 @@ This version provides:
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ..interfaces import MessageList
@@ -73,10 +73,6 @@ class HybridBuffer:
 
         # FlushManager for non-blocking operations
         self.flush_manager = flush_manager
-
-        # Storage handlers (for backward compatibility)
-        self.sqlite_handler: Optional[Callable] = None
-        self.qdrant_handler: Optional[Callable] = None
 
         # Async locks for thread safety
         self._data_lock = asyncio.Lock()  # For data operations
@@ -146,25 +142,7 @@ class HybridBuffer:
         self.flush_manager = flush_manager
         logger.debug("HybridBuffer: FlushManager set")
 
-    def set_storage_handlers(
-        self,
-        sqlite_handler: Optional[Callable] = None,
-        qdrant_handler: Optional[Callable] = None
-    ) -> None:
-        """Set storage handlers.
 
-        Args:
-            sqlite_handler: Handler for SQLite operations
-            qdrant_handler: Handler for Qdrant operations
-        """
-        self.sqlite_handler = sqlite_handler
-        self.qdrant_handler = qdrant_handler
-
-        # Update FlushManager handlers if available
-        if self.flush_manager:
-            self.flush_manager.set_handlers(sqlite_handler, qdrant_handler)
-
-        logger.debug("HybridBuffer: Storage handlers set")
     
     async def add_from_rounds(self, rounds: List[MessageList]) -> None:
         """Add rounds from RoundBuffer transfer with optimized processing.
@@ -323,14 +301,40 @@ class HybridBuffer:
         return FallbackStrategy()
     
     async def _load_embedding_model(self) -> None:
-        """Lazy load the embedding model."""
+        """Lazy load the embedding model with global service priority."""
         try:
-            from ..utils.embeddings import create_embedding
-            self.embedding_model = create_embedding
-            logger.debug(f"HybridBuffer: Loaded embedding model: {self.embedding_model_name}")
+            # Priority 1: Try to get from global service manager
+            try:
+                from ..services.global_service_manager import get_global_service_manager
+                global_manager = get_global_service_manager()
+                global_embedding = global_manager.get_embedding_model()
+
+                if global_embedding is not None:
+                    self.embedding_model = global_embedding
+                    logger.info("HybridBuffer: Using global embedding model from service manager")
+                    return
+            except Exception as e:
+                logger.debug(f"HybridBuffer: Could not get global embedding model: {e}")
+
+            # Priority 2: Try to get shared model from ServiceFactory
+            try:
+                from ..services.service_factory import ServiceFactory
+                shared_embedding = ServiceFactory.get_global_embedding_model()
+                if shared_embedding is not None:
+                    self.embedding_model = shared_embedding
+                    logger.info("HybridBuffer: Using shared embedding model from ServiceFactory")
+                    return
+            except Exception as e:
+                logger.debug(f"HybridBuffer: Could not get shared embedding model: {e}")
+
+            # Priority 3: Use optimized get_model function (with global priority)
+            from ..utils.embeddings import get_model
+            self.embedding_model = get_model(self.embedding_model_name)
+            logger.info(f"HybridBuffer: Loaded embedding model via get_model: {self.embedding_model_name}")
+
         except Exception as e:
             logger.error(f"HybridBuffer: Failed to load embedding model: {e}")
-            self.embedding_model = self._create_fallback_embedding
+            self.embedding_model = None
     
     async def _create_fallback_embedding(self, text: str) -> List[float]:
         """Create a fallback embedding."""
@@ -347,21 +351,35 @@ class HybridBuffer:
         return embedding
     
     async def _generate_embedding(self, text: str) -> List[float]:
-        """Generate embedding for text.
-        
+        """Generate embedding for text using the loaded model instance.
+
         Args:
             text: Text to embed
-            
+
         Returns:
             Embedding vector
         """
         try:
-            if callable(self.embedding_model):
+            if self.embedding_model is None:
+                logger.warning("HybridBuffer: No embedding model available, using fallback")
+                return await self._create_fallback_embedding(text)
+
+            # Check if it's a SentenceTransformer model instance
+            if hasattr(self.embedding_model, 'encode'):
+                # Direct model instance (SentenceTransformer)
+                embedding = self.embedding_model.encode(text)
+                if hasattr(embedding, 'tolist'):
+                    return embedding.tolist()
+                else:
+                    return embedding
+            elif callable(self.embedding_model):
+                # Function-based embedding (fallback)
                 if asyncio.iscoroutinefunction(self.embedding_model):
                     return await self.embedding_model(text, model=self.embedding_model_name)
                 else:
                     return self.embedding_model(text, model=self.embedding_model_name)
             else:
+                logger.warning("HybridBuffer: Unknown embedding model type, using fallback")
                 return await self._create_fallback_embedding(text)
         except Exception as e:
             logger.error(f"HybridBuffer: Embedding generation failed: {e}")
@@ -444,17 +462,7 @@ class HybridBuffer:
             if not self.original_rounds:
                 return True
 
-            rounds_to_write = self.original_rounds.copy()
-            chunks_to_write = self.chunks.copy()
-            embeddings_to_write = self.embeddings.copy()
-
-            # Write to SQLite
-            if self.sqlite_handler and rounds_to_write:
-                await self.sqlite_handler(rounds_to_write)
-
-            # Write to Qdrant
-            if self.qdrant_handler and chunks_to_write and embeddings_to_write:
-                await self.qdrant_handler(chunks_to_write, embeddings_to_write)
+            # Note: Direct storage operations removed - handled by FlushManager
 
             # Clear buffers
             self.original_rounds.clear()
@@ -478,6 +486,8 @@ class HybridBuffer:
         """
         if success:
             logger.debug("HybridBuffer: Flush completed successfully")
+            # Note: L1 triggering is now handled by ParallelMemoryAdapter in the new architecture
+            # No need to trigger L1 here as it processes data in parallel with L0
         else:
             logger.error(f"HybridBuffer: Flush failed: {error_message}")
 
@@ -518,43 +528,7 @@ class HybridBuffer:
 
         logger.info("HybridBuffer: Auto-flush loop stopped")
 
-    async def _write_to_sqlite(self, rounds: List[MessageList]) -> None:
-        """Write rounds to SQLite storage.
-        
-        Args:
-            rounds: List of MessageList objects to write
-        """
-        if self.sqlite_handler:
-            logger.info(f"HybridBuffer: Starting SQLite write for {len(rounds)} rounds")
-            await self.sqlite_handler(rounds)
-            logger.info(f"HybridBuffer: Completed SQLite write for {len(rounds)} rounds")
-    
-    async def _write_to_qdrant(self, chunks: List[ChunkData], embeddings: List[List[float]]) -> None:
-        """Write chunks to Qdrant storage using batch data.
 
-        Args:
-            chunks: List of ChunkData objects to write
-            embeddings: List of embedding vectors corresponding to chunks
-        """
-        if self.qdrant_handler:
-            # Convert chunks to points format expected by Qdrant
-            points = []
-            for i, chunk in enumerate(chunks):
-                if i < len(embeddings):
-                    point = {
-                        "id": f"chunk_{hash(chunk.content)}_{i}",
-                        "vector": embeddings[i],
-                        "payload": {
-                            "content": chunk.content,
-                            "metadata": chunk.metadata
-                        }
-                    }
-                    points.append(point)
-
-            if points:
-                logger.info(f"HybridBuffer: Writing {len(points)} points to Qdrant in batch")
-                await self.qdrant_handler(points)
-                logger.info(f"HybridBuffer: Successfully wrote {len(points)} chunks to Qdrant")
     
     async def get_all_messages_for_read_api(
         self,
@@ -629,7 +603,5 @@ class HybridBuffer:
             "total_auto_flushes": self.total_auto_flushes,
             "total_manual_flushes": self.total_manual_flushes,
             "pending_flush_tasks": len(self.pending_flush_tasks),
-            "has_flush_manager": self.flush_manager is not None,
-            "has_sqlite_handler": self.sqlite_handler is not None,
-            "has_qdrant_handler": self.qdrant_handler is not None
+            "has_flush_manager": self.flush_manager is not None
         }

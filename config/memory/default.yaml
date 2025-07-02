@@ -1,0 +1,173 @@
+# @package memory
+# MemFuse Memory System Configuration
+# Unified configuration for all memory layers and processing strategies
+
+# 🚀 CURRENT STATUS: L0/L1/L2 parallel processing architecture implemented
+# All layers have complete implementations and are ready for activation
+# Parallel processing manager coordinates writes across all layers
+
+# Layer-specific configurations
+layers:
+  l0:
+    enabled: true
+    timeout: 30.0
+    max_retries: 3
+    priority: 1
+    custom_settings:
+      buffer_size: 1000
+      auto_flush_interval: 60
+
+  l1:
+    enabled: true  # L1 Semantic Memory - fact extraction and processing
+    timeout: 45.0
+    max_retries: 3
+    priority: 2
+    
+    # Fact extraction settings
+    extraction:
+      batch_size: 5
+      context_window: 2  # chunks before/after for context
+      llm_model: "grok-3-mini"
+      max_facts_per_chunk: 10
+      min_confidence_threshold: 0.7
+      enable_entity_extraction: true
+      enable_temporal_extraction: true
+
+    # Conflict detection settings
+    conflict_detection:
+      enabled: true
+      semantic_similarity_threshold: 0.85
+      auto_resolve_threshold: 0.9
+      escalation_threshold: 0.5
+      resolution_strategies: ["evidence_based", "source_credibility", "temporal_priority"]
+
+    # Temporal processing settings
+    temporal_processing:
+      time_extraction: true
+      relative_time_resolution: true
+      timezone_normalization: "UTC"
+      uncertainty_modeling: true
+      supported_formats: ["ISO8601", "natural_language", "relative"]
+
+    # Memory consolidation settings
+    consolidation:
+      enabled: true
+      interval: 3600  # seconds (1 hour)
+      batch_size: 100
+      max_age_for_review: 604800  # 1 week in seconds
+      quality_threshold: 0.8
+      merge_similarity_threshold: 0.95
+
+    # Performance settings
+    performance:
+      enable_caching: true
+      cache_size: 1000
+      enable_async_processing: true
+      max_concurrent_extractions: 3
+      extraction_timeout: 30.0  # seconds
+
+    # Quality assessment settings
+    quality:
+      enable_quality_scoring: true
+      reliability_factors: ["source_credibility", "evidence_strength", "consistency"]
+      min_quality_score: 0.6
+      enable_fact_validation: true
+
+    # Monitoring settings
+    monitoring:
+      enable_metrics: true
+      log_level: "INFO"
+      track_performance: true
+      enable_debugging: false
+
+  l2:
+    enabled: true  # L2 Relational Memory - knowledge graph construction
+    timeout: 60.0
+    max_retries: 2
+    priority: 3
+    custom_settings:
+      graph_update_strategy: "incremental"
+      entity_resolution_threshold: 0.8
+
+# Parallel processing configuration
+# 🚀 NOTE: Parallel processing architecture implemented and ready for activation
+parallel:
+  # Strategy settings
+  default_strategy: "parallel"  # Parallel processing across L0/L1/L2 layers
+  fallback_strategy: "sequential"
+  enable_strategy_fallback: true  # Fallback to sequential if parallel fails
+  
+  # Concurrency settings (for future use)
+  max_concurrent_layers: 3
+  max_concurrent_operations: 10
+  enable_connection_pooling: true
+  connection_pool_size: 10
+  
+  # Timeout settings
+  timeout_per_layer: 30.0
+  total_operation_timeout: 120.0
+  
+  # Retry configuration
+  retry:
+    max_retries: 3
+    base_delay: 1.0
+    max_delay: 10.0
+    exponential_backoff: true
+    retry_on_timeout: true
+    retry_on_error: true
+  
+  # Performance monitoring
+  enable_performance_monitoring: true
+  performance_log_interval: 60.0
+  
+  # Error handling
+  max_error_history: 100
+  error_threshold_for_fallback: 0.5  # 50% error rate triggers fallback
+
+# Storage configuration
+storage:
+  sqlite:
+    connection_pool_size: 5
+    timeout: 30.0
+    enable_wal_mode: true
+  
+  qdrant:
+    connection_pool_size: 5
+    timeout: 30.0
+    batch_size: 100
+  
+  keyword:
+    connection_pool_size: 3
+    timeout: 15.0
+
+  # L1 specific storage (for future use)
+  l1_storage:
+    backend: "sqlite"  # or "postgres"
+    vector_store: "qdrant"
+    enable_transactions: true
+    fact_table: "l1_facts"
+    lineage_table: "l1_lineage"
+    conflicts_table: "l1_conflicts"
+
+# Integration with MemoryService
+# ⚠️  NOTE: These settings are currently IGNORED by MemoryService
+memory_service:
+  # Enable parallel processing in MemoryService (CURRENTLY DISABLED)
+  parallel_enabled: false  # Parallel processing removed from MemoryService
+  # Fallback to traditional processing on errors
+  fallback_on_error: true
+  # Log processing decisions
+  log_processing_mode: true
+
+# Development and testing settings
+development:
+  enable_debug_logging: false
+  enable_performance_profiling: false
+  mock_llm_responses: false
+  
+# Production optimizations
+production:
+  enable_metrics_collection: true
+  metrics_export_interval: 300
+  enable_health_checks: true
+  health_check_interval: 60
