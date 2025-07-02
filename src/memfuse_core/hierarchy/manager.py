@@ -1,374 +1,304 @@
-"""Manager for the memory hierarchy system."""
+"""
+Unified memory manager for the MemFuse hierarchy system.
 
-from typing import Any, List, Dict, Optional, Callable, Awaitable, Union
-import logging
+This module provides the main coordination layer that manages all memory
+layers, storage backends, and event-driven processing.
+"""
+
 import asyncio
-import time
-import os
-from .base import MemoryLayer, MemoryItem, Fact, Entity, Relationship
-from .l0 import L0Manager
-from .l1 import L1Manager, FactsDatabase, LLMService
-from .l2 import L2Manager, GraphDatabase
-from ..buffer.manager import BufferManager
-from ..utils.path_manager import PathManager
+import logging
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+
+from .core import LayerType, LayerConfig, ProcessingResult, StorageManager
+from .storage import UnifiedStorageManager
+from .layers import L0EpisodicLayer, L1SemanticLayer, L2RelationalLayer
 
 logger = logging.getLogger(__name__)
 
 
-class HierarchyMemoryManager:
-    """Manager for the memory hierarchy system.
-
-    The memory hierarchy manager coordinates between the different memory layers:
-    - L0 (Raw Data): Stores raw data in its original form
-    - L1 (Facts): Extracts and stores facts from raw data
-    - L2 (Knowledge Graph): Constructs a knowledge graph from facts
-
-    It provides a unified interface for memory operations and ensures
-    data flows correctly between the layers.
+class MemoryHierarchyManager:
     """
-
-    def __init__(
-        self,
-        user_id: str,
-        data_dir: str,
-        vector_store: Any,
-        graph_store: Any,
-        keyword_store: Any,
-        metadata_db: Any,
-        buffer_manager: Optional[BufferManager] = None,
-        config: Optional[Dict[str, Any]] = None,
-    ):
-        """Initialize the memory hierarchy manager.
-
+    Unified memory hierarchy manager.
+    
+    This manager coordinates all memory layers, storage backends, and
+    event-driven processing to provide a cohesive memory system.
+    
+    Features:
+    - Unified layer management
+    - Event-driven inter-layer communication
+    - Centralized storage management
+    - Comprehensive statistics and monitoring
+    - Graceful initialization and shutdown
+    """
+    
+    def __init__(self, user_id: str, config: Dict[str, Any]):
+        """
+        Initialize the memory hierarchy manager.
+        
         Args:
-            user_id: User ID
-            data_dir: Data directory
-            vector_store: Vector store component
-            graph_store: Graph store component
-            keyword_store: Keyword store component
-            metadata_db: Metadata database
-            buffer_manager: Buffer manager (optional)
-            config: Configuration dictionary
+            user_id: User ID for user-specific memory
+            config: Complete memory configuration
         """
         self.user_id = user_id
-        self.data_dir = data_dir
-        self.config = config or {}
-
-        # Create user directory
-        user_dir = os.path.join(data_dir, user_id)
-        PathManager.ensure_directory(user_dir)
-
-        # Create LLM service
-        self.llm_service = LLMService()
-
-        # Create buffer manager if not provided
-        self.buffer_manager = buffer_manager or BufferManager(
-            config=self.config.get("buffer", {})
-        )
-
-        # Create L0 manager
-        self.l0_manager = L0Manager(
-            vector_store=vector_store,
-            graph_store=graph_store,
-            keyword_store=keyword_store,
-            metadata_db=metadata_db,
-            buffer_manager=self.buffer_manager
-        )
-
-        # Create facts database
-        self.facts_db = FactsDatabase(data_dir=user_dir)
-
-        # Create graph database
-        self.graph_db = GraphDatabase(data_dir=user_dir)
-
-        # Create L1 manager
-        self.l1_manager = L1Manager(
-            facts_db=self.facts_db,
-            llm_service=self.llm_service,
-            buffer_manager=self.buffer_manager,
-            extraction_batch_size=self.config.get("l1", {}).get("extraction_batch_size", 5)
-        )
-
-        # Create L2 manager
-        self.l2_manager = L2Manager(
-            graph_db=self.graph_db,
-            llm_service=self.llm_service,
-            buffer_manager=self.buffer_manager,
-            construction_batch_size=self.config.get("l2", {}).get("construction_batch_size", 10)
-        )
-
-        # Connect the managers
-        self.l0_manager.l1_manager = self.l1_manager
-        self.l1_manager.l2_manager = self.l2_manager
-
-        # Register retrieval callbacks
-        self.buffer_manager.register_retrieval_callback("vector", self._vector_search)
-        self.buffer_manager.register_retrieval_callback("graph", self._graph_search)
-        self.buffer_manager.register_retrieval_callback("keyword", self._keyword_search)
-        self.buffer_manager.register_retrieval_callback("facts", self._facts_search)
-        self.buffer_manager.register_retrieval_callback("knowledge", self._knowledge_search)
-
-        # Set storage callback for writing buffer
-        self.buffer_manager.writing_buffer.flush_callback = self._process_items
-
+        self.config = config
+        self.initialized = False
+        
+        # Core components
+        self.storage_manager: Optional[StorageManager] = None
+        self.layers: Dict[LayerType, Any] = {}
+        
         # Statistics
-        self.total_items_added = 0
-        self.total_queries = 0
-        self.total_query_time = 0
-
-    async def _process_items(self, items: List[Any]) -> List[str]:
-        """Process items from the writing buffer.
-
-        Args:
-            items: Items to process
-
-        Returns:
-            List of processed item IDs
+        self.total_operations = 0
+        self.total_errors = 0
+        self.start_time = datetime.utcnow()
+        
+        logger.info(f"MemoryHierarchyManager: Created for user {user_id}")
+    
+    async def initialize(self) -> bool:
         """
-        return await self.l0_manager.process_batch(items)
-
-    async def _vector_search(self, query: str, top_k: int) -> List[Any]:
-        """Search the vector store.
-
-        Args:
-            query: Query string
-            top_k: Number of results to return
-
+        Initialize the complete memory hierarchy.
+        
         Returns:
-            List of matching items
+            True if initialization successful
         """
-        results = await self.l0_manager.search(query, top_k=top_k, store_type="vector")
-
-        # Add retrieval method to metadata
-        for result in results:
-            if hasattr(result, 'metadata'):
-                result.metadata["retrieval"] = {"method": "vector", "layer": "l0"}
-
-        return results
-
-    async def _graph_search(self, query: str, top_k: int) -> List[Any]:
-        """Search the graph store.
-
-        Args:
-            query: Query string
-            top_k: Number of results to return
-
-        Returns:
-            List of matching items
-        """
-        results = await self.l0_manager.search(query, top_k=top_k, store_type="graph")
-
-        # Add retrieval method to metadata
-        for result in results:
-            if hasattr(result, 'metadata'):
-                result.metadata["retrieval"] = {"method": "graph", "layer": "l0"}
-
-        return results
-
-    async def _keyword_search(self, query: str, top_k: int) -> List[Any]:
-        """Search the keyword store.
-
-        Args:
-            query: Query string
-            top_k: Number of results to return
-
-        Returns:
-            List of matching items
-        """
-        results = await self.l0_manager.search(query, top_k=top_k, store_type="keyword")
-
-        # Add retrieval method to metadata
-        for result in results:
-            if hasattr(result, 'metadata'):
-                result.metadata["retrieval"] = {"method": "keyword", "layer": "l0"}
-
-        return results
-
-    async def _facts_search(self, query: str, top_k: int) -> List[Any]:
-        """Search the facts database.
-
-        Args:
-            query: Query string
-            top_k: Number of results to return
-
-        Returns:
-            List of matching facts
-        """
-        results = await self.l1_manager.search(query, top_k=top_k)
-
-        # Add retrieval method to metadata
-        for result in results:
-            if hasattr(result, 'metadata'):
-                result.metadata["retrieval"] = {"method": "facts", "layer": "l1"}
-
-        return results
-
-    async def _knowledge_search(self, query: str, top_k: int) -> List[Any]:
-        """Search the knowledge graph.
-
-        Args:
-            query: Query string
-            top_k: Number of results to return
-
-        Returns:
-            List of matching entities and relationships
-        """
-        results = await self.l2_manager.search(query, top_k=top_k)
-
-        # Add retrieval method to metadata
-        for result in results:
-            if hasattr(result, 'metadata'):
-                result.metadata["retrieval"] = {"method": "knowledge", "layer": "l2"}
-
-        return results
-
-    async def add(self, item: Any) -> str:
-        """Add an item to the memory hierarchy system.
-
-        This method adds the item to the L0 layer, which will trigger
-        the memory hierarchy pipeline.
-
-        Args:
-            item: Item to add
-
-        Returns:
-            ID of the added item
-        """
-        # Update statistics
-        self.total_items_added += 1
-
-        # Add to L0 layer
-        return await self.l0_manager.add(item)
-
-    async def add_batch(self, items: List[Any]) -> List[str]:
-        """Add multiple items to the memory hierarchy system.
-
-        Args:
-            items: Items to add
-
-        Returns:
-            List of added item IDs
-        """
-        # Update statistics
-        self.total_items_added += len(items)
-
-        # Add to buffer manager
-        item_ids = []
-        for item in items:
-            item_id = await self.add(item)
-            item_ids.append(item_id)
-
-        return item_ids
-
-    async def query(
-        self,
-        query: str,
-        top_k: int = 5,
-        layers: Optional[List[str]] = None,
-        methods: Optional[List[str]] = None,
-    ) -> List[Any]:
-        """Query the memory hierarchy system.
-
-        Args:
-            query: Query string
-            top_k: Number of results to return
-            layers: Layers to query (l0, l1, l2)
-            methods: Methods to use (vector, graph, keyword, facts, knowledge)
-
-        Returns:
-            List of matching items
-        """
-        start_time = time.time()
-        self.total_queries += 1
-
         try:
-            # Filter retrieval callbacks based on layers and methods
-            retrieval_callbacks = {}
+            logger.info(f"MemoryHierarchyManager: Initializing for user {self.user_id}")
+            
+            # Initialize storage manager
+            storage_config = self.config.get("storage", {})
+            self.storage_manager = UnifiedStorageManager(storage_config, self.user_id)
+            
+            if not await self.storage_manager.initialize():
+                logger.error("MemoryHierarchyManager: Storage manager initialization failed")
+                return False
+            
+            # Initialize memory layers
+            layers_config = self.config.get("layers", {})
+            
+            # L0 Layer
+            if layers_config.get("l0", {}).get("enabled", True):
+                l0_config = self._create_layer_config(layers_config.get("l0", {}))
+                self.layers[LayerType.L0] = L0EpisodicLayer(
+                    LayerType.L0, l0_config, self.user_id,
+                    self.storage_manager
+                )
+                await self.layers[LayerType.L0].initialize()
 
-            if layers is None:
-                layers = ["l0", "l1", "l2"]
+            # L1 Layer
+            if layers_config.get("l1", {}).get("enabled", True):
+                l1_config = self._create_layer_config(layers_config.get("l1", {}))
+                self.layers[LayerType.L1] = L1SemanticLayer(
+                    LayerType.L1, l1_config, self.user_id,
+                    self.storage_manager
+                )
+                await self.layers[LayerType.L1].initialize()
 
-            if methods is None:
-                methods = ["vector", "graph", "keyword", "facts", "knowledge"]
-
-            # Map methods to layers
-            layer_methods = {
-                "l0": ["vector", "graph", "keyword"],
-                "l1": ["facts"],
-                "l2": ["knowledge"]
-            }
-
-            # Filter callbacks
-            for method in methods:
-                for layer in layers:
-                    if method in layer_methods.get(layer, []):
-                        if method in self.buffer_manager.retrieval_callbacks:
-                            retrieval_callbacks[method] = self.buffer_manager.retrieval_callbacks[method]
-
-            # Save original callbacks
-            original_callbacks = self.buffer_manager.retrieval_callbacks
-
-            try:
-                # Set temporary callbacks
-                self.buffer_manager.retrieval_callbacks = retrieval_callbacks
-
-                # Process query using query buffer
-                results = await self.buffer_manager.query(query, top_k=top_k)
-
-                return results
-            finally:
-                # Restore original callbacks
-                self.buffer_manager.retrieval_callbacks = original_callbacks
-        finally:
-            # Update statistics
-            query_time = time.time() - start_time
-            self.total_query_time += query_time
-
-    async def get(self, item_id: str, layer: Optional[str] = None) -> Optional[Any]:
-        """Get an item from the memory hierarchy system.
-
+            # L2 Layer
+            if layers_config.get("l2", {}).get("enabled", True):
+                l2_config = self._create_layer_config(layers_config.get("l2", {}))
+                self.layers[LayerType.L2] = L2RelationalLayer(
+                    LayerType.L2, l2_config, self.user_id,
+                    self.storage_manager
+                )
+                await self.layers[LayerType.L2].initialize()
+            
+            self.initialized = True
+            logger.info(f"MemoryHierarchyManager: Initialized {len(self.layers)} layers successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"MemoryHierarchyManager: Initialization failed: {e}")
+            return False
+    
+    async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
+        """
+        Process data through the memory hierarchy.
+        
+        Data flows: Input -> L0 -> (event) -> L1 -> (event) -> L2
+        
         Args:
-            item_id: ID of the item to get
-            layer: Layer to get from (l0, l1, l2)
-
+            data: Data to process
+            metadata: Optional metadata
+            
         Returns:
-            Item if found, None otherwise
+            ProcessingResult from L0 layer (downstream processing is async)
         """
-        if layer == "l0" or layer is None:
-            item = await self.l0_manager.get(item_id)
-            if item:
-                return item
-
-        if layer == "l1" or layer is None:
-            fact = await self.l1_manager.get(item_id)
-            if fact:
-                return fact
-
-        if layer == "l2" or layer is None:
-            knowledge = await self.l2_manager.get(item_id)
-            if knowledge:
-                return knowledge
-
+        try:
+            if not self.initialized:
+                await self.initialize()
+            
+            # Process through L0 layer (entry point)
+            l0_layer = self.layers.get(LayerType.L0)
+            if not l0_layer:
+                raise ValueError("L0 layer not available")
+            
+            result = await l0_layer.process_data(data, metadata)
+            
+            # Update statistics
+            self.total_operations += 1
+            if not result.success:
+                self.total_errors += 1
+            
+            logger.debug(f"MemoryHierarchyManager: Processed data through L0, success={result.success}")
+            return result
+            
+        except Exception as e:
+            self.total_errors += 1
+            logger.error(f"MemoryHierarchyManager: Data processing failed: {e}")
+            
+            return ProcessingResult(
+                success=False,
+                layer_type=LayerType.L0,
+                errors=[str(e)]
+            )
+    
+    async def query(self, query: str, layers: Optional[List[LayerType]] = None, **kwargs) -> Dict[LayerType, List[Any]]:
+        """
+        Query data from memory layers.
+        
+        Args:
+            query: Query string
+            layers: Specific layers to query (default: all available)
+            **kwargs: Additional query parameters
+            
+        Returns:
+            Dictionary mapping layer types to results
+        """
+        try:
+            if not self.initialized:
+                await self.initialize()
+            
+            # Default to all available layers
+            if layers is None:
+                layers = list(self.layers.keys())
+            
+            results = {}
+            
+            # Query each requested layer
+            for layer_type in layers:
+                layer = self.layers.get(layer_type)
+                if layer:
+                    layer_results = await layer.query(query, **kwargs)
+                    results[layer_type] = layer_results
+                else:
+                    results[layer_type] = []
+            
+            logger.debug(f"MemoryHierarchyManager: Query returned results from {len(results)} layers")
+            return results
+            
+        except Exception as e:
+            logger.error(f"MemoryHierarchyManager: Query failed: {e}")
+            return {}
+    
+    async def get_layer_stats(self, layer_type: LayerType) -> Optional[Any]:
+        """Get statistics for a specific layer."""
+        layer = self.layers.get(layer_type)
+        if layer:
+            return await layer.get_stats()
         return None
+    
+    def get_available_layers(self) -> List[LayerType]:
+        """Get list of available memory layers."""
+        return list(self.layers.keys())
+    
+    async def get_all_stats(self) -> Dict[str, Any]:
+        """Get comprehensive statistics for the entire memory hierarchy."""
+        try:
+            # Collect layer stats
+            layer_stats = {}
+            for layer_type, layer in self.layers.items():
+                stats = await layer.get_stats()
+                layer_stats[layer_type.value] = {
+                    "total_items_processed": stats.total_items_processed,
+                    "total_queries": stats.total_queries,
+                    "total_errors": stats.total_errors,
+                    "average_processing_time": stats.average_processing_time,
+                    "last_activity": stats.last_activity
+                }
+            
+            # Collect storage stats
+            storage_stats = {}
+            if self.storage_manager:
+                storage_stats = self.storage_manager.get_stats()
+            
+            # Collect event bus stats
+            event_bus_stats = {}
+            if self.event_bus:
+                event_bus_stats = self.event_bus.get_stats()
+            
+            return {
+                "user_id": self.user_id,
+                "initialized": self.initialized,
+                "available_layers": [lt.value for lt in self.layers.keys()],
+                "total_operations": self.total_operations,
+                "total_errors": self.total_errors,
+                "uptime_seconds": (datetime.utcnow() - self.start_time).total_seconds(),
+                "layer_stats": layer_stats,
+                "storage_stats": storage_stats,
+                "event_bus_stats": event_bus_stats
+            }
+            
+        except Exception as e:
+            logger.error(f"MemoryHierarchyManager: Error collecting stats: {e}")
+            return {"error": str(e)}
+    
+    async def shutdown(self) -> None:
+        """Gracefully shutdown the memory hierarchy."""
+        try:
+            logger.info(f"MemoryHierarchyManager: Shutting down for user {self.user_id}")
+            
+            # Shutdown layers
+            for layer_type, layer in self.layers.items():
+                try:
+                    await layer.shutdown()
+                    logger.info(f"MemoryHierarchyManager: Shutdown {layer_type.value} layer")
+                except Exception as e:
+                    logger.error(f"MemoryHierarchyManager: Error shutting down {layer_type.value}: {e}")
+            
+            # Shutdown storage manager
+            if self.storage_manager:
+                await self.storage_manager.shutdown()
+            
+            # Clear state
+            self.layers.clear()
+            self.initialized = False
+            
+            logger.info(f"MemoryHierarchyManager: Shutdown complete for user {self.user_id}")
+            
+        except Exception as e:
+            logger.error(f"MemoryHierarchyManager: Shutdown error: {e}")
+    
+    def _create_layer_config(self, config_dict: Dict[str, Any]) -> LayerConfig:
+        """Create LayerConfig from dictionary."""
+        from .core import ProcessingMode
+        
+        return LayerConfig(
+            enabled=config_dict.get("enabled", True),
+            processing_mode=ProcessingMode(config_dict.get("processing_mode", "async")),
+            batch_size=config_dict.get("batch_size", 10),
+            trigger_delay=config_dict.get("trigger_delay", 0.0),
+            background_tasks=config_dict.get("background_tasks", {}),
+            storage_backends=config_dict.get("storage_backends", []),
+            custom_config=config_dict
+        )
 
-    async def close(self):
-        """Close the memory hierarchy system and clean up resources."""
-        if self.buffer_manager:
-            await self.buffer_manager.close()
 
-    def get_stats(self) -> Dict[str, Any]:
-        """Get memory hierarchy system statistics.
-
-        Returns:
-            Dictionary of memory hierarchy system statistics
-        """
-        return {
-            "total_items_added": self.total_items_added,
-            "total_queries": self.total_queries,
-            "total_query_time": self.total_query_time,
-            "avg_query_time": self.total_query_time / max(1, self.total_queries),
-            "l0": self.l0_manager.get_stats(),
-            "l1": self.l1_manager.get_stats(),
-            "l2": self.l2_manager.get_stats(),
-            "buffer": self.buffer_manager.get_stats(),
-        }
+# Convenience function for creating and initializing a memory manager
+async def create_memory_manager(user_id: str, config: Dict[str, Any]) -> MemoryHierarchyManager:
+    """
+    Create and initialize a memory hierarchy manager.
+    
+    Args:
+        user_id: User ID for user-specific memory
+        config: Complete memory configuration
+        
+    Returns:
+        Initialized MemoryHierarchyManager
+    """
+    manager = MemoryHierarchyManager(user_id, config)
+    
+    if not await manager.initialize():
+        raise RuntimeError(f"Failed to initialize memory manager for user {user_id}")
+    
+    return manager

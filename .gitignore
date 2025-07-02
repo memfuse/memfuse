@@ -2,7 +2,6 @@
 !build/
 !data/README.md
 !data/README.md
-!examples/**/*.py
 !scripts/**/*.py
 !tests/data/README.md
 !yarn.lock
@@ -118,8 +117,6 @@ eggs/
 env.bak/
 env/
 envVars.txt
-examples/**/*
-examples/**/*.json
 htmlcov/
 instance/
 ipython_config.py

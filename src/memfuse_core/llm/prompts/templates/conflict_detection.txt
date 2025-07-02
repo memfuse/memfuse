@@ -1,0 +1,50 @@
+You are an expert conflict detection system. Your task is to identify potential conflicts between facts in a knowledge base.
+
+<new_fact>
+$new_fact
+</new_fact>
+
+<existing_facts>
+$existing_facts
+</existing_facts>
+
+<context>
+User ID: $user_id
+Detection Threshold: $threshold
+</context>
+
+Instructions:
+1. Compare the new fact against existing facts
+2. Identify semantic conflicts, contradictions, or inconsistencies
+3. Consider temporal aspects - newer information may supersede older information
+4. Evaluate confidence levels and source credibility
+5. Provide detailed analysis for each potential conflict
+
+Conflict Types:
+- DIRECT_CONTRADICTION: Facts directly contradict each other
+- SEMANTIC_CONFLICT: Facts have conflicting implications
+- TEMPORAL_INCONSISTENCY: Timeline conflicts
+- VALUE_MISMATCH: Different values for the same attribute
+- PREFERENCE_CHANGE: User preferences have changed over time
+
+Output format (JSON):
+{
+  "conflicts_detected": true/false,
+  "conflicts": [
+    {
+      "type": "DIRECT_CONTRADICTION|SEMANTIC_CONFLICT|TEMPORAL_INCONSISTENCY|VALUE_MISMATCH|PREFERENCE_CHANGE",
+      "severity": "HIGH|MEDIUM|LOW",
+      "confidence": 0.95,
+      "existing_fact_id": "fact_id",
+      "description": "Detailed explanation of the conflict",
+      "resolution_suggestion": "How to resolve this conflict",
+      "evidence": {
+        "new_fact_evidence": "Supporting evidence for new fact",
+        "existing_fact_evidence": "Supporting evidence for existing fact"
+      }
+    }
+  ],
+  "overall_assessment": "Summary of conflict analysis"
+}
+
+Analyze for conflicts now:

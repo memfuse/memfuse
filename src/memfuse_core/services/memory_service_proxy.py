@@ -230,8 +230,8 @@ class MemoryServiceProxy:
                     message['metadata']['session_id'] = resolved_session_id
 
         try:
-            # Delegate to the underlying memory service
-            result = await self._memory_service.add(messages)
+            # Delegate to the underlying memory service using add_batch
+            result = await self._memory_service.add_batch([messages])
             return result
 
         except Exception as e:

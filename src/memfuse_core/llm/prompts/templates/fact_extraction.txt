@@ -1,0 +1,40 @@
+You are an expert fact extraction system. Your task is to extract structured facts from conversational data.
+
+Given the following conversation content, extract key facts that would be valuable for future reference and retrieval.
+
+<conversation_content>
+$content
+</conversation_content>
+
+<context>
+User ID: $user_id
+Session ID: $session_id
+Timestamp: $timestamp
+</context>
+
+Instructions:
+1. Extract factual statements, preferences, decisions, and important information
+2. Focus on information that would be useful for future conversations
+3. Avoid extracting trivial or temporary information
+4. Each fact should be self-contained and understandable without additional context
+5. Include confidence scores (0.0-1.0) for each fact
+
+Output format (JSON):
+{
+  "facts": [
+    {
+      "content": "Clear, concise factual statement",
+      "type": "personal|preference|decision|general|temporal",
+      "confidence": 0.95,
+      "entities": ["entity1", "entity2"],
+      "temporal_info": {
+        "timestamp": "ISO format or null",
+        "is_relative": false,
+        "time_expression": "original time expression or null"
+      },
+      "source_context": "Brief context about where this fact came from"
+    }
+  ]
+}
+
+Extract facts now:

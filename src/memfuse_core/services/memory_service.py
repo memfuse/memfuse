@@ -9,9 +9,10 @@ from ..store.factory import StoreFactory
 from ..utils.config import config_manager
 from ..utils.path_manager import PathManager
 from ..rag.rerank import MiniLMReranker
-from ..interfaces import MessageInterface, MessageList, MessageBatchList
+from ..interfaces import MessageInterface, MessageBatchList
 from ..rag.chunk import ChunkStrategy, MessageChunkStrategy
 from ..rag.chunk.base import ChunkData
+
 
 
 class MemoryService(MessageInterface):
@@ -112,6 +113,10 @@ class MemoryService(MessageInterface):
         # Initialize chunk strategy (will be configured in initialize method)
         self.chunk_strategy = MessageChunkStrategy()
 
+
+
+
+
         # Log initialization
         logger.info(f"MemoryService: Initialized for user: {user}")
 
@@ -207,59 +212,66 @@ class MemoryService(MessageInterface):
         if normalize_scores:
             logger.info("Score normalization enabled for reranking")
 
-        # Check for global reranker instance first
-        from .service_factory import ServiceFactory
-        global_reranker_instance = ServiceFactory.get_global_reranker_instance()
+        # Only initialize reranker if reranking is enabled
+        if use_rerank:
+            # Check for global reranker instance first
+            from .service_factory import ServiceFactory
+            global_reranker_instance = ServiceFactory.get_global_reranker_instance()
 
-        if global_reranker_instance is not None:
-            logger.info("Using global pre-loaded reranker instance")
-            self.reranker = global_reranker_instance
-            # Update configuration if needed
-            if hasattr(self.reranker, 'rerank_strategy'):
-                self.reranker.rerank_strategy = rerank_strategy
-            if hasattr(self.reranker, 'use_rerank'):
-                self.reranker.use_rerank = use_rerank
-            if hasattr(self.reranker, 'normalize_scores'):
-                self.reranker.normalize_scores = normalize_scores
-            if hasattr(self.reranker, 'rrf_k'):
-                self.reranker.rrf_k = rrf_k
-            if hasattr(self.reranker, 'fusion_weights') and fusion_weights:
-                self.reranker.fusion_weights = fusion_weights
-            # Don't return early - continue with normal initialization
-        elif hasattr(self, 'reranker') and self.reranker is not None:
-            logger.info("Using existing reranker instance")
-            # Update configuration if needed
-            if hasattr(self.reranker, 'rerank_strategy'):
-                self.reranker.rerank_strategy = rerank_strategy
-            if hasattr(self.reranker, 'use_rerank'):
-                self.reranker.use_rerank = use_rerank
-            if hasattr(self.reranker, 'normalize_scores'):
-                self.reranker.normalize_scores = normalize_scores
-            if hasattr(self.reranker, 'rrf_k'):
-                self.reranker.rrf_k = rrf_k
-            if hasattr(self.reranker, 'fusion_weights') and fusion_weights:
-                self.reranker.fusion_weights = fusion_weights
+            if global_reranker_instance is not None:
+                logger.info("Using global pre-loaded reranker instance")
+                self.reranker = global_reranker_instance
+                # Update configuration if needed
+                if hasattr(self.reranker, 'rerank_strategy'):
+                    self.reranker.rerank_strategy = rerank_strategy
+                if hasattr(self.reranker, 'use_rerank'):
+                    self.reranker.use_rerank = use_rerank
+                if hasattr(self.reranker, 'normalize_scores'):
+                    self.reranker.normalize_scores = normalize_scores
+                if hasattr(self.reranker, 'rrf_k'):
+                    self.reranker.rrf_k = rrf_k
+                if hasattr(self.reranker, 'fusion_weights') and fusion_weights:
+                    self.reranker.fusion_weights = fusion_weights
+            elif hasattr(self, 'reranker') and self.reranker is not None:
+                logger.info("Using existing reranker instance")
+                # Update configuration if needed
+                if hasattr(self.reranker, 'rerank_strategy'):
+                    self.reranker.rerank_strategy = rerank_strategy
+                if hasattr(self.reranker, 'use_rerank'):
+                    self.reranker.use_rerank = use_rerank
+                if hasattr(self.reranker, 'normalize_scores'):
+                    self.reranker.normalize_scores = normalize_scores
+                if hasattr(self.reranker, 'rrf_k'):
+                    self.reranker.rrf_k = rrf_k
+                if hasattr(self.reranker, 'fusion_weights') and fusion_weights:
+                    self.reranker.fusion_weights = fusion_weights
+            else:
+                # Create new reranker only if we don't have one and reranking is enabled
+                logger.info("Creating new MiniLMReranker instance")
+                self.reranker = MiniLMReranker(
+                    rerank_strategy=rerank_strategy,
+                    thread_safe=True,
+                    use_rerank=use_rerank,
+                    cross_encoder_model=cross_encoder_model,
+                    cross_encoder_batch_size=cross_encoder_batch_size,
+                    cross_encoder_max_length=cross_encoder_max_length,
+                    normalize_scores=normalize_scores,
+                    rrf_k=rrf_k,
+                    fusion_weights=fusion_weights
+                )
+                await self.reranker.initialize()
+
+                # Store the newly created reranker as global instance for future use
+                ServiceFactory.set_global_models(reranker_instance=self.reranker)
         else:
-            # Create new reranker only if we don't have one
-            logger.info("Creating new MiniLMReranker instance")
-            self.reranker = MiniLMReranker(
-                rerank_strategy=rerank_strategy,
-                thread_safe=True,
-                use_rerank=use_rerank,
-                cross_encoder_model=cross_encoder_model,
-                cross_encoder_batch_size=cross_encoder_batch_size,
-                cross_encoder_max_length=cross_encoder_max_length,
-                normalize_scores=normalize_scores,
-                rrf_k=rrf_k,
-                fusion_weights=fusion_weights
-            )
-            await self.reranker.initialize()
-
-            # Store the newly created reranker as global instance for future use
-            ServiceFactory.set_global_models(reranker_instance=self.reranker)
+            # Reranking is disabled, don't create reranker instance
+            logger.info("Reranking disabled, skipping reranker initialization")
+            self.reranker = None
 
         # Configure chunk strategy based on configuration
         await self._configure_chunk_strategy()
+
+
 
         return self
 
@@ -303,6 +315,47 @@ class MemoryService(MessageInterface):
         except Exception as e:
             logger.error(f"Failed to configure chunk strategy: {e}")
             # Keep the default strategy on error
+
+
+
+
+
+    async def _process_with_traditional_method(self, message_batch_list: MessageBatchList, **kwargs) -> Dict[str, Any]:
+        """Process message batch using traditional sequential method."""
+        # This contains the original add_batch logic
+        session_id, round_id = await self._prepare_session_and_round(message_batch_list)
+        logger.info(f"MemoryService.add_batch: Prepared session_id={session_id}, round_id={round_id}")
+
+        # Parallel processing to reduce latency
+        async def store_messages_task():
+            """Store original messages to database."""
+            return await self._store_original_messages_with_round(message_batch_list, session_id, round_id)
+
+        async def process_chunks_task():
+            """Create and store chunks."""
+            chunks = await self.chunk_strategy.create_chunks(message_batch_list)
+            logger.info(f"MemoryService.add_batch: Created {len(chunks)} chunks")
+            await self._store_chunks_enhanced(chunks, session_id, round_id)
+            return chunks
+
+        # Execute both tasks in parallel
+        message_ids_task = asyncio.create_task(store_messages_task())
+        chunks_task = asyncio.create_task(process_chunks_task())
+
+        # Wait for both to complete
+        message_ids, chunks = await asyncio.gather(message_ids_task, chunks_task)
+
+        logger.info(f"MemoryService.add_batch: Successfully processed {len(chunks)} chunks and {len(message_ids)} messages")
+
+
+
+        return self._success_response(
+            message_ids,
+            f"Processed {len(message_batch_list)} message lists into {len(chunks)} chunks",
+            chunk_count=len(chunks)
+        )
+
+
 
     def _get_retrieval_method(
         self,
@@ -380,35 +433,9 @@ class MemoryService(MessageInterface):
 
             logger.info(f"MemoryService.add_batch: Processing {len(message_batch_list)} message lists")
 
-            # Fast preparation: get session_id and create round_id (no DB writes yet)
-            session_id, round_id = await self._prepare_session_and_round(message_batch_list)
-            logger.info(f"MemoryService.add_batch: Prepared session_id={session_id}, round_id={round_id}")
-
-            # Parallel processing to reduce latency
-            async def store_messages_task():
-                """Store original messages to database."""
-                return await self._store_original_messages_with_round(message_batch_list, session_id, round_id)
-
-            async def process_chunks_task():
-                """Create and store chunks."""
-                chunks = await self.chunk_strategy.create_chunks(message_batch_list)
-                logger.info(f"MemoryService.add_batch: Created {len(chunks)} chunks")
-                await self._store_chunks_enhanced(chunks, session_id, round_id)
-                return chunks
-
-            # Execute both tasks in parallel
-            message_ids_task = asyncio.create_task(store_messages_task())
-            chunks_task = asyncio.create_task(process_chunks_task())
-
-            # Wait for both to complete
-            message_ids, chunks = await asyncio.gather(message_ids_task, chunks_task)
-
-            logger.info(f"MemoryService.add_batch: Successfully processed {len(chunks)} chunks and {len(message_ids)} messages")
-            return self._success_response(
-                message_ids,
-                f"Processed {len(message_batch_list)} message lists into {len(chunks)} chunks",
-                chunk_count=len(chunks)
-            )
+            # Process with traditional method
+            logger.info("MemoryService.add_batch: Processing with sequential method")
+            return await self._process_with_traditional_method(message_batch_list, **kwargs)
 
         except Exception as e:
             logger.error(f"MemoryService.add_batch: Error processing message batch: {e}")
@@ -597,9 +624,7 @@ class MemoryService(MessageInterface):
             if isinstance(metadata, dict) and 'session_id' in metadata:
                 session_id = metadata['session_id']
 
-        # Also check the message itself for session_id (for backward compatibility)
-        if session_id is None and isinstance(first_message, dict) and 'session_id' in first_message:
-            session_id = first_message['session_id']
+
 
         if session_id is None:
             raise ValueError("No session_id found in messages")
@@ -714,9 +739,7 @@ class MemoryService(MessageInterface):
             if isinstance(metadata, dict) and 'session_id' in metadata:
                 session_id = metadata['session_id']
 
-        # Also check the message itself for session_id (for backward compatibility)
-        if session_id is None and isinstance(first_message, dict) and 'session_id' in first_message:
-            session_id = first_message['session_id']
+
 
         if session_id is None:
             logger.error("MemoryService._store_original_messages: No session_id found")
@@ -795,84 +818,7 @@ class MemoryService(MessageInterface):
             except Exception as e:
                 logger.error(f"Error adding chunks to graph store: {e}")
 
-    async def _store_chunks(self, chunks) -> None:
-        """Store chunks to various stores using unified chunk interface.
 
-        Legacy method - kept for backward compatibility.
-
-        Args:
-            chunks: List of ChunkData objects
-        """
-        if not chunks:
-            return
-
-        # Add user_id to chunk metadata for all stores
-        user_chunks = []
-        for chunk in chunks:
-            user_chunk = ChunkData(
-                content=chunk.content,
-                chunk_id=chunk.chunk_id,
-                metadata={
-                    **chunk.metadata,
-                    "type": "chunk",
-                    "user_id": self._user_id,
-                }
-            )
-            user_chunks.append(user_chunk)
-
-        # Store chunks to vector store
-        if self.vector_store:
-            try:
-                await asyncio.wait_for(self.vector_store.add(user_chunks), timeout=30.0)
-            except Exception as e:
-                logger.error(f"Error adding chunks to vector store: {e}")
-
-        # Store chunks to keyword store
-        if self.keyword_store:
-            try:
-                await asyncio.wait_for(self.keyword_store.add(user_chunks), timeout=30.0)
-            except Exception as e:
-                logger.error(f"Error adding chunks to keyword store: {e}")
-
-        # Store chunks to graph store
-        if self.graph_store:
-            try:
-                await asyncio.wait_for(self.graph_store.add(user_chunks), timeout=30.0)
-            except Exception as e:
-                logger.error(f"Error adding chunks to graph store: {e}")
-
-    # Legacy add method - now delegates to add_batch with proper wrapping
-    async def add(self, messages: MessageList, **kwargs) -> Dict[str, Any]:
-        """Add a single list of messages.
-
-        This method wraps the MessageList in a MessageBatchList and calls add_batch().
-
-        Args:
-            messages: List of message dictionaries (MessageList)
-            **kwargs: Additional keyword arguments
-
-        Returns:
-            Dictionary with status, data, and message information
-        """
-        # Ensure messages contain necessary metadata
-        for message in messages:
-            if 'metadata' not in message:
-                message['metadata'] = {}
-
-            # Ensure metadata contains session ID
-            if 'session_id' not in message['metadata'] and self._session_id:
-                message['metadata']['session_id'] = self._session_id
-
-            # Ensure metadata contains user ID
-            if 'user_id' not in message['metadata'] and self._user_id:
-                message['metadata']['user_id'] = self._user_id
-
-            # Ensure metadata contains agent ID
-            if 'agent_id' not in message['metadata'] and self._agent_id:
-                message['metadata']['agent_id'] = self._agent_id
-
-        # Wrap in MessageBatchList and call add_batch
-        return await self.add_batch([messages], **kwargs)
 
     async def read(self, message_ids: List[str]) -> Dict[str, Any]:
         """Read messages from memory.
@@ -1423,6 +1369,8 @@ class MemoryService(MessageInterface):
                 )
                 for result in all_results
             ]
+
+
 
         # Convert to dictionaries
         result_dicts = []

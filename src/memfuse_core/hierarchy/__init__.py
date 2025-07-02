@@ -1,44 +1,79 @@
-"""Memory hierarchy system for MemFuse.
+"""
+Optimized memory hierarchy system for MemFuse.
 
-The memory hierarchy system organizes memory into three layers:
+This module provides a clean, unified architecture for the three-tier memory system:
 
-1. L0 (Raw Data): Stores raw data in its original form
+1. L0 (Episodic Memory): Stores raw data in its original form
    - Vector Store: For semantic similarity search
-   - Graph Store: For relationship-based search
    - Keyword Store: For keyword-based search
+   - SQL Store: For structured metadata
 
-2. L1 (Facts): Extracts and stores facts from raw data
-   - Fact Extraction: Extracts facts from raw data
-   - Fact Storage: Stores facts with links to source data
-   - Fact Retrieval: Retrieves facts based on relevance
+2. L1 (Semantic Memory): Extracts and stores facts from raw data
+   - LLM-based fact extraction
+   - Fact storage and indexing
+   - Semantic search over facts
 
-3. L2 (Knowledge Graph): Constructs a knowledge graph from facts
-   - Entity Extraction: Identifies entities from facts
-   - Relationship Extraction: Identifies relationships between entities
-   - Graph Construction: Builds a knowledge graph
-   - Graph Traversal: Navigates the knowledge graph
+3. L2 (Relational Memory): Constructs a knowledge graph from facts
+   - Entity extraction from facts
+   - Relationship identification
+   - Graph construction and updates
+   - Graph-based querying
 
-The memory hierarchy system works with the buffer system to optimize
-data flow and provide efficient memory operations.
+The optimized architecture features:
+- Unified interfaces across all layers
+- Event-driven inter-layer communication
+- Centralized storage management
+- Comprehensive error handling and statistics
 """
 
-from .base import MemoryLayer, MemoryItem, Fact, Entity, Relationship
-from .l0 import L0Manager
-from .l1 import L1Manager, FactsDatabase, LLMService
-from .l2 import L2Manager, GraphDatabase
-from .manager import HierarchyMemoryManager
+# Core interfaces and data structures
+from .core import (
+    MemoryLayer, StorageManager, StorageBackend,
+    LayerType, ProcessingMode, StorageType,
+    ProcessingResult, QueryResult, LayerStats, LayerConfig
+)
+
+
+
+# Storage management
+from .storage import UnifiedStorageManager, StoreBackendAdapter
+
+# Memory layer implementations
+from .layers import L0EpisodicLayer, L1SemanticLayer, L2RelationalLayer
+
+# Main memory manager
+from .manager import MemoryHierarchyManager, create_memory_manager
+
+
 
 __all__ = [
+    # Core interfaces and types
     "MemoryLayer",
-    "MemoryItem",
-    "Fact",
-    "Entity",
-    "Relationship",
-    "L0Manager",
-    "L1Manager",
-    "FactsDatabase",
-    "LLMService",
-    "L2Manager",
-    "GraphDatabase",
-    "HierarchyMemoryManager",
+    "StorageManager",
+    "StorageBackend",
+    "LayerType",
+    "ProcessingMode",
+    "StorageType",
+    "ProcessingResult",
+    "QueryResult",
+    "LayerStats",
+    "LayerConfig",
+
+    # Storage management
+    "UnifiedStorageManager",
+    "StoreBackendAdapter",
+
+    # Memory layers
+    "L0EpisodicLayer",
+    "L1SemanticLayer",
+    "L2RelationalLayer",
+
+    # Main manager
+    "MemoryHierarchyManager",
+    "create_memory_manager",
+
+    # Legacy components
+    "AdvancedLLMService",
+    "AdvancedFactsDatabase",
+    "ConflictDetectionEngine",
 ]
