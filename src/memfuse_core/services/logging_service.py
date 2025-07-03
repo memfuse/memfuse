@@ -100,6 +100,7 @@ class LoggingService(BaseService):
             retention="1 week",
             level=log_level,
             format=file_format,
+            encoding="utf-8",
             backtrace=True,
             diagnose=True
         )
