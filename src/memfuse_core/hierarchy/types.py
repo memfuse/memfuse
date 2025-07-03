@@ -60,12 +60,12 @@ class ParallelWriteResult:
     total_processing_time: float = 0.0
     strategy_used: Optional[WriteStrategy] = None
     error_message: Optional[str] = None
-    
+
     def __post_init__(self):
         """Initialize default values."""
         if self.layer_results is None:
             self.layer_results = {}
-    
+
     @property
     def successful_layers(self) -> list:
         """Get list of layers that succeeded."""
@@ -73,7 +73,7 @@ class ParallelWriteResult:
             layer_name for layer_name, result in self.layer_results.items()
             if result.success
         ]
-    
+
     @property
     def failed_layers(self) -> list:
         """Get list of layers that failed."""
@@ -81,11 +81,29 @@ class ParallelWriteResult:
             layer_name for layer_name, result in self.layer_results.items()
             if not result.success
         ]
-    
+
     @property
-    def total_processed_items(self) -> int:
+    def total_processed(self) -> int:
         """Get total number of processed items across all layers."""
         return sum(
             len(result.processed_items) for result in self.layer_results.values()
-            if result.processed_items
+            if hasattr(result, 'processed_items') and result.processed_items
         )
+
+    @property
+    def total_processed_items(self) -> int:
+        """Alias for total_processed for backward compatibility."""
+        return self.total_processed
+
+    @property
+    def total_errors(self) -> int:
+        """Get total number of errors across all layers."""
+        total = 0
+        for result in self.layer_results.values():
+            if hasattr(result, 'errors') and result.errors:
+                # ProcessingResult type
+                total += len(result.errors)
+            elif hasattr(result, 'error_message') and result.error_message:
+                # LayerWriteResult type
+                total += 1
+        return total

@@ -126,19 +126,24 @@ parallel:
 
 # Storage configuration
 storage:
-  sqlite:
-    connection_pool_size: 5
-    timeout: 30.0
-    enable_wal_mode: true
-  
-  qdrant:
+  vector:
     connection_pool_size: 5
     timeout: 30.0
     batch_size: 100
-  
+
   keyword:
     connection_pool_size: 3
     timeout: 15.0
+
+  graph:
+    connection_pool_size: 3
+    timeout: 20.0
+    enable_auto_save: true
+
+  sql:
+    connection_pool_size: 5
+    timeout: 30.0
+    enable_wal_mode: true
 
   # L1 specific storage (for future use)
   l1_storage:
@@ -150,14 +155,19 @@ storage:
     conflicts_table: "l1_conflicts"
 
 # Integration with MemoryService
-# ⚠️  NOTE: These settings are currently IGNORED by MemoryService
+# 🚀 NOTE: Parallel processing architecture implemented and ready for activation
 memory_service:
-  # Enable parallel processing in MemoryService (CURRENTLY DISABLED)
-  parallel_enabled: false  # Parallel processing removed from MemoryService
+  # Enable parallel processing in MemoryService (NOW ENABLED)
+  parallel_enabled: true  # Parallel processing across L0/L1/L2 layers
+  # Processing strategy
+  parallel_strategy: "parallel"  # Use parallel processing strategy
   # Fallback to traditional processing on errors
-  fallback_on_error: true
+  enable_fallback: true
   # Log processing decisions
   log_processing_mode: true
+  # Timeout and retry settings
+  timeout_per_layer: 30.0
+  max_retries: 3
 
 # Development and testing settings
 development:

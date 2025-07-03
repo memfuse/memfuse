@@ -280,7 +280,7 @@ class FlushManager:
         timeout: Optional[float] = None,
         callback: Optional[Callable[[bool, str], Awaitable[None]]] = None
     ) -> str:
-        """Schedule hybrid flush operation (both SQLite and Qdrant).
+        """Schedule hybrid flush operation (unified MemoryService or separate SQLite/Qdrant).
 
         Args:
             rounds: List of message rounds to flush
@@ -293,8 +293,15 @@ class FlushManager:
         Returns:
             Task ID for tracking
         """
-        if not self.sqlite_handler or not self.qdrant_handler:
-            raise ValueError("Both SQLite and Qdrant handlers must be configured for hybrid flush")
+        # Support unified MemoryService handler (sqlite_handler only) or separate handlers
+        if not self.sqlite_handler:
+            raise ValueError("SQLite handler (or unified MemoryService handler) must be configured for flush")
+
+        # Log the handler configuration for debugging
+        if self.qdrant_handler:
+            logger.debug("FlushManager: Using separate SQLite and Qdrant handlers")
+        else:
+            logger.debug("FlushManager: Using unified MemoryService handler (sqlite_handler only)")
 
         task_id = self._generate_task_id("hybrid")
         task = FlushTask(
@@ -530,24 +537,28 @@ class FlushManager:
         chunks: List[ChunkData],
         embeddings: List[List[float]]
     ) -> bool:
-        """Execute hybrid flush operation (both SQLite and Qdrant).
+        """Execute hybrid flush operation using unified MemoryService handler.
+
+        Since we now use a unified MemoryService handler instead of separate SQLite/Qdrant handlers,
+        this method only needs to call the SQLite handler (which is actually the MemoryService handler).
+        The MemoryService will handle routing to L0/L1/L2 layers and all storage operations.
 
         Args:
             rounds: List of message rounds to flush
-            chunks: List of chunks to flush
-            embeddings: List of embeddings
+            chunks: List of chunks to flush (processed by MemoryService)
+            embeddings: List of embeddings (processed by MemoryService)
 
         Returns:
-            True if both operations successful, False otherwise
+            True if MemoryService processing successful, False otherwise
         """
-        sqlite_success = await self._execute_sqlite_flush(rounds)
-        qdrant_success = await self._execute_qdrant_flush(chunks, embeddings)
+        # Only call the unified MemoryService handler (mapped to sqlite_handler)
+        # The chunks and embeddings are already processed and stored in the rounds data
+        success = await self._execute_sqlite_flush(rounds)
 
-        success = sqlite_success and qdrant_success
         if success:
-            logger.debug(f"Hybrid flush completed: {len(rounds)} rounds, {len(chunks)} chunks")
+            logger.info(f"Unified MemoryService flush completed: {len(rounds)} rounds processed through L0/L1/L2 hierarchy")
         else:
-            logger.error(f"Hybrid flush partial failure: sqlite={sqlite_success}, qdrant={qdrant_success}")
+            logger.error(f"Unified MemoryService flush failed for {len(rounds)} rounds")
 
         return success
 

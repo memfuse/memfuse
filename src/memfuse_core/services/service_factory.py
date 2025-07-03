@@ -263,6 +263,17 @@ class ServiceFactory:
                 user=user,
                 config=buffer_config,
             )
+
+            # Initialize the BufferService (critical: sets up FlushManager handlers)
+            try:
+                if not await buffer_service.initialize():
+                    logger.error(f"Failed to initialize fallback BufferService for user {user}")
+                    return None
+                logger.debug(f"Fallback BufferService initialized successfully for user {user}")
+            except Exception as e:
+                logger.error(f"Fallback BufferService initialization error for user {user}: {e}")
+                return None
+
             cls._buffer_service_instances[user] = buffer_service
             return buffer_service
 
@@ -290,6 +301,16 @@ class ServiceFactory:
             user=user,
             config=cfg,  # Pass full config including buffer
         )
+
+        # Initialize the BufferService (critical: sets up FlushManager handlers)
+        try:
+            if not await buffer_service.initialize():
+                logger.error(f"Failed to initialize BufferService for user {user}")
+                return None
+            logger.debug(f"BufferService initialized successfully for user {user}")
+        except Exception as e:
+            logger.error(f"BufferService initialization error for user {user}: {e}")
+            return None
 
         # Store the instance for future use
         cls._buffer_service_instances[user] = buffer_service

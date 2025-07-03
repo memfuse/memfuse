@@ -36,6 +36,15 @@ from .storage_handler import MemoryServiceStorageHandler
 # Message interface
 from .message_interface import MessageInterface, MessageList, MessageBatchList
 
+# Unified Memory Layer interface
+from .unified_memory_layer import (
+    UnifiedMemoryLayer,
+    UnifiedMemoryLayerConfig,
+    WriteResult,
+    UnifiedResult,
+    LayerStatus
+)
+
 __all__ = [
     # Model provider interfaces
     "ModelProvider",
@@ -68,4 +77,11 @@ __all__ = [
     "MessageInterface",
     "MessageList",
     "MessageBatchList",
+
+    # Unified Memory Layer interface
+    "UnifiedMemoryLayer",
+    "UnifiedMemoryLayerConfig",
+    "WriteResult",
+    "UnifiedResult",
+    "LayerStatus",
 ]
