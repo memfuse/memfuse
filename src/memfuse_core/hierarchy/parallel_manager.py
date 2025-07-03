@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from .core import LayerType, ProcessingResult
 from .manager import MemoryHierarchyManager
 from .types import WriteStrategy, RetryConfig, LayerWriteResult, ParallelWriteResult
-from .config import ConfigManager
+from ..utils.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +206,7 @@ class ParallelMemoryLayerManager:
             
             for i, result in enumerate(results):
                 layer_type = layer_types[i]
-                
+
                 if isinstance(result, Exception):
                     logger.error(f"ParallelMemoryLayerManager: Layer {layer_type.value} failed: {result}")
                     layer_results[layer_type] = LayerWriteResult(
@@ -221,7 +221,19 @@ class ParallelMemoryLayerManager:
                 else:
                     layer_results[layer_type] = result
                     if not result.success:
+                        # Get error message based on result type
+                        if hasattr(result, 'errors') and result.errors:
+                            # ProcessingResult has errors list
+                            error_msg = "; ".join(result.errors)
+                        elif hasattr(result, 'error_message') and result.error_message:
+                            # LayerWriteResult has error_message string
+                            error_msg = result.error_message
+                        else:
+                            error_msg = "Processing failed"
+                        logger.error(f"ParallelMemoryLayerManager: Layer {layer_type.value} processing failed: {error_msg}")
                         overall_success = False
+                    else:
+                        logger.info(f"ParallelMemoryLayerManager: Layer {layer_type.value} processing succeeded: {len(result.processed_items)} items")
             
             return ParallelWriteResult(
                 success=overall_success,

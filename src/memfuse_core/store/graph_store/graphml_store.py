@@ -828,7 +828,18 @@ class GraphMLStore(GraphStore):
             logger.error(f"Error flushing edge buffer: {e}")
             raise
 
-    async def add(self, item: Item) -> str:
+    async def add(self, chunks: List[ChunkData]) -> List[str]:
+        """Add chunks to the store (ChunkStoreInterface implementation).
+
+        Args:
+            chunks: List of chunks to add
+
+        Returns:
+            List of IDs of the added chunks
+        """
+        return await self.add_chunks_as_nodes(chunks)
+
+    async def add_item(self, item: Item) -> str:
         """Add an item to the store.
 
         Args:

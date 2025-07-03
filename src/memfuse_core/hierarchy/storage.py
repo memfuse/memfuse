@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 from .core import StorageManager, StorageBackend, StorageType
+from ..rag.chunk.base import ChunkData
 
 logger = logging.getLogger(__name__)
 
@@ -54,17 +55,108 @@ class StoreBackendAdapter(StorageBackend):
         """Write data to the store."""
         if not self.initialized:
             await self.initialize()
-        
+
         try:
-            # Most stores have an 'add' method
+            # Most stores have an 'add' method that expects List[ChunkData]
             if hasattr(self.store, 'add'):
-                return await self.store.add(data)
+                # Validate and prepare data for store interface
+                data_list = self._prepare_data_for_store(data)
+
+                if not data_list:
+                    logger.warning(f"StoreBackendAdapter: No valid data to write to {self.storage_type.value}")
+                    return ""
+
+                # Call store.add with list and get list of IDs back
+                result_ids = await self.store.add(data_list)
+
+                # Return the first ID (for single item writes)
+                return result_ids[0] if result_ids else ""
             else:
                 raise NotImplementedError(f"Store {type(self.store)} does not support write operations")
-                
+
         except Exception as e:
-            logger.error(f"StoreBackendAdapter: Write failed for {self.storage_type.value}: {e}")
+            logger.error(f"StoreBackendAdapter: Write failed for {self.storage_type.value}: {e} | Store: {self.storage_type.value} | Operation: add")
             raise
+
+    def _prepare_data_for_store(self, data: Any) -> List[ChunkData]:
+        """Prepare data for store interface, ensuring it's a list of ChunkData objects."""
+        from ..rag.chunk.base import ChunkData
+
+        data_list = []
+
+        try:
+            logger.debug(f"StoreBackendAdapter: Preparing data of type {type(data)} for {self.storage_type.value}")
+
+            if isinstance(data, ChunkData):
+                # Single ChunkData object
+                data_list = [data]
+                logger.debug(f"StoreBackendAdapter: Single ChunkData object prepared")
+            elif isinstance(data, list):
+                # List of items - validate each one
+                logger.debug(f"StoreBackendAdapter: Processing list with {len(data)} items")
+                for i, item in enumerate(data):
+                    if isinstance(item, ChunkData):
+                        data_list.append(item)
+                        logger.debug(f"StoreBackendAdapter: Added ChunkData item {i}")
+                    elif isinstance(item, list):
+                        # Nested list - this might be the issue!
+                        logger.warning(f"StoreBackendAdapter: Found nested list at index {i}, flattening...")
+                        for nested_item in item:
+                            if isinstance(nested_item, ChunkData):
+                                data_list.append(nested_item)
+                            elif isinstance(nested_item, dict):
+                                chunk = self._dict_to_chunk_data(nested_item)
+                                if chunk:
+                                    data_list.append(chunk)
+                    elif isinstance(item, dict):
+                        # Try to convert dict to ChunkData
+                        chunk = self._dict_to_chunk_data(item)
+                        if chunk:
+                            data_list.append(chunk)
+                            logger.debug(f"StoreBackendAdapter: Converted dict to ChunkData at index {i}")
+                    else:
+                        logger.warning(f"StoreBackendAdapter: Skipping invalid data item of type {type(item)} at index {i}: {item}")
+            elif isinstance(data, dict):
+                # Single dict - try to convert to ChunkData
+                chunk = self._dict_to_chunk_data(data)
+                if chunk:
+                    data_list = [chunk]
+                    logger.debug(f"StoreBackendAdapter: Single dict converted to ChunkData")
+            else:
+                logger.error(f"StoreBackendAdapter: Unsupported data type {type(data)} for {self.storage_type.value}")
+
+            logger.debug(f"StoreBackendAdapter: Prepared {len(data_list)} ChunkData objects for {self.storage_type.value}")
+
+        except Exception as e:
+            logger.error(f"StoreBackendAdapter: Failed to prepare data for {self.storage_type.value}: {e}")
+
+        return data_list
+
+    def _dict_to_chunk_data(self, item: dict) -> Optional[ChunkData]:
+        """Convert a dictionary to ChunkData object."""
+        from ..rag.chunk.base import ChunkData
+
+        try:
+            # Extract content from various possible keys
+            content = item.get("content") or item.get("text") or item.get("fact") or str(item)
+
+            if not content or not content.strip():
+                return None
+
+            # Extract metadata
+            metadata = item.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            # Create ChunkData object
+            return ChunkData(
+                content=content.strip(),
+                metadata=metadata
+            )
+
+        except Exception as e:
+            logger.error(f"StoreBackendAdapter: Failed to convert dict to ChunkData: {e}")
+            return None
     
     async def read(self, query: str, **kwargs) -> List[Any]:
         """Read data from the store."""
@@ -226,18 +318,18 @@ class UnifiedStorageManager(StorageManager):
         backend = self.backends.get(storage_type)
         if not backend:
             logger.warning(f"UnifiedStorageManager: Backend {storage_type.value} not available")
-            return None
-        
+            raise ValueError(f"Backend {storage_type.value} not available")
+
         try:
             item_id = await backend.write(data, metadata)
             self.write_count += 1
             self.last_operation_time = datetime.utcnow()
             return item_id
-            
+
         except Exception as e:
             logger.error(f"UnifiedStorageManager: Write failed for {storage_type.value}: {e}")
             self.error_count += 1
-            return None
+            raise e
     
     async def read_from_backend(self, storage_type: StorageType, query: str, **kwargs) -> List[Any]:
         """Read data from a specific storage backend."""

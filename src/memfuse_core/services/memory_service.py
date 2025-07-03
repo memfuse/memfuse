@@ -9,9 +9,11 @@ from ..store.factory import StoreFactory
 from ..utils.config import config_manager
 from ..utils.path_manager import PathManager
 from ..rag.rerank import MiniLMReranker
-from ..interfaces import MessageInterface, MessageBatchList
+from ..interfaces import MessageInterface, MessageBatchList, UnifiedMemoryLayer
 from ..rag.chunk import ChunkStrategy, MessageChunkStrategy
 from ..rag.chunk.base import ChunkData
+from ..hierarchy.unified_memory_layer_impl import UnifiedMemoryLayerImpl
+from ..utils.config import ConfigManager
 
 
 
@@ -113,12 +115,25 @@ class MemoryService(MessageInterface):
         # Initialize chunk strategy (will be configured in initialize method)
         self.chunk_strategy = MessageChunkStrategy()
 
+        # Initialize Unified Memory Layer for L0/L1/L2 parallel processing
+        self.unified_memory_layer: Optional[UnifiedMemoryLayer] = None
+        self.use_unified_layer = self._should_use_unified_layer()
 
 
 
 
         # Log initialization
         logger.info(f"MemoryService: Initialized for user: {user}")
+        logger.info(f"MemoryService: Unified layer enabled: {self.use_unified_layer}")
+    def _should_use_unified_layer(self) -> bool:
+        """Determine if unified memory layer should be used based on configuration."""
+        try:
+            memory_config = self.config.get("memory", {})
+            memory_service_config = memory_config.get("memory_service", {})
+            return memory_service_config.get("parallel_enabled", False)
+        except Exception as e:
+            logger.warning(f"MemoryService: Error checking unified layer config: {e}")
+            return False
 
     async def initialize(self):
         """Initialize the store and retrieval components asynchronously."""
@@ -271,9 +286,38 @@ class MemoryService(MessageInterface):
         # Configure chunk strategy based on configuration
         await self._configure_chunk_strategy()
 
-
+        # Initialize Unified Memory Layer if enabled
+        if self.use_unified_layer:
+            await self._initialize_unified_memory_layer()
 
         return self
+    async def _initialize_unified_memory_layer(self):
+        """Initialize the unified memory layer for L0/L1/L2 parallel processing."""
+        try:
+            logger.info("MemoryService: Initializing Unified Memory Layer...")
+
+            # Create config manager for hierarchy components
+            hierarchy_config_manager = ConfigManager()
+
+            # Create unified memory layer implementation
+            self.unified_memory_layer = UnifiedMemoryLayerImpl(
+                user_id=str(self._user_id),
+                config_manager=hierarchy_config_manager
+            )
+
+            # Initialize the unified layer
+            memory_config = self.config.get("memory", {})
+            if await self.unified_memory_layer.initialize(memory_config):
+                logger.info("MemoryService: Unified Memory Layer initialized successfully")
+            else:
+                logger.error("MemoryService: Failed to initialize Unified Memory Layer")
+                self.unified_memory_layer = None
+                self.use_unified_layer = False
+
+        except Exception as e:
+            logger.error(f"MemoryService: Error initializing Unified Memory Layer: {e}")
+            self.unified_memory_layer = None
+            self.use_unified_layer = False
 
     async def _configure_chunk_strategy(self):
         """Configure chunk strategy based on configuration and inject dependencies."""
@@ -320,6 +364,64 @@ class MemoryService(MessageInterface):
 
 
 
+    async def _process_with_unified_layer(self, message_batch_list: MessageBatchList, **kwargs) -> Dict[str, Any]:
+        """Process message batch using Unified Memory Layer (L0/L1/L2 parallel processing)."""
+        try:
+            if not self.unified_memory_layer:
+                logger.error("MemoryService: Unified Memory Layer not initialized")
+                return self._error_response("Unified Memory Layer not available")
+
+            # Prepare session and round information
+            session_id, round_id = await self._prepare_session_and_round(message_batch_list)
+            logger.info(f"MemoryService._process_with_unified_layer: session_id={session_id}, round_id={round_id}")
+
+            # Store original messages to database first
+            message_ids = await self._store_original_messages_with_round(
+                message_batch_list, session_id, round_id
+            )
+            logger.info(f"MemoryService._process_with_unified_layer: Stored {len(message_ids)} messages")
+
+            # Process through Unified Memory Layer (L0/L1/L2 parallel processing)
+            metadata = {
+                "session_id": session_id,
+                "round_id": round_id,
+                "user_id": self._user_id,
+                "agent_id": self._agent_id,
+                "message_ids": message_ids,
+                **kwargs
+            }
+
+            write_result = await self.unified_memory_layer.write_parallel(
+                message_batch_list=message_batch_list,
+                session_id=session_id,
+                metadata=metadata
+            )
+
+            if write_result.success:
+                logger.info(f"MemoryService._process_with_unified_layer: Successfully processed through unified layer")
+
+                # Extract processing statistics
+                layer_results = write_result.layer_results
+                total_processed = sum(
+                    result.get("processed_count", 0)
+                    for result in layer_results.values()
+                    if isinstance(result, dict)
+                )
+
+                return self._success_response(
+                    message_ids,
+                    f"Processed {len(message_batch_list)} message lists through L0/L1/L2 parallel processing",
+                    chunk_count=total_processed,
+                    layer_results=layer_results,
+                    processing_method="unified_parallel"
+                )
+            else:
+                logger.error(f"MemoryService._process_with_unified_layer: Processing failed: {write_result.message}")
+                return self._error_response(f"Unified layer processing failed: {write_result.message}")
+
+        except Exception as e:
+            logger.error(f"MemoryService._process_with_unified_layer: Error: {e}")
+            return self._error_response(f"Unified layer processing error: {str(e)}")
     async def _process_with_traditional_method(self, message_batch_list: MessageBatchList, **kwargs) -> Dict[str, Any]:
         """Process message batch using traditional sequential method."""
         # This contains the original add_batch logic
@@ -433,9 +535,13 @@ class MemoryService(MessageInterface):
 
             logger.info(f"MemoryService.add_batch: Processing {len(message_batch_list)} message lists")
 
-            # Process with traditional method
-            logger.info("MemoryService.add_batch: Processing with sequential method")
-            return await self._process_with_traditional_method(message_batch_list, **kwargs)
+            # Choose processing method based on configuration
+            if self.use_unified_layer and self.unified_memory_layer:
+                logger.info("MemoryService.add_batch: Using Unified Memory Layer (L0/L1/L2 parallel processing)")
+                return await self._process_with_unified_layer(message_batch_list, **kwargs)
+            else:
+                logger.info("MemoryService.add_batch: Using traditional method (L0-only processing)")
+                return await self._process_with_traditional_method(message_batch_list, **kwargs)
 
         except Exception as e:
             logger.error(f"MemoryService.add_batch: Error processing message batch: {e}")
@@ -696,19 +802,37 @@ class MemoryService(MessageInterface):
             existing_id = message.get("id")
             existing_created_at = message.get("created_at")
 
+            # Check if message already exists to avoid UNIQUE constraint failures
+            if existing_id:
+                existing_message = self.db.get_message(existing_id)
+                if existing_message:
+                    logger.debug(f"Message {existing_id} already exists in database, skipping insert")
+                    message_ids.append(existing_id)
+                    continue
+
             # Always update the updated_at timestamp when storing to database
             from datetime import datetime
             updated_at = datetime.now().isoformat()
 
-            message_id = self.db.add_message(
-                round_id=round_id,
-                role=role,
-                content=content,
-                message_id=existing_id,
-                created_at=existing_created_at,
-                updated_at=updated_at
-            )
-            message_ids.append(message_id)
+            try:
+                message_id = self.db.add_message(
+                    round_id=round_id,
+                    role=role,
+                    content=content,
+                    message_id=existing_id,
+                    created_at=existing_created_at,
+                    updated_at=updated_at
+                )
+                message_ids.append(message_id)
+            except Exception as e:
+                # Handle UNIQUE constraint failures gracefully
+                error_msg = str(e).lower()
+                if 'unique' in error_msg and existing_id:
+                    logger.warning(f"Message {existing_id} already exists (race condition), using existing ID")
+                    message_ids.append(existing_id)
+                else:
+                    logger.error(f"Failed to store message: {e}")
+                    raise
 
         return message_ids
 

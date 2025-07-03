@@ -15,6 +15,7 @@ from .core import (
     MemoryLayer, LayerType, LayerConfig, ProcessingResult,
     StorageType, StorageManager
 )
+from ..rag.chunk.base import ChunkData
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +80,13 @@ class L0EpisodicLayer(MemoryLayer):
             if not self.initialized:
                 await self.initialize()
             
-            # Store data in configured backends
+            # Convert data to ChunkData objects for storage
+            chunks = self._convert_to_chunks(data, metadata)
+
+            # Store chunks in configured backends
             storage_results = {}
-            if self.storage_manager:
-                storage_results = await self.storage_manager.write_to_all(data, metadata)
+            if self.storage_manager and chunks:
+                storage_results = await self.storage_manager.write_to_all(chunks, metadata)
             
             # Collect successful storage IDs
             processed_items = [
@@ -164,6 +168,59 @@ class L0EpisodicLayer(MemoryLayer):
             logger.error(f"L0EpisodicLayer: Query failed: {e}")
             return []
 
+    def _convert_to_chunks(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
+        """Convert raw data to ChunkData objects for storage."""
+        chunks = []
+
+        try:
+            if isinstance(data, list):
+                # Process list of items
+                for i, item in enumerate(data):
+                    chunk = self._create_chunk_from_item(item, metadata, f"l0_item_{i}")
+                    if chunk:
+                        chunks.append(chunk)
+            else:
+                # Process single item
+                chunk = self._create_chunk_from_item(data, metadata, "l0_single")
+                if chunk:
+                    chunks.append(chunk)
+
+        except Exception as e:
+            logger.error(f"L0EpisodicLayer: Failed to convert data to chunks: {e}")
+
+        return chunks
+
+    def _create_chunk_from_item(self, item: Any, metadata: Optional[Dict[str, Any]], prefix: str) -> Optional[ChunkData]:
+        """Create a ChunkData object from a single data item."""
+        try:
+            # Extract content based on item type
+            content = ""
+            if isinstance(item, dict):
+                content = item.get("content", "") or item.get("text", "") or str(item)
+            else:
+                content = str(item)
+
+            if not content.strip():
+                return None
+
+            # Create chunk metadata
+            chunk_metadata = {
+                "layer": "L0",
+                "source": "episodic_layer",
+                "timestamp": time.time(),
+                **(metadata or {})
+            }
+
+            # Create ChunkData object
+            return ChunkData(
+                content=content,
+                metadata=chunk_metadata
+            )
+
+        except Exception as e:
+            logger.error(f"L0EpisodicLayer: Failed to create chunk from item: {e}")
+            return None
+
 
 class L1SemanticLayer(MemoryLayer):
     """
@@ -229,12 +286,13 @@ class L1SemanticLayer(MemoryLayer):
             # Extract facts from data (placeholder for LLM integration)
             facts = await self._extract_facts(data, metadata)
             
-            # Store facts
+            # Convert facts to ChunkData objects and store
             processed_items = []
             if facts and self.storage_manager:
-                for fact in facts:
+                fact_chunks = self._convert_facts_to_chunks(facts, metadata)
+                for chunk in fact_chunks:
                     fact_id = await self.storage_manager.write_to_backend(
-                        StorageType.VECTOR, fact, metadata
+                        StorageType.VECTOR, chunk, metadata
                     )
                     if fact_id:
                         processed_items.append(fact_id)
@@ -254,16 +312,8 @@ class L1SemanticLayer(MemoryLayer):
                 processing_time=processing_time
             )
             
-            # Emit event for L2 processing
-            if success and self.event_bus:
-                await self._emit_event(
-                    EventType.DATA_PROCESSED,
-                    data={
-                        "facts": facts,
-                        "processed_items": processed_items
-                    },
-                    metadata=metadata
-                )
+            # Note: Event emission for L2 processing would be handled by the parallel manager
+            # No direct event bus access needed in individual layers
             
             logger.debug(f"L1SemanticLayer: Extracted {len(facts)} facts")
             return result
@@ -421,6 +471,39 @@ class L1SemanticLayer(MemoryLayer):
             logger.error(f"L1SemanticLayer: Failed to extract facts from item: {e}")
             return []
 
+    def _convert_facts_to_chunks(self, facts: List[Dict[str, Any]], metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
+        """Convert extracted facts to ChunkData objects for storage."""
+        chunks = []
+
+        try:
+            for i, fact in enumerate(facts):
+                # Extract content from fact
+                content = fact.get("content", "")
+                if not content.strip():
+                    continue
+
+                # Create chunk metadata combining fact metadata and layer metadata
+                chunk_metadata = {
+                    "layer": "L1",
+                    "source": "semantic_layer",
+                    "fact_type": fact.get("type", "unknown"),
+                    "extraction_timestamp": fact.get("timestamp", time.time()),
+                    **(fact.get("metadata", {})),
+                    **(metadata or {})
+                }
+
+                # Create ChunkData object
+                chunk = ChunkData(
+                    content=content,
+                    metadata=chunk_metadata
+                )
+                chunks.append(chunk)
+
+        except Exception as e:
+            logger.error(f"L1SemanticLayer: Failed to convert facts to chunks: {e}")
+
+        return chunks
+
 
 class L2RelationalLayer(MemoryLayer):
     """
@@ -486,31 +569,67 @@ class L2RelationalLayer(MemoryLayer):
             
             # Extract entities and relationships (placeholder)
             entities, relationships = await self._extract_entities_and_relationships(data, metadata)
-            
-            # Update graph
+            logger.debug(f"L2RelationalLayer: Extracted {len(entities)} entities, {len(relationships)} relationships from data: {type(data)}")
+
+            # Convert entities and relationships to ChunkData objects and store
             processed_items = []
             if self.storage_manager and (entities or relationships):
-                # Store entities and relationships in graph store
-                for entity in entities:
-                    entity_id = await self.storage_manager.write_to_backend(
-                        StorageType.GRAPH, entity, metadata
-                    )
+                # Convert and store entities
+                entity_chunks = self._convert_entities_to_chunks(entities, metadata)
+                for chunk in entity_chunks:
+                    # Try graph storage first, fallback to vector storage if graph is not available
+                    entity_id = None
+                    try:
+                        entity_id = await self.storage_manager.write_to_backend(
+                            StorageType.GRAPH, chunk, metadata
+                        )
+                        logger.debug(f"L2RelationalLayer: Successfully stored entity to graph storage: {entity_id}")
+                    except Exception as e:
+                        logger.debug(f"L2RelationalLayer: Graph storage not available, using vector storage: {e}")
+                        try:
+                            entity_id = await self.storage_manager.write_to_backend(
+                                StorageType.VECTOR, chunk, metadata
+                            )
+                            logger.debug(f"L2RelationalLayer: Successfully stored entity to vector storage: {entity_id}")
+                        except Exception as ve:
+                            logger.error(f"L2RelationalLayer: Failed to store entity to vector storage: {ve}")
+
                     if entity_id:
                         processed_items.append(entity_id)
-                
-                for relationship in relationships:
-                    rel_id = await self.storage_manager.write_to_backend(
-                        StorageType.GRAPH, relationship, metadata
-                    )
+                    else:
+                        logger.warning(f"L2RelationalLayer: Failed to store entity chunk: {chunk.chunk_id}")
+
+                # Convert and store relationships
+                relationship_chunks = self._convert_relationships_to_chunks(relationships, metadata)
+                for chunk in relationship_chunks:
+                    # Try graph storage first, fallback to vector storage if graph is not available
+                    rel_id = None
+                    try:
+                        rel_id = await self.storage_manager.write_to_backend(
+                            StorageType.GRAPH, chunk, metadata
+                        )
+                        logger.debug(f"L2RelationalLayer: Successfully stored relationship to graph storage: {rel_id}")
+                    except Exception as e:
+                        logger.debug(f"L2RelationalLayer: Graph storage not available, using vector storage: {e}")
+                        try:
+                            rel_id = await self.storage_manager.write_to_backend(
+                                StorageType.VECTOR, chunk, metadata
+                            )
+                            logger.debug(f"L2RelationalLayer: Successfully stored relationship to vector storage: {rel_id}")
+                        except Exception as ve:
+                            logger.error(f"L2RelationalLayer: Failed to store relationship to vector storage: {ve}")
+
                     if rel_id:
                         processed_items.append(rel_id)
+                    else:
+                        logger.warning(f"L2RelationalLayer: Failed to store relationship chunk: {chunk.chunk_id}")
             
             processing_time = time.time() - start_time
             success = len(processed_items) > 0
-            
+
             # Update statistics
             self._update_stats(processing_time, success)
-            
+
             # Create result
             result = ProcessingResult(
                 success=success,
@@ -522,8 +641,8 @@ class L2RelationalLayer(MemoryLayer):
                 },
                 processing_time=processing_time
             )
-            
-            logger.debug(f"L2RelationalLayer: Processed {len(entities)} entities, {len(relationships)} relationships")
+
+            logger.debug(f"L2RelationalLayer: Processed {len(entities)} entities, {len(relationships)} relationships, success={success}, processed_items={len(processed_items)}")
             return result
             
         except Exception as e:
@@ -563,17 +682,140 @@ class L2RelationalLayer(MemoryLayer):
 
     
     async def _extract_entities_and_relationships(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Extract entities and relationships from facts (placeholder)."""
+        """Extract entities and relationships from data (placeholder)."""
         # This would integrate with the existing L2 graph construction logic
-        # For now, return simple representations
+        # For now, return simple representations based on actual data format
         entities = []
         relationships = []
-        
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and "fact" in item:
-                    # Simple entity extraction
-                    entities.append({"entity": f"Entity from {item['fact'][:50]}..."})
+
+        try:
+            if isinstance(data, list):
+                for i, item in enumerate(data):
+                    # Handle different data formats
+                    if isinstance(item, dict):
+                        # Check for fact format first
+                        if "fact" in item:
+                            fact_content = item["fact"]
+                            entities.append({"entity": f"Entity from fact: {fact_content[:50]}..."})
+                            relationships.append({"relationship": "extracted_from", "source": "fact", "target": "entity"})
+                        # Handle message format
+                        elif "content" in item:
+                            content = item["content"]
+                            entities.append({"entity": f"Entity from message: {content[:50]}..."})
+                            relationships.append({"relationship": "mentioned_in", "source": "message", "target": "entity"})
+                        # Handle other dict formats
+                        else:
+                            content = str(item)[:100]
+                            entities.append({"entity": f"Entity from data: {content}..."})
+                            relationships.append({"relationship": "derived_from", "source": "data", "target": "entity"})
+                    elif isinstance(item, str):
+                        # Handle string data
+                        entities.append({"entity": f"Entity from text: {item[:50]}..."})
+                        relationships.append({"relationship": "extracted_from", "source": "text", "target": "entity"})
+                    else:
+                        # Handle other types
+                        content = str(item)[:50]
+                        entities.append({"entity": f"Entity from item: {content}..."})
+                        relationships.append({"relationship": "derived_from", "source": "item", "target": "entity"})
+            elif isinstance(data, dict):
+                # Handle single dict
+                if "fact" in data:
+                    fact_content = data["fact"]
+                    entities.append({"entity": f"Entity from fact: {fact_content[:50]}..."})
                     relationships.append({"relationship": "extracted_from", "source": "fact", "target": "entity"})
-        
+                elif "content" in data:
+                    content = data["content"]
+                    entities.append({"entity": f"Entity from message: {content[:50]}..."})
+                    relationships.append({"relationship": "mentioned_in", "source": "message", "target": "entity"})
+                else:
+                    content = str(data)[:100]
+                    entities.append({"entity": f"Entity from data: {content}..."})
+                    relationships.append({"relationship": "derived_from", "source": "data", "target": "entity"})
+            elif isinstance(data, str):
+                # Handle string data
+                entities.append({"entity": f"Entity from text: {data[:50]}..."})
+                relationships.append({"relationship": "extracted_from", "source": "text", "target": "entity"})
+            else:
+                # Handle other types
+                content = str(data)[:50]
+                entities.append({"entity": f"Entity from data: {content}..."})
+                relationships.append({"relationship": "derived_from", "source": "data", "target": "entity"})
+
+            logger.debug(f"L2RelationalLayer: Extracted {len(entities)} entities and {len(relationships)} relationships from data")
+
+        except Exception as e:
+            logger.error(f"L2RelationalLayer: Entity extraction failed: {e}")
+            # Return empty lists on error
+            entities = []
+            relationships = []
+
         return entities, relationships
+
+    def _convert_entities_to_chunks(self, entities: List[Dict[str, Any]], metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
+        """Convert extracted entities to ChunkData objects for storage."""
+        chunks = []
+
+        try:
+            for i, entity in enumerate(entities):
+                # Extract content from entity
+                content = entity.get("entity", "") or str(entity)
+                if not content.strip():
+                    continue
+
+                # Create chunk metadata
+                chunk_metadata = {
+                    "layer": "L2",
+                    "source": "relational_layer",
+                    "data_type": "entity",
+                    "extraction_timestamp": time.time(),
+                    **(metadata or {})
+                }
+
+                # Create ChunkData object
+                chunk = ChunkData(
+                    content=content,
+                    metadata=chunk_metadata
+                )
+                chunks.append(chunk)
+
+        except Exception as e:
+            logger.error(f"L2RelationalLayer: Failed to convert entities to chunks: {e}")
+
+        return chunks
+
+    def _convert_relationships_to_chunks(self, relationships: List[Dict[str, Any]], metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
+        """Convert extracted relationships to ChunkData objects for storage."""
+        chunks = []
+
+        try:
+            for i, relationship in enumerate(relationships):
+                # Extract content from relationship
+                rel_type = relationship.get("relationship", "")
+                source = relationship.get("source", "")
+                target = relationship.get("target", "")
+                content = f"{source} -> {rel_type} -> {target}" if all([source, rel_type, target]) else str(relationship)
+
+                if not content.strip():
+                    continue
+
+                # Create chunk metadata
+                chunk_metadata = {
+                    "layer": "L2",
+                    "source": "relational_layer",
+                    "data_type": "relationship",
+                    "relationship_type": rel_type,
+                    "extraction_timestamp": time.time(),
+                    **(metadata or {})
+                }
+
+                # Create ChunkData object
+                chunk = ChunkData(
+                    content=content,
+                    metadata=chunk_metadata
+                )
+                chunks.append(chunk)
+
+        except Exception as e:
+            logger.error(f"L2RelationalLayer: Failed to convert relationships to chunks: {e}")
+
+        return chunks

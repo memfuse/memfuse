@@ -141,32 +141,31 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         
         return retrieval_handler
 
-    def _create_sqlite_handler(self):
-        """Create SQLite handler for FlushManager.
+    def _create_memory_service_handler(self):
+        """Create unified MemoryService handler for FlushManager.
 
-        This handler is responsible for persisting original message rounds to SQLite
-        database via MemoryService. It's called by FlushManager during flush operations.
+        This handler delegates all storage operations to MemoryService, which then
+        routes data through the UnifiedMemoryLayer to trigger parallel L0/L1/L2 processing.
+        This maintains proper architectural separation and enables the full memory hierarchy.
 
         Key responsibilities:
-        - Store complete message rounds for Read API and long-term persistence
-        - Maintain data integrity and consistency across flush operations
+        - Route all buffer data through MemoryService.add_batch()
+        - Trigger parallel L0/L1/L2 processing via UnifiedMemoryLayer
+        - Maintain architectural separation between buffer and storage layers
         - Handle errors gracefully with proper logging and exception propagation
-        - Support batch operations for efficiency and performance
-        - Integrate with MemoryService for unified data management
+        - Support batch operations for efficient processing
 
-        The handler is designed to work with the optimistic clearing strategy:
-        - Data is cleared from buffer before flush (optimistic)
-        - If flush fails, FlushManager handles error recovery
-        - This minimizes buffer lock time and improves concurrency
+        Architecture flow:
+        BufferService → MemoryService.add_batch() → UnifiedMemoryLayer → L0/L1/L2 parallel processing
 
         Returns:
-            Async callable that handles SQLite storage operations
+            Async callable that handles unified memory service operations
         """
-        async def sqlite_handler(rounds: List[MessageList]) -> None:
-            """Handle SQLite storage operations for message rounds.
+        async def memory_service_handler(rounds: List[MessageList]) -> None:
+            """Handle unified memory service operations for message rounds.
 
             Args:
-                rounds: List of MessageList objects to store in SQLite database
+                rounds: List of MessageList objects to process through memory hierarchy
 
             Raises:
                 Exception: If storage operation fails, propagated to FlushManager
@@ -174,66 +173,20 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             """
             try:
                 if rounds and self.memory_service:
-                    logger.debug(f"BufferService: Storing {len(rounds)} rounds to database via SQLite handler")
+                    logger.info(f"BufferService: Processing {len(rounds)} rounds through MemoryService")
                     result = await self.memory_service.add_batch(rounds)
                     if result.get("status") == "success":
-                        logger.debug(f"BufferService: SQLite storage successful")
+                        logger.info(f"BufferService: MemoryService processing successful - parallel L0/L1/L2 triggered")
                     else:
-                        logger.error(f"BufferService: SQLite storage failed: {result.get('message')}")
-                        raise Exception(f"SQLite storage failed: {result.get('message')}")
+                        logger.error(f"BufferService: MemoryService processing failed: {result.get('message')}")
+                        raise Exception(f"MemoryService processing failed: {result.get('message')}")
+                else:
+                    logger.warning("BufferService: No rounds or MemoryService not available")
             except Exception as e:
-                logger.error(f"BufferService: SQLite handler error: {e}")
+                logger.error(f"BufferService: MemoryService handler error: {e}")
                 raise  # Re-raise to signal flush failure to FlushManager
 
-        return sqlite_handler
-
-
-    
-    def _create_qdrant_handler(self):
-        """Create Qdrant handler for FlushManager.
-
-        This handler is responsible for persisting processed chunks and embeddings
-        to Qdrant vector database for semantic search and retrieval operations.
-
-        Key responsibilities:
-        - Store pre-processed chunks and embeddings for fast semantic search
-        - Maintain vector index consistency for query operations
-        - Handle errors gracefully with proper logging and exception propagation
-        - Support batch operations for efficient vector storage
-        - Integrate with MemoryService's vector storage capabilities
-
-        The handler works in conjunction with SQLite handler:
-        - SQLite stores original message rounds for complete data preservation
-        - Qdrant stores processed chunks/embeddings for fast retrieval
-        - Both are flushed together to maintain data consistency
-
-        Returns:
-            Async callable that handles Qdrant vector storage operations
-        """
-        async def qdrant_handler(chunks, embeddings) -> None:
-            """Handle Qdrant vector storage operations for chunks and embeddings.
-
-            Args:
-                chunks: List of text chunks to store
-                embeddings: Corresponding embeddings for the chunks
-
-            Raises:
-                Exception: If storage operation fails, propagated to FlushManager
-                          for error handling and potential data recovery
-            """
-            try:
-                if chunks and embeddings and self.memory_service:
-                    logger.debug(f"BufferService: Storing {len(chunks)} chunks to Qdrant via handler")
-                    # Convert to format expected by memory service
-                    # This would need to be implemented based on your MemoryService interface
-                    # For now, we log the operation as successful
-                    # TODO: Implement actual Qdrant storage via MemoryService
-                    logger.debug("BufferService: Qdrant storage successful")
-            except Exception as e:
-                logger.error(f"BufferService: Qdrant handler error: {e}")
-                raise  # Re-raise to signal flush failure to FlushManager
-
-        return qdrant_handler
+        return memory_service_handler
     
     async def initialize(self, cfg: Optional[DictConfig] = None) -> bool:
         """Initialize the buffer service.
@@ -250,10 +203,12 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 logger.error("BufferService: Failed to initialize FlushManager")
                 return False
 
-            # Set up storage handlers
+            # Set up unified MemoryService handler (replaces separate SQLite/Qdrant handlers)
+            # This maintains architectural separation: BufferService → MemoryService → UnifiedMemoryLayer
+            memory_handler = self._create_memory_service_handler()
             self.flush_manager.set_handlers(
-                sqlite_handler=self._create_sqlite_handler(),
-                qdrant_handler=self._create_qdrant_handler()
+                sqlite_handler=memory_handler,  # Use unified MemoryService handler
+                qdrant_handler=None             # No separate Qdrant handler needed
             )
 
             # Initialize HybridBuffer
