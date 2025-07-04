@@ -6,15 +6,13 @@ validation, and processing in the L1 semantic memory layer.
 """
 
 import asyncio
-import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from loguru import logger
 
 from ..llm.base import LLMProvider, LLMRequest
 from ..llm.prompts.manager import get_prompt_manager
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass

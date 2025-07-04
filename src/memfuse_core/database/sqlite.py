@@ -147,6 +147,39 @@ class SQLiteDB(DBBase):
         )
         ''')
 
+        # Create L0 messages table for memory hierarchy storage
+        self.execute('''
+        CREATE TABLE IF NOT EXISTS l0_messages (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            metadata TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        ''')
+
+        # Create L1 facts table for memory hierarchy storage
+        self.execute('''
+        CREATE TABLE IF NOT EXISTS l1_facts (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            metadata TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        ''')
+
+        # Create L2 relations table for memory hierarchy storage
+        self.execute('''
+        CREATE TABLE IF NOT EXISTS l2_relations (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            metadata TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        ''')
+
         self.commit()
 
     def insert(self, table: str, data: Dict[str, Any]) -> str:
@@ -160,22 +193,40 @@ class SQLiteDB(DBBase):
             ID of the inserted row
         """
         # Convert any dictionary values to JSON
+        processed_data = {}
         for key, value in data.items():
             if isinstance(value, dict):
-                data[key] = json.dumps(value)
+                processed_data[key] = json.dumps(value)
+            else:
+                processed_data[key] = value
 
         # Build the query
-        columns = ', '.join(data.keys())
-        placeholders = ', '.join(['?'] * len(data))
+        columns = ', '.join(processed_data.keys())
+        placeholders = ', '.join(['?'] * len(processed_data))
         query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
 
         # Execute the query
-        self.execute(query, tuple(data.values()))
+        self.execute(query, tuple(processed_data.values()))
         self.commit()
 
-        return data.get('id')
+        return processed_data.get('id', '')
 
-    def select(self, table: str, conditions: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    def add(self, table: str, data: Dict[str, Any]) -> str:
+        """Add method for compatibility with store interface.
+
+        This is an alias for insert() to provide a unified interface
+        that works with both database and store backends.
+
+        Args:
+            table: Table name
+            data: Data to insert
+
+        Returns:
+            ID of the inserted row
+        """
+        return self.insert(table, data)
+
+    def select(self, table: str, conditions: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Select data from a table.
 
         Args:
