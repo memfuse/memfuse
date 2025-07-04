@@ -6,18 +6,16 @@ memory layers with unified interfaces and event-driven processing.
 """
 
 import asyncio
-import logging
 import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+from loguru import logger
 
 from .core import (
     MemoryLayer, LayerType, LayerConfig, ProcessingResult,
     StorageType, StorageManager
 )
 from ..rag.chunk.base import ChunkData
-
-logger = logging.getLogger(__name__)
 
 
 class L0EpisodicLayer(MemoryLayer):

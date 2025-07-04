@@ -6,16 +6,14 @@ capabilities for facts in the semantic memory layer.
 """
 
 import asyncio
-import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from loguru import logger
 
 from ..llm.base import LLMProvider, LLMRequest
 from ..llm.prompts.manager import get_prompt_manager
-
-logger = logging.getLogger(__name__)
 
 
 class ConflictType(Enum):

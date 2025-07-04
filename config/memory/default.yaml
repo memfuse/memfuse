@@ -1,183 +1,154 @@
 # @package memory
 # MemFuse Memory System Configuration
-# Unified configuration for all memory layers and processing strategies
+# Optimized and unified configuration for L0/L1/L2 memory hierarchy
 
-# 🚀 CURRENT STATUS: L0/L1/L2 parallel processing architecture implemented
-# All layers have complete implementations and are ready for activation
-# Parallel processing manager coordinates writes across all layers
+# =============================================================================
+# CORE ARCHITECTURE SETTINGS
+# =============================================================================
 
-# Layer-specific configurations
+# Processing strategy - controls how layers work together
+processing:
+  strategy: "parallel"          # parallel | sequential
+  enable_fallback: true         # fallback to sequential if parallel fails
+  max_concurrent_layers: 3      # maximum layers processing simultaneously
+
+  # Global timeout and retry settings
+  timeout:
+    per_layer: 30.0            # timeout per layer operation (seconds)
+    total_operation: 120.0     # total operation timeout (seconds)
+
+  retry:
+    max_attempts: 3            # maximum retry attempts
+    base_delay: 1.0           # base delay between retries (seconds)
+    max_delay: 10.0           # maximum delay between retries (seconds)
+    exponential_backoff: true # use exponential backoff
+
+# =============================================================================
+# MEMORY LAYERS CONFIGURATION
+# =============================================================================
+
 layers:
+  # L0: Episodic Memory - Raw data storage
   l0:
     enabled: true
-    timeout: 30.0
-    max_retries: 3
     priority: 1
-    custom_settings:
-      buffer_size: 1000
-      auto_flush_interval: 60
 
+    # L0-specific settings
+    buffer_size: 1000
+    auto_flush_interval: 60    # seconds
+    storage_backends: ["vector", "keyword", "sql"]
+
+    # L0 storage tables
+    storage:
+      message_table: "l0_messages"
+      metadata_table: "l0_metadata"
+
+  # L1: Semantic Memory - Fact extraction and processing
   l1:
-    enabled: true  # L1 Semantic Memory - fact extraction and processing
-    timeout: 45.0
-    max_retries: 3
+    enabled: true
     priority: 2
-    
-    # Fact extraction settings
-    extraction:
-      batch_size: 5
-      context_window: 2  # chunks before/after for context
-      llm_model: "grok-3-mini"
-      max_facts_per_chunk: 10
-      min_confidence_threshold: 0.7
-      enable_entity_extraction: true
-      enable_temporal_extraction: true
 
-    # Conflict detection settings
-    conflict_detection:
-      enabled: true
-      semantic_similarity_threshold: 0.85
-      auto_resolve_threshold: 0.9
-      escalation_threshold: 0.5
-      resolution_strategies: ["evidence_based", "source_credibility", "temporal_priority"]
+    # L1-specific settings (for future implementation)
+    fact_extraction_enabled: true
+    llm_model: "grok-3-mini"
+    batch_size: 5
+    min_confidence_threshold: 0.7
 
-    # Temporal processing settings
-    temporal_processing:
-      time_extraction: true
-      relative_time_resolution: true
-      timezone_normalization: "UTC"
-      uncertainty_modeling: true
-      supported_formats: ["ISO8601", "natural_language", "relative"]
+    # L1 storage tables
+    storage:
+      fact_table: "l1_facts"
+      lineage_table: "l1_lineage"
+      conflicts_table: "l1_conflicts"
 
-    # Memory consolidation settings
-    consolidation:
-      enabled: true
-      interval: 3600  # seconds (1 hour)
-      batch_size: 100
-      max_age_for_review: 604800  # 1 week in seconds
-      quality_threshold: 0.8
-      merge_similarity_threshold: 0.95
-
-    # Performance settings
-    performance:
-      enable_caching: true
-      cache_size: 1000
-      enable_async_processing: true
-      max_concurrent_extractions: 3
-      extraction_timeout: 30.0  # seconds
-
-    # Quality assessment settings
-    quality:
-      enable_quality_scoring: true
-      reliability_factors: ["source_credibility", "evidence_strength", "consistency"]
-      min_quality_score: 0.6
-      enable_fact_validation: true
-
-    # Monitoring settings
-    monitoring:
-      enable_metrics: true
-      log_level: "INFO"
-      track_performance: true
-      enable_debugging: false
-
+  # L2: Relational Memory - Knowledge graph construction
   l2:
-    enabled: true  # L2 Relational Memory - knowledge graph construction
-    timeout: 60.0
-    max_retries: 2
+    enabled: true
     priority: 3
-    custom_settings:
-      graph_update_strategy: "incremental"
-      entity_resolution_threshold: 0.8
 
-# Parallel processing configuration
-# 🚀 NOTE: Parallel processing architecture implemented and ready for activation
-parallel:
-  # Strategy settings
-  default_strategy: "parallel"  # Parallel processing across L0/L1/L2 layers
-  fallback_strategy: "sequential"
-  enable_strategy_fallback: true  # Fallback to sequential if parallel fails
-  
-  # Concurrency settings (for future use)
-  max_concurrent_layers: 3
-  max_concurrent_operations: 10
-  enable_connection_pooling: true
-  connection_pool_size: 10
-  
-  # Timeout settings
-  timeout_per_layer: 30.0
-  total_operation_timeout: 120.0
-  
-  # Retry configuration
-  retry:
-    max_retries: 3
-    base_delay: 1.0
-    max_delay: 10.0
-    exponential_backoff: true
-    retry_on_timeout: true
-    retry_on_error: true
-  
-  # Performance monitoring
-  enable_performance_monitoring: true
-  performance_log_interval: 60.0
-  
-  # Error handling
-  max_error_history: 100
-  error_threshold_for_fallback: 0.5  # 50% error rate triggers fallback
+    # L2-specific settings
+    graph_update_strategy: "incremental"
+    entity_resolution_threshold: 0.8
+    entity_extraction_enabled: true
 
-# Storage configuration
+    # L2 storage tables
+    storage:
+      entity_table: "l2_entities"
+      relationship_table: "l2_relationships"
+      graph_table: "l2_graphs"
+
+# =============================================================================
+# STORAGE BACKEND CONFIGURATION
+# =============================================================================
+
 storage:
+  # Backend-specific connection settings
   vector:
     connection_pool_size: 5
     timeout: 30.0
     batch_size: 100
+    store_type: "qdrant"
+    enable_transactions: true
+    backend: "sqlite"
 
   keyword:
     connection_pool_size: 3
     timeout: 15.0
+    enable_transactions: true
+    backend: "sqlite"
 
   graph:
     connection_pool_size: 3
     timeout: 20.0
     enable_auto_save: true
+    store_type: "networkx"
+    enable_transactions: true
+    backend: "sqlite"
 
   sql:
     connection_pool_size: 5
     timeout: 30.0
     enable_wal_mode: true
-
-  # L1 specific storage (for future use)
-  l1_storage:
-    backend: "sqlite"  # or "postgres"
-    vector_store: "qdrant"
     enable_transactions: true
-    fact_table: "l1_facts"
-    lineage_table: "l1_lineage"
-    conflicts_table: "l1_conflicts"
+    backend: "sqlite"
 
-# Integration with MemoryService
-# 🚀 NOTE: Parallel processing architecture implemented and ready for activation
+# =============================================================================
+# MEMORY SERVICE INTEGRATION
+# =============================================================================
+
+# Memory service configuration - controls how MemoryService integrates with layers
 memory_service:
-  # Enable parallel processing in MemoryService (NOW ENABLED)
-  parallel_enabled: true  # Parallel processing across L0/L1/L2 layers
-  # Processing strategy
-  parallel_strategy: "parallel"  # Use parallel processing strategy
-  # Fallback to traditional processing on errors
-  enable_fallback: true
-  # Log processing decisions
-  log_processing_mode: true
-  # Timeout and retry settings
-  timeout_per_layer: 30.0
-  max_retries: 3
+  parallel_enabled: true        # Enable L0/L1/L2 parallel processing
+  parallel_strategy: "parallel" # Processing strategy
+  enable_fallback: true         # Fallback to traditional processing on errors
+  log_processing_mode: true     # Log processing decisions
+  timeout_per_layer: 30.0       # Timeout per layer (seconds)
+  max_retries: 3               # Maximum retry attempts
 
-# Development and testing settings
+# =============================================================================
+# PERFORMANCE AND MONITORING
+# =============================================================================
+
+performance:
+  enable_monitoring: true
+  enable_caching: true
+  cache_size: 1000
+  log_interval: 60.0           # performance log interval (seconds)
+
+  # Error handling
+  max_error_history: 100
+  error_threshold_for_fallback: 0.5  # 50% error rate triggers fallback
+
+# =============================================================================
+# ENVIRONMENT-SPECIFIC SETTINGS
+# =============================================================================
+
 development:
   enable_debug_logging: false
   enable_performance_profiling: false
   mock_llm_responses: false
-  
-# Production optimizations
+
 production:
   enable_metrics_collection: true
-  metrics_export_interval: 300
+  metrics_export_interval: 300  # seconds
   enable_health_checks: true
-  health_check_interval: 60
+  health_check_interval: 60     # seconds

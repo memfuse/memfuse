@@ -6,9 +6,9 @@ coordinating parallel processing across L0/L1/L2 memory layers.
 """
 
 import asyncio
-import logging
 import time
 from typing import Any, Dict, List, Optional
+from loguru import logger
 
 from ..interfaces.unified_memory_layer import (
     UnifiedMemoryLayer,
@@ -21,9 +21,6 @@ from ..interfaces.message_interface import MessageBatchList
 from .parallel_manager import ParallelMemoryLayerManager
 from .types import WriteStrategy, ParallelWriteResult
 from ..utils.config import ConfigManager
-
-
-logger = logging.getLogger(__name__)
 
 
 class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):

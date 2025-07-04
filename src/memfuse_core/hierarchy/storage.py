@@ -5,14 +5,12 @@ This module provides a centralized storage manager that coordinates
 access to multiple storage backends (vector, graph, keyword, SQL).
 """
 
-import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from loguru import logger
 
 from .core import StorageManager, StorageBackend, StorageType
 from ..rag.chunk.base import ChunkData
-
-logger = logging.getLogger(__name__)
 
 
 class StoreBackendAdapter(StorageBackend):
@@ -52,31 +50,172 @@ class StoreBackendAdapter(StorageBackend):
             return False
     
     async def write(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """Write data to the store."""
+        """Write data to the store using appropriate interface."""
         if not self.initialized:
             await self.initialize()
 
         try:
-            # Most stores have an 'add' method that expects List[ChunkData]
-            if hasattr(self.store, 'add'):
-                # Validate and prepare data for store interface
-                data_list = self._prepare_data_for_store(data)
-
-                if not data_list:
-                    logger.warning(f"StoreBackendAdapter: No valid data to write to {self.storage_type.value}")
-                    return ""
-
-                # Call store.add with list and get list of IDs back
-                result_ids = await self.store.add(data_list)
-
-                # Return the first ID (for single item writes)
-                return result_ids[0] if result_ids else ""
+            # Route to appropriate write method based on storage type
+            if self.storage_type == StorageType.VECTOR:
+                return await self._write_to_vector_store(data, metadata)
+            elif self.storage_type == StorageType.KEYWORD:
+                return await self._write_to_keyword_store(data, metadata)
+            elif self.storage_type == StorageType.GRAPH:
+                return await self._write_to_graph_store(data, metadata)
+            elif self.storage_type == StorageType.SQL:
+                return await self._write_to_database(data, metadata)
             else:
-                raise NotImplementedError(f"Store {type(self.store)} does not support write operations")
+                raise NotImplementedError(f"Storage type {self.storage_type.value} not supported")
 
         except Exception as e:
-            logger.error(f"StoreBackendAdapter: Write failed for {self.storage_type.value}: {e} | Store: {self.storage_type.value} | Operation: add")
+            logger.error(f"StoreBackendAdapter: Write failed for {self.storage_type.value}: {e}")
             raise
+
+    async def _write_to_vector_store(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
+        """Write data to vector store."""
+        # Prepare data as ChunkData list
+        data_list = self._prepare_data_for_store(data)
+        if not data_list:
+            logger.warning("StoreBackendAdapter: No valid data to write to vector store")
+            return ""
+
+        # Vector stores use add method with ChunkData list
+        result_ids = await self.store.add(data_list)
+        return result_ids[0] if result_ids else ""
+
+    async def _write_to_keyword_store(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
+        """Write data to keyword store."""
+        # Handle both single items and lists
+        if isinstance(data, list):
+            # Process first item in list for now (batch processing can be added later)
+            if data and hasattr(data[0], 'content'):
+                data = data[0]
+            else:
+                logger.error(f"StoreBackendAdapter: Invalid list data for keyword store: {type(data)}")
+                return ""
+
+        # Convert to Item format for keyword stores
+        if hasattr(data, 'content'):
+            from ..models.core import Item
+            item = Item(
+                id=getattr(data, 'id', None) or getattr(data, 'chunk_id', None),
+                content=data.content,
+                metadata=getattr(data, 'metadata', {})
+            )
+            return await self.store.add_document(item)
+        else:
+            logger.error(f"StoreBackendAdapter: Invalid data for keyword store: {type(data)}")
+            return ""
+
+    async def _write_to_graph_store(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
+        """Write data to graph store."""
+        # Handle both single items and lists
+        if isinstance(data, list):
+            # Process first item in list for now (batch processing can be added later)
+            if data and hasattr(data[0], 'content'):
+                data = data[0]
+            else:
+                logger.error(f"StoreBackendAdapter: Invalid list data for graph store: {type(data)}")
+                return ""
+
+        # Convert to Node format for graph stores
+        if hasattr(data, 'content'):
+            from ..models.core import Node
+            node = Node(
+                id=getattr(data, 'id', None) or getattr(data, 'chunk_id', None),
+                content=data.content,
+                metadata=getattr(data, 'metadata', {})
+            )
+            return await self.store.add_node(node)
+        else:
+            logger.error(f"StoreBackendAdapter: Invalid data for graph store: {type(data)}")
+            return ""
+
+    async def _write_to_database(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
+        """Write data to database backend."""
+        # Prepare data for database insertion
+        db_data = self._prepare_data_for_database(data, metadata)
+        if not db_data:
+            logger.warning("StoreBackendAdapter: No valid data to write to database")
+            return ""
+
+        # Determine table name based on storage type and context
+        table_name = self._get_table_name_for_storage_type()
+
+        # Use add method if available (for unified interface), otherwise use insert
+        if hasattr(self.store, 'add'):
+            result_id = self.store.add(table_name, db_data)
+        else:
+            result_id = self.store.insert(table_name, db_data)
+        return result_id or ""
+
+    def _prepare_data_for_database(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Prepare data for database insertion."""
+        import uuid
+        import time
+
+        # Handle different data types
+        if hasattr(data, 'id') and hasattr(data, 'content'):
+            # Item-like object
+            db_data = {
+                'id': data.id or str(uuid.uuid4()),
+                'content': data.content,
+                'created_at': time.time(),
+                'updated_at': time.time()
+            }
+
+            # Add metadata if available
+            if hasattr(data, 'metadata') and data.metadata:
+                db_data['metadata'] = data.metadata
+            elif metadata:
+                db_data['metadata'] = metadata
+
+        elif isinstance(data, dict):
+            # Dictionary data
+            db_data = data.copy()
+            if 'id' not in db_data:
+                db_data['id'] = str(uuid.uuid4())
+            if 'created_at' not in db_data:
+                db_data['created_at'] = time.time()
+            if 'updated_at' not in db_data:
+                db_data['updated_at'] = time.time()
+            if metadata and 'metadata' not in db_data:
+                db_data['metadata'] = metadata
+
+        elif isinstance(data, str):
+            # String content
+            db_data = {
+                'id': str(uuid.uuid4()),
+                'content': data,
+                'created_at': time.time(),
+                'updated_at': time.time()
+            }
+            if metadata:
+                db_data['metadata'] = metadata
+        else:
+            # Convert to string
+            db_data = {
+                'id': str(uuid.uuid4()),
+                'content': str(data),
+                'created_at': time.time(),
+                'updated_at': time.time()
+            }
+            if metadata:
+                db_data['metadata'] = metadata
+
+        return db_data
+
+    def _get_table_name_for_storage_type(self) -> str:
+        """Get the appropriate table name for the storage type."""
+        # Map storage types to table names
+        table_mapping = {
+            StorageType.SQL: "l0_messages",  # Default table for SQL storage
+            StorageType.VECTOR: "vector_data",
+            StorageType.KEYWORD: "keyword_data",
+            StorageType.GRAPH: "graph_data"
+        }
+
+        return table_mapping.get(self.storage_type, "data")
 
     def _prepare_data_for_store(self, data: Any) -> List[ChunkData]:
         """Prepare data for store interface, ensuring it's a list of ChunkData objects."""
@@ -264,32 +403,74 @@ class UnifiedStorageManager(StorageManager):
         """Initialize all configured storage backends."""
         try:
             logger.info(f"UnifiedStorageManager: Initializing storage for user {self.user_id}")
-            
+
+            # Validate configuration structure
+            self._validate_storage_config()
+
             # Initialize each configured storage backend
             for storage_name, storage_config in self.config.items():
                 try:
+                    # Validate that this is a supported storage type
                     storage_type = StorageType(storage_name)
                     backend = await self._create_backend(storage_type, storage_config)
-                    
+
                     if backend and await backend.initialize():
                         self.backends[storage_type] = backend
                         logger.info(f"UnifiedStorageManager: Initialized {storage_type.value} backend")
                     else:
                         logger.error(f"UnifiedStorageManager: Failed to initialize {storage_type.value} backend")
-                        
-                except ValueError:
-                    logger.warning(f"UnifiedStorageManager: Unknown storage type: {storage_name}")
+
+                except ValueError as e:
+                    # This is a configuration error - should be explicit
+                    valid_types = [t.value for t in StorageType]
+                    error_msg = (
+                        f"Invalid storage type '{storage_name}' in configuration. "
+                        f"Valid storage types are: {valid_types}. "
+                        f"If '{storage_name}' is a layer-specific configuration, "
+                        f"it should be moved to the appropriate layer configuration section."
+                    )
+                    logger.error(f"UnifiedStorageManager: {error_msg}")
+                    raise ValueError(error_msg) from e
                 except Exception as e:
                     logger.error(f"UnifiedStorageManager: Error initializing {storage_name}: {e}")
-            
+                    raise e
+
             self.initialized = True
             logger.info(f"UnifiedStorageManager: Initialized {len(self.backends)} storage backends")
             return True
-            
+
         except Exception as e:
             logger.error(f"UnifiedStorageManager: Initialization failed: {e}")
             return False
-    
+
+    def _validate_storage_config(self) -> None:
+        """Validate storage configuration structure."""
+        valid_storage_types = {t.value for t in StorageType}
+        invalid_configs = []
+
+        for storage_name in self.config.keys():
+            if storage_name not in valid_storage_types:
+                invalid_configs.append(storage_name)
+
+        if invalid_configs:
+            error_msg = (
+                f"Invalid storage configuration detected. "
+                f"Found invalid storage types: {invalid_configs}. "
+                f"Valid storage types are: {list(valid_storage_types)}. "
+                f"\n\nConfiguration structure should be:"
+                f"\nstorage:"
+                f"\n  vector: {{...}}"
+                f"\n  keyword: {{...}}"
+                f"\n  graph: {{...}}"
+                f"\n  sql: {{...}}"
+                f"\n\nLayer-specific configurations like 'l1_storage' should be placed under:"
+                f"\nlayers:"
+                f"\n  l1:"
+                f"\n    storage: {{...}}"
+            )
+            logger.error(f"UnifiedStorageManager: {error_msg}")
+            raise ValueError(error_msg)
+
     async def get_backend(self, storage_type: StorageType) -> Optional[StorageBackend]:
         """Get a storage backend by type."""
         return self.backends.get(storage_type)
@@ -384,7 +565,7 @@ class UnifiedStorageManager(StorageManager):
         try:
             # This would integrate with the existing StoreFactory
             from ..store.factory import StoreFactory
-            
+
             if storage_type == StorageType.VECTOR:
                 store = await StoreFactory.create_vector_store(
                     data_dir=config.get("data_dir", f"data/{self.user_id}")
@@ -397,12 +578,18 @@ class UnifiedStorageManager(StorageManager):
                 store = await StoreFactory.create_keyword_store(
                     data_dir=config.get("data_dir", f"data/{self.user_id}")
                 )
+            elif storage_type == StorageType.SQL:
+                # SQL storage backend - use existing database service
+                from ..services.database_service import DatabaseService
+                db_service = DatabaseService.get_instance()
+                store = db_service.backend  # Access the backend directly
+                logger.info(f"UnifiedStorageManager: Created SQL backend using database service")
             else:
                 logger.warning(f"UnifiedStorageManager: Unsupported storage type: {storage_type}")
                 return None
-            
+
             return StoreBackendAdapter(store, storage_type)
-            
+
         except Exception as e:
             logger.error(f"UnifiedStorageManager: Failed to create {storage_type.value} backend: {e}")
             return None

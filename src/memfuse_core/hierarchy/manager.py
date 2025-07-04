@@ -6,15 +6,13 @@ layers, storage backends, and event-driven processing.
 """
 
 import asyncio
-import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from loguru import logger
 
 from .core import LayerType, LayerConfig, ProcessingResult, StorageManager
 from .storage import UnifiedStorageManager
 from .layers import L0EpisodicLayer, L1SemanticLayer, L2RelationalLayer
-
-logger = logging.getLogger(__name__)
 
 
 class MemoryHierarchyManager:
