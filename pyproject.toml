@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "memfuse_core"
-version = "0.2.0"
+version = "0.2.1"
 description = "MemFuse: lightning-fast, open-source memory layer for LLMs"
 authors = [
     "Ming Xue <mxue@percena.co>",
