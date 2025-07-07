@@ -4,8 +4,9 @@ This module provides the FastAPI application creation and configuration service.
 """
 
 from typing import Optional
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from omegaconf import DictConfig
 from loguru import logger
 
@@ -106,6 +107,23 @@ class AppService(BaseService):
             RateLimitMiddleware,
             rate_limit_per_minute=rate_limit_per_minute
         )
+        
+        # Add custom exception handler for ApiResponse format
+        @app.exception_handler(HTTPException)
+        async def api_response_exception_handler(request: Request, exc: HTTPException):
+            """Handle HTTPException and return ApiResponse format if the detail contains our format."""
+            if isinstance(exc.detail, dict) and "status" in exc.detail:
+                # This is our ApiResponse format, return it directly
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content=exc.detail
+                )
+            else:
+                # This is a standard HTTPException, return FastAPI's default format
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"detail": exc.detail}
+                )
         
         # Include RESTful API routers
         self._register_routes(app)
