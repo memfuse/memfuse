@@ -1,7 +1,7 @@
 """Agent API endpoints."""
 
 import logging
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 from typing import Optional
 
 from ..models import (
@@ -13,10 +13,12 @@ from ..models import (
 from ..services.database_service import DatabaseService
 from ..utils.auth import validate_api_key
 from ..utils import (
-    validate_agent_exists,
-    validate_agent_by_name_exists,
-    validate_agent_name_available,
+    ensure_agent_exists,
+    ensure_agent_by_name_exists,
+    ensure_agent_name_available,
     handle_api_errors,
+    prepare_response_data,
+    raise_api_error,
 )
 
 
@@ -39,11 +41,7 @@ async def list_agents(
 
     # If name is provided, get agent by name
     if name:
-        is_valid, error_response, agent = validate_agent_by_name_exists(
-            db, name)
-        if not is_valid:
-            return error_response
-
+        agent = ensure_agent_by_name_exists(db, name)
         return ApiResponse.success(
             data={"agents": [agent]},
             message="Agent retrieved successfully",
@@ -57,9 +55,9 @@ async def list_agents(
     )
 
 
-@router.post("/", response_model=ApiResponse)
+@router.post("/", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 # Also handle path without trailing slash
-@router.post("", response_model=ApiResponse)
+@router.post("", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 @handle_api_errors("create agent")
 async def create_agent(
     request: AgentCreate,
@@ -69,9 +67,7 @@ async def create_agent(
     db = DatabaseService.get_instance()
 
     # Check if agent with the same name already exists
-    is_valid, error_response = validate_agent_name_available(db, request.name)
-    if not is_valid:
-        return error_response
+    ensure_agent_name_available(db, request.name)
 
     # Create the agent
     agent_id = db.create_agent(
@@ -85,6 +81,7 @@ async def create_agent(
     return ApiResponse.success(
         data={"agent": agent},
         message="Agent created successfully",
+        code=201,
     )
 
 
@@ -99,10 +96,8 @@ async def get_agent(
     """Get agent details."""
     db = DatabaseService.get_instance()
 
-    # Check if agent exists
-    is_valid, error_response, agent = validate_agent_exists(db, agent_id)
-    if not is_valid:
-        return error_response
+    # Validate agent exists
+    agent = ensure_agent_exists(db, agent_id)
 
     return ApiResponse.success(
         data={"agent": agent},
@@ -123,9 +118,7 @@ async def update_agent(
     db = DatabaseService.get_instance()
 
     # Check if agent exists
-    is_valid, error_response, _ = validate_agent_exists(db, agent_id)
-    if not is_valid:
-        return error_response
+    agent = ensure_agent_exists(db, agent_id)
 
     # Update the agent
     success = db.update_agent(
@@ -135,11 +128,12 @@ async def update_agent(
     )
 
     if not success:
-        return ApiResponse.error(
+        error_response = ApiResponse.error(
             message="Failed to update agent",
             errors=[ErrorDetail(
                 field="general", message="Database update failed")],
         )
+        raise_api_error(error_response)
 
     # Get the updated agent
     updated_agent = db.get_agent(agent_id)
@@ -162,19 +156,18 @@ async def delete_agent(
     db = DatabaseService.get_instance()
 
     # Check if agent exists
-    is_valid, error_response, _ = validate_agent_exists(db, agent_id)
-    if not is_valid:
-        return error_response
+    agent = ensure_agent_exists(db, agent_id)
 
     # Delete the agent
     success = db.delete_agent(agent_id)
 
     if not success:
-        return ApiResponse.error(
+        error_response = ApiResponse.error(
             message="Failed to delete agent",
             errors=[ErrorDetail(
                 field="general", message="Database delete failed")],
         )
+        raise_api_error(error_response)
 
     return ApiResponse.success(
         data={"agent_id": agent_id},
