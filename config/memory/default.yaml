@@ -1,6 +1,6 @@
 # @package memory
 # MemFuse Memory System Configuration
-# Optimized and unified configuration for M0/M1/M2 memory hierarchy
+# Optimized configuration for M0/M1/M2 memory hierarchy
 
 # =============================================================================
 # CORE ARCHITECTURE SETTINGS

@@ -1,7 +1,7 @@
 """
-Unit tests for MemoryService with Unified Memory Layer integration.
+Unit tests for MemoryService with Memory Layer integration.
 
-Tests the integration between MemoryService and UnifiedMemoryLayer,
+Tests the integration between MemoryService and MemoryLayer,
 ensuring proper M0/M1/M2 parallel processing functionality.
 """
 
@@ -11,16 +11,16 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from typing import Dict, Any, List
 
 from src.memfuse_core.services.memory_service import MemoryService
-from src.memfuse_core.interfaces.unified_memory_layer import WriteResult, UnifiedResult, LayerStatus
+from src.memfuse_core.interfaces.memory_layer import WriteResult, QueryResult, LayerStatus
 from src.memfuse_core.interfaces.message_interface import MessageBatchList
 
 
-class TestMemoryServiceUnifiedLayer:
-    """Test MemoryService integration with Unified Memory Layer."""
-    
+class TestMemoryServiceLayer:
+    """Test MemoryService integration with Memory Layer."""
+
     @pytest.fixture
     def mock_config(self):
-        """Mock configuration with unified layer enabled."""
+        """Mock configuration with memory layer enabled."""
         return {
             "data_dir": "test_data",
             "memory": {
@@ -45,7 +45,7 @@ class TestMemoryServiceUnifiedLayer:
     
     @pytest.fixture
     def mock_config_disabled(self):
-        """Mock configuration with unified layer disabled."""
+        """Mock configuration with memory layer disabled."""
         return {
             "data_dir": "test_data",
             "memory": {
@@ -74,115 +74,115 @@ class TestMemoryServiceUnifiedLayer:
         ]
     
     @pytest.mark.asyncio
-    async def test_unified_layer_enabled_detection(self, mock_config):
-        """Test that MemoryService correctly detects when unified layer should be enabled."""
+    async def test_parallel_layers_enabled_detection(self, mock_config):
+        """Test that MemoryService correctly detects when parallel layers should be enabled."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service:
             # Mock database service
             mock_db = Mock()
             mock_db.get_or_create_user_by_name.return_value = "user123"
             mock_db.get_or_create_agent_by_name.return_value = "agent456"
             mock_db_service.get_instance.return_value = mock_db
-            
-            # Create MemoryService with unified layer enabled config
+
+            # Create MemoryService with parallel layers enabled config
             memory_service = MemoryService(cfg=mock_config, user="test_user")
-            
-            # Check that unified layer is enabled
-            assert memory_service.use_unified_layer is True
-            assert memory_service.unified_memory_layer is None  # Not initialized yet
-    
+
+            # Check that parallel layers are enabled
+            assert memory_service.use_parallel_layers is True
+            assert memory_service.memory_layer is None  # Not initialized yet
+
     @pytest.mark.asyncio
-    async def test_unified_layer_disabled_detection(self, mock_config_disabled):
-        """Test that MemoryService correctly detects when unified layer should be disabled."""
+    async def test_parallel_layers_disabled_detection(self, mock_config_disabled):
+        """Test that MemoryService correctly detects when parallel layers should be disabled."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service:
             # Mock database service
             mock_db = Mock()
             mock_db.get_or_create_user_by_name.return_value = "user123"
             mock_db.get_or_create_agent_by_name.return_value = "agent456"
             mock_db_service.get_instance.return_value = mock_db
-            
-            # Create MemoryService with unified layer disabled config
+
+            # Create MemoryService with parallel layers disabled config
             memory_service = MemoryService(cfg=mock_config_disabled, user="test_user")
-            
-            # Check that unified layer is disabled
-            assert memory_service.use_unified_layer is False
-            assert memory_service.unified_memory_layer is None
+
+            # Check that parallel layers are disabled
+            assert memory_service.use_parallel_layers is False
+            assert memory_service.memory_layer is None
     
     @pytest.mark.asyncio
-    async def test_unified_layer_initialization(self, mock_config):
-        """Test that unified layer is properly initialized during MemoryService.initialize()."""
+    async def test_memory_layer_initialization(self, mock_config):
+        """Test that memory layer is properly initialized during MemoryService.initialize()."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service, \
              patch('src.memfuse_core.store.factory.StoreFactory') as mock_store_factory, \
-             patch('src.memfuse_core.services.memory_service.UnifiedMemoryLayerImpl') as mock_unified_impl:
-            
+             patch('src.memfuse_core.services.memory_service.MemoryLayerImpl') as mock_layer_impl:
+
             # Mock database service
             mock_db = Mock()
             mock_db.get_or_create_user_by_name.return_value = "user123"
             mock_db.get_or_create_agent_by_name.return_value = "agent456"
             mock_db_service.get_instance.return_value = mock_db
-            
+
             # Mock store factory
             mock_store_factory.create_vector_store = AsyncMock(return_value=Mock())
             mock_store_factory.create_keyword_store = AsyncMock(return_value=Mock())
             mock_store_factory.create_multi_path_retrieval = AsyncMock(return_value=Mock())
-            
-            # Mock unified memory layer implementation
-            mock_unified_layer = Mock()
-            mock_unified_layer.initialize = AsyncMock(return_value=True)
-            mock_unified_impl.return_value = mock_unified_layer
-            
+
+            # Mock memory layer implementation
+            mock_memory_layer = Mock()
+            mock_memory_layer.initialize = AsyncMock(return_value=True)
+            mock_layer_impl.return_value = mock_memory_layer
+
             # Create and initialize MemoryService
             memory_service = MemoryService(cfg=mock_config, user="test_user")
             await memory_service.initialize()
-            
-            # Verify unified layer was created and initialized
-            assert memory_service.use_unified_layer is True
-            assert memory_service.unified_memory_layer is not None
-            mock_unified_layer.initialize.assert_called_once()
+
+            # Verify memory layer was created and initialized
+            assert memory_service.use_parallel_layers is True
+            assert memory_service.memory_layer is not None
+            mock_memory_layer.initialize.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_add_batch_with_unified_layer(self, mock_config, sample_message_batch_list):
-        """Test add_batch method uses unified layer when enabled."""
+    async def test_add_batch_with_memory_layer(self, mock_config, sample_message_batch_list):
+        """Test add_batch method uses memory layer when enabled."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service:
             # Mock database service
             mock_db = Mock()
             mock_db.get_or_create_user_by_name.return_value = "user123"
             mock_db.get_or_create_agent_by_name.return_value = "agent456"
             mock_db_service.get_instance.return_value = mock_db
-            
+
             # Create MemoryService
             memory_service = MemoryService(cfg=mock_config, user="test_user")
-            
-            # Mock unified memory layer
-            mock_unified_layer = Mock()
+
+            # Mock memory layer
+            mock_memory_layer = Mock()
             mock_write_result = WriteResult(
                 success=True,
-                message="Successfully processed through unified layer",
+                message="Successfully processed through memory layer",
                 layer_results={"M0": {"processed_count": 3}, "M1": {"processed_count": 3}, "M2": {"processed_count": 3}},
-                metadata={"processing_method": "unified_parallel"}
+                metadata={"processing_method": "parallel_layers"}
             )
-            mock_unified_layer.write_parallel = AsyncMock(return_value=mock_write_result)
-            memory_service.unified_memory_layer = mock_unified_layer
-            
+            mock_memory_layer.write_parallel = AsyncMock(return_value=mock_write_result)
+            memory_service.memory_layer = mock_memory_layer
+
             # Mock session preparation
             memory_service._prepare_session_and_round = AsyncMock(return_value=("session123", "round456"))
             memory_service._store_original_messages_with_round = AsyncMock(return_value=["msg1", "msg2", "msg3"])
             
             # Call add_batch
             result = await memory_service.add_batch(sample_message_batch_list)
-            
-            # Verify unified layer was called
-            mock_unified_layer.write_parallel.assert_called_once()
-            call_args = mock_unified_layer.write_parallel.call_args
+
+            # Verify memory layer was called
+            mock_memory_layer.write_parallel.assert_called_once()
+            call_args = mock_memory_layer.write_parallel.call_args
             assert call_args[1]["message_batch_list"] == sample_message_batch_list
             assert call_args[1]["session_id"] == "session123"
-            
+
             # Verify result
             assert result["status"] == "success"
-            assert "unified_parallel" in str(result)
-    
+            assert "parallel_layers" in str(result)
+
     @pytest.mark.asyncio
     async def test_add_batch_fallback_to_traditional(self, mock_config_disabled, sample_message_batch_list):
-        """Test add_batch method falls back to traditional method when unified layer is disabled."""
+        """Test add_batch method falls back to traditional method when memory layer is disabled."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service:
             # Mock database service
             mock_db = Mock()
@@ -213,36 +213,36 @@ class TestMemoryServiceUnifiedLayer:
             assert "traditional method" in result["message"]
     
     @pytest.mark.asyncio
-    async def test_unified_layer_error_handling(self, mock_config, sample_message_batch_list):
-        """Test error handling when unified layer processing fails."""
+    async def test_memory_layer_error_handling(self, mock_config, sample_message_batch_list):
+        """Test error handling when memory layer processing fails."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service:
             # Mock database service
             mock_db = Mock()
             mock_db.get_or_create_user_by_name.return_value = "user123"
             mock_db.get_or_create_agent_by_name.return_value = "agent456"
             mock_db_service.get_instance.return_value = mock_db
-            
+
             # Create MemoryService
             memory_service = MemoryService(cfg=mock_config, user="test_user")
-            
-            # Mock unified memory layer with failure
-            mock_unified_layer = Mock()
+
+            # Mock memory layer with failure
+            mock_memory_layer = Mock()
             mock_write_result = WriteResult(
                 success=False,
                 message="Processing failed due to M1 layer error",
                 layer_results={"M0": {"processed_count": 3}, "M1": {"error": "Connection timeout"}},
                 metadata={}
             )
-            mock_unified_layer.write_parallel = AsyncMock(return_value=mock_write_result)
-            memory_service.unified_memory_layer = mock_unified_layer
-            
+            mock_memory_layer.write_parallel = AsyncMock(return_value=mock_write_result)
+            memory_service.memory_layer = mock_memory_layer
+
             # Mock session preparation
             memory_service._prepare_session_and_round = AsyncMock(return_value=("session123", "round456"))
             memory_service._store_original_messages_with_round = AsyncMock(return_value=["msg1", "msg2", "msg3"])
-            
+
             # Call add_batch
             result = await memory_service.add_batch(sample_message_batch_list)
-            
+
             # Verify error handling
             assert result["status"] == "error"
             assert "Processing failed due to M1 layer error" in result["message"]

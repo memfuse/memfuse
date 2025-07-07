@@ -221,7 +221,7 @@ def run_performance_test():
 
         print("\n✅ Performance test completed successfully!")
         print("   Check server logs for M0/M1/M2 parallel processing details")
-        print("   Look for 'ParallelMemoryLayerManager' and 'UnifiedMemoryLayerImpl' log entries")
+        print("   Look for 'ParallelMemoryLayerManager' and 'MemoryLayerImpl' log entries")
 
         return {
             "success": True,

@@ -1,13 +1,13 @@
 """
-Unified Memory Layer Interface for MemFuse.
+Memory Layer Interface for MemFuse.
 
-This interface provides a unified abstraction for all memory operations,
+This interface provides an abstraction for all memory operations,
 decoupling MemoryService from specific memory layer implementations (M0/M1/M2).
-The unified layer handles parallel processing across all memory layers internally.
+The memory layer handles parallel processing across all memory layers internally.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from enum import Enum
 
 from .message_interface import MessageBatchList
@@ -46,8 +46,8 @@ class WriteResult:
         }
 
 
-class UnifiedResult:
-    """Result of a unified query across all memory layers."""
+class QueryResult:
+    """Result of a query across all memory layers."""
     
     def __init__(
         self,
@@ -71,29 +71,29 @@ class UnifiedResult:
         }
 
 
-class UnifiedMemoryLayer(ABC):
+class MemoryLayer(ABC):
     """
-    Unified Memory Layer Interface.
-    
+    Memory Layer Interface.
+
     This interface provides a single point of interaction for all memory operations,
     abstracting away the complexity of M0/M1/M2 parallel processing from MemoryService.
 
     Key Design Principles:
     1. Complete decoupling from MemoryService
     2. Parallel processing of M0/M1/M2 layers
-    3. Unified result aggregation
+    3. Result aggregation
     4. Configuration-driven layer activation
     5. Graceful error handling and fallback
     """
-    
+
     @abstractmethod
     async def initialize(self, config: Optional[Dict[str, Any]] = None) -> bool:
         """
-        Initialize the unified memory layer.
-        
+        Initialize the memory layer.
+
         Args:
             config: Optional configuration dictionary
-            
+
         Returns:
             True if initialization successful, False otherwise
         """
@@ -125,7 +125,7 @@ class UnifiedMemoryLayer(ABC):
         pass
     
     @abstractmethod
-    async def query_unified(
+    async def query(
         self,
         query: str,
         top_k: int = 15,
@@ -136,16 +136,16 @@ class UnifiedMemoryLayer(ABC):
         use_rerank: bool = True,
         session_id: Optional[str] = None,
         scope: str = "all"
-    ) -> UnifiedResult:
+    ) -> QueryResult:
         """
-        Query all active memory layers and return unified results.
-        
+        Query all active memory layers and return results.
+
         This method:
         1. Queries M0, M1, M2 layers in parallel
         2. Aggregates and ranks results
         3. Applies reranking if enabled
-        4. Returns unified result set
-        
+        4. Returns result set
+
         Args:
             query: Query string
             top_k: Maximum number of results to return
@@ -156,9 +156,9 @@ class UnifiedMemoryLayer(ABC):
             use_rerank: Whether to apply reranking
             session_id: Session ID to filter results
             scope: Scope of the query (all, session, or user)
-            
+
         Returns:
-            UnifiedResult with aggregated results from all layers
+            QueryResult with aggregated results from all layers
         """
         pass
     
@@ -203,8 +203,8 @@ class UnifiedMemoryLayer(ABC):
         pass
 
 
-class UnifiedMemoryLayerConfig:
-    """Configuration for UnifiedMemoryLayer."""
+class MemoryLayerConfig:
+    """Configuration for MemoryLayer."""
     
     def __init__(
         self,
@@ -246,6 +246,6 @@ class UnifiedMemoryLayerConfig:
         }
     
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> 'UnifiedMemoryLayerConfig':
+    def from_dict(cls, config_dict: Dict[str, Any]) -> 'MemoryLayerConfig':
         """Create config from dictionary."""
         return cls(**config_dict)

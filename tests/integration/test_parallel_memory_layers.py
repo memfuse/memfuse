@@ -1,7 +1,7 @@
 """
 Integration tests for parallel M0/M1/M2 memory layer processing.
 
-This test suite verifies that the unified memory layer implementation
+This test suite verifies that the memory layer implementation
 correctly processes data through M0, M1, and M2 layers in parallel.
 """
 
@@ -11,8 +11,8 @@ import time
 from unittest.mock import Mock, AsyncMock, patch
 from typing import Dict, Any, List
 
-from src.memfuse_core.hierarchy.unified_memory_layer_impl import UnifiedMemoryLayerImpl
-from src.memfuse_core.interfaces.unified_memory_layer import WriteResult, LayerStatus
+from src.memfuse_core.hierarchy.memory_layer_impl import MemoryLayerImpl
+from src.memfuse_core.interfaces.memory_layer import WriteResult, LayerStatus
 from src.memfuse_core.interfaces import MessageBatchList
 from src.memfuse_core.utils.config import ConfigManager
 from src.memfuse_core.hierarchy.core import LayerType
@@ -65,25 +65,25 @@ class TestParallelMemoryLayers:
             }
             mock_hierarchy_manager_class.return_value = mock_hierarchy_manager
             
-            # Create unified memory layer
-            unified_layer = UnifiedMemoryLayerImpl(
+            # Create memory layer
+            memory_layer = MemoryLayerImpl(
                 user_id="test_user",
                 config_manager=ConfigManager()
             )
-            
+
             # Initialize with config
-            result = await unified_layer.initialize(memory_config)
-            
+            result = await memory_layer.initialize(memory_config)
+
             # Verify initialization
             assert result is True
-            assert unified_layer.initialized is True
-            assert unified_layer.hierarchy_manager is not None
-            assert unified_layer.parallel_manager is not None
-            
+            assert memory_layer.initialized is True
+            assert memory_layer.hierarchy_manager is not None
+            assert memory_layer.parallel_manager is not None
+
             # Verify layer status
-            assert unified_layer.layer_status["M0"] == LayerStatus.ACTIVE
-            assert unified_layer.layer_status["M1"] == LayerStatus.ACTIVE
-            assert unified_layer.layer_status["M2"] == LayerStatus.ACTIVE
+            assert memory_layer.layer_status["M0"] == LayerStatus.ACTIVE
+            assert memory_layer.layer_status["M1"] == LayerStatus.ACTIVE
+            assert memory_layer.layer_status["M2"] == LayerStatus.ACTIVE
             
             # Verify hierarchy manager was initialized (may be called multiple times)
             assert mock_hierarchy_manager.initialize.call_count >= 1
@@ -126,7 +126,7 @@ class TestParallelMemoryLayers:
             mock_hierarchy_manager_class.return_value = mock_hierarchy_manager
             
             # Mock parallel manager to track parallel execution
-            with patch('src.memfuse_core.hierarchy.unified_memory_layer_impl.ParallelMemoryLayerManager') as mock_parallel_manager_class:
+            with patch('src.memfuse_core.hierarchy.memory_layer_impl.ParallelMemoryLayerManager') as mock_parallel_manager_class:
                 mock_parallel_manager = Mock()
                 mock_parallel_manager.initialize = AsyncMock(return_value=True)
                 
@@ -145,17 +145,17 @@ class TestParallelMemoryLayers:
                 mock_parallel_manager.write_data = AsyncMock(return_value=mock_result)
                 mock_parallel_manager_class.return_value = mock_parallel_manager
                 
-                # Create and initialize unified memory layer
-                unified_layer = UnifiedMemoryLayerImpl(
+                # Create and initialize memory layer
+                memory_layer = MemoryLayerImpl(
                     user_id="test_user",
                     config_manager=ConfigManager()
                 )
-                
-                await unified_layer.initialize(memory_config)
-                
+
+                await memory_layer.initialize(memory_config)
+
                 # Execute parallel write
                 start_time = time.time()
-                result = await unified_layer.write_parallel(
+                result = await memory_layer.write_parallel(
                     message_batch_list=sample_message_batch_list,
                     session_id="test_session"
                 )
@@ -194,7 +194,7 @@ class TestParallelMemoryLayers:
             mock_hierarchy_manager_class.return_value = mock_hierarchy_manager
             
             # Mock parallel manager with partial failure
-            with patch('src.memfuse_core.hierarchy.unified_memory_layer_impl.ParallelMemoryLayerManager') as mock_parallel_manager_class:
+            with patch('src.memfuse_core.hierarchy.memory_layer_impl.ParallelMemoryLayerManager') as mock_parallel_manager_class:
                 mock_parallel_manager = Mock()
                 mock_parallel_manager.initialize = AsyncMock(return_value=True)
                 
@@ -214,16 +214,16 @@ class TestParallelMemoryLayers:
                 mock_parallel_manager.write_data = AsyncMock(return_value=mock_result)
                 mock_parallel_manager_class.return_value = mock_parallel_manager
                 
-                # Create and initialize unified memory layer
-                unified_layer = UnifiedMemoryLayerImpl(
+                # Create and initialize memory layer
+                memory_layer = MemoryLayerImpl(
                     user_id="test_user",
                     config_manager=ConfigManager()
                 )
-                
-                await unified_layer.initialize(memory_config)
-                
+
+                await memory_layer.initialize(memory_config)
+
                 # Execute parallel write
-                result = await unified_layer.write_parallel(
+                result = await memory_layer.write_parallel(
                     message_batch_list=sample_message_batch_list,
                     session_id="test_session"
                 )
@@ -264,20 +264,20 @@ class TestParallelMemoryLayers:
             }
             mock_hierarchy_manager_class.return_value = mock_hierarchy_manager
             
-            # Create unified memory layer
-            unified_layer = UnifiedMemoryLayerImpl(
+            # Create memory layer
+            memory_layer = MemoryLayerImpl(
                 user_id="test_user",
                 config_manager=ConfigManager()
             )
-            
+
             # Initialize with selective config
-            result = await unified_layer.initialize(selective_config)
-            
+            result = await memory_layer.initialize(selective_config)
+
             # Verify initialization
             assert result is True
-            assert unified_layer.initialized is True
-            
+            assert memory_layer.initialized is True
+
             # Verify layer status
-            assert unified_layer.layer_status["M0"] == LayerStatus.ACTIVE
-            assert unified_layer.layer_status["M1"] == LayerStatus.INACTIVE  # Disabled
-            assert unified_layer.layer_status["M2"] == LayerStatus.ACTIVE
+            assert memory_layer.layer_status["M0"] == LayerStatus.ACTIVE
+            assert memory_layer.layer_status["M1"] == LayerStatus.INACTIVE  # Disabled
+            assert memory_layer.layer_status["M2"] == LayerStatus.ACTIVE

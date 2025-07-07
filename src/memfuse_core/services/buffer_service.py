@@ -145,18 +145,18 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         """Create unified MemoryService handler for FlushManager.
 
         This handler delegates all storage operations to MemoryService, which then
-        routes data through the UnifiedMemoryLayer to trigger parallel M0/M1/M2 processing.
+        routes data through the MemoryLayer to trigger parallel M0/M1/M2 processing.
         This maintains proper architectural separation and enables the full memory hierarchy.
 
         Key responsibilities:
         - Route all buffer data through MemoryService.add_batch()
-        - Trigger parallel M0/M1/M2 processing via UnifiedMemoryLayer
+        - Trigger parallel M0/M1/M2 processing via MemoryLayer
         - Maintain architectural separation between buffer and storage layers
         - Handle errors gracefully with proper logging and exception propagation
         - Support batch operations for efficient processing
 
         Architecture flow:
-        BufferService → MemoryService.add_batch() → UnifiedMemoryLayer → M0/M1/M2 parallel processing
+        BufferService → MemoryService.add_batch() → MemoryLayer → M0/M1/M2 parallel processing
 
         Returns:
             Async callable that handles unified memory service operations
@@ -204,7 +204,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 return False
 
             # Set up unified MemoryService handler (replaces separate SQLite/Qdrant handlers)
-            # This maintains architectural separation: BufferService → MemoryService → UnifiedMemoryLayer
+            # This maintains architectural separation: BufferService → MemoryService → MemoryLayer
             memory_handler = self._create_memory_service_handler()
             self.flush_manager.set_handlers(
                 sqlite_handler=memory_handler,  # Use unified MemoryService handler

@@ -1,7 +1,7 @@
 """
-Unified Memory Layer Implementation for MemFuse.
+Memory Layer Implementation for MemFuse.
 
-This implementation provides the concrete implementation of UnifiedMemoryLayer,
+This implementation provides the concrete implementation of MemoryLayer,
 coordinating parallel processing across M0/M1/M2 memory layers.
 """
 
@@ -10,11 +10,11 @@ import time
 from typing import Any, Dict, List, Optional
 from loguru import logger
 
-from ..interfaces.unified_memory_layer import (
-    UnifiedMemoryLayer,
-    UnifiedMemoryLayerConfig,
+from ..interfaces.memory_layer import (
+    MemoryLayer,
+    MemoryLayerConfig,
     WriteResult,
-    UnifiedResult,
+    QueryResult,
     LayerStatus
 )
 from ..interfaces.message_interface import MessageBatchList
@@ -23,24 +23,24 @@ from .types import WriteStrategy, ParallelWriteResult
 from ..utils.config import ConfigManager
 
 
-class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
+class MemoryLayerImpl(MemoryLayer):
     """
-    Concrete implementation of UnifiedMemoryLayer.
-    
+    Concrete implementation of MemoryLayer.
+
     This class coordinates parallel processing across M0/M1/M2 memory layers,
-    providing a unified interface for MemoryService while handling all the
+    providing an interface for MemoryService while handling all the
     complexity of parallel processing internally.
     """
-    
+
     def __init__(
         self,
         user_id: str,
         config_manager: Optional[ConfigManager] = None,
-        config: Optional[UnifiedMemoryLayerConfig] = None
+        config: Optional[MemoryLayerConfig] = None
     ):
         self.user_id = user_id
         self.config_manager = config_manager or ConfigManager()
-        self.config = config or UnifiedMemoryLayerConfig()
+        self.config = config or MemoryLayerConfig()
         
         # Core components
         self.hierarchy_manager: Optional[Any] = None  # MemoryHierarchyManager
@@ -60,21 +60,21 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
         self.failed_operations = 0
         self.last_operation_time = None
         
-        logger.info(f"UnifiedMemoryLayerImpl: Created for user {user_id}")
+        logger.info(f"MemoryLayerImpl: Created for user {user_id}")
     
     async def initialize(self, config: Optional[Dict[str, Any]] = None) -> bool:
         """Initialize the unified memory layer."""
         try:
             if self.initialized:
-                logger.info("UnifiedMemoryLayerImpl: Already initialized")
+                logger.info("MemoryLayerImpl: Already initialized")
                 return True
             
-            logger.info("UnifiedMemoryLayerImpl: Starting initialization...")
-            
+            logger.info("MemoryLayerImpl: Starting initialization...")
+
             # Update configuration if provided
             if config:
                 memory_service_config = config.get("memory_service", {})
-                self.config = UnifiedMemoryLayerConfig(
+                self.config = MemoryLayerConfig(
                     m0_enabled=config.get("m0_enabled", True),
                     m1_enabled=config.get("m1_enabled", True),
                     m2_enabled=config.get("m2_enabled", True),
@@ -93,9 +93,9 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
             storage_config = memory_config.get("storage", {})
 
             # Debug logging
-            logger.info(f"UnifiedMemoryLayerImpl: Global config keys: {list(global_config.keys())}")
-            logger.info(f"UnifiedMemoryLayerImpl: Memory config keys: {list(memory_config.keys())}")
-            logger.info(f"UnifiedMemoryLayerImpl: Storage config: {storage_config}")
+            logger.info(f"MemoryLayerImpl: Global config keys: {list(global_config.keys())}")
+            logger.info(f"MemoryLayerImpl: Memory config keys: {list(memory_config.keys())}")
+            logger.info(f"MemoryLayerImpl: Storage config: {storage_config}")
 
             hierarchy_config = {
                 "layers": {
@@ -112,7 +112,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
             )
 
             if not await self.hierarchy_manager.initialize():
-                logger.error("UnifiedMemoryLayerImpl: Failed to initialize hierarchy manager")
+                logger.error("MemoryLayerImpl: Failed to initialize hierarchy manager")
                 return False
 
             # Initialize parallel manager with hierarchy manager
@@ -123,25 +123,25 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
             
             # Initialize parallel manager
             if not await self.parallel_manager.initialize():
-                logger.error("UnifiedMemoryLayerImpl: Failed to initialize parallel manager")
+                logger.error("MemoryLayerImpl: Failed to initialize parallel manager")
                 return False
-            
+
             # Update layer status based on configuration
             self.layer_status["M0"] = LayerStatus.ACTIVE if self.config.m0_enabled else LayerStatus.INACTIVE
             self.layer_status["M1"] = LayerStatus.ACTIVE if self.config.m1_enabled else LayerStatus.INACTIVE
             self.layer_status["M2"] = LayerStatus.ACTIVE if self.config.m2_enabled else LayerStatus.INACTIVE
-            
+
             self.initialized = True
-            logger.info("UnifiedMemoryLayerImpl: Initialization successful")
-            
+            logger.info("MemoryLayerImpl: Initialization successful")
+
             # Log active layers
             active_layers = [layer for layer, status in self.layer_status.items() if status == LayerStatus.ACTIVE]
-            logger.info(f"UnifiedMemoryLayerImpl: Active layers: {active_layers}")
+            logger.info(f"MemoryLayerImpl: Active layers: {active_layers}")
             
             return True
             
         except Exception as e:
-            logger.error(f"UnifiedMemoryLayerImpl: Initialization failed: {e}")
+            logger.error(f"MemoryLayerImpl: Initialization failed: {e}")
             return False
     
     async def write_parallel(
@@ -171,7 +171,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
                 **(metadata or {})
             }
             
-            logger.info(f"UnifiedMemoryLayerImpl: Starting parallel write for {len(message_batch_list)} message batches")
+            logger.info(f"MemoryLayerImpl: Starting parallel write for {len(message_batch_list)} message batches")
             
             # Convert MessageBatchList to format suitable for parallel processing
             processed_data = self._prepare_data_for_layers(message_batch_list, operation_metadata)
@@ -191,7 +191,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
             
             if result.success:
                 self.successful_operations += 1
-                logger.info(f"UnifiedMemoryLayerImpl: Parallel write successful in {operation_time:.2f}s")
+                logger.info(f"MemoryLayerImpl: Parallel write successful in {operation_time:.2f}s")
                 
                 return WriteResult(
                     success=True,
@@ -206,7 +206,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
                 )
             else:
                 self.failed_operations += 1
-                logger.error(f"UnifiedMemoryLayerImpl: Parallel write failed: {result.error_message}")
+                logger.error(f"MemoryLayerImpl: Parallel write failed: {result.error_message}")
 
                 return WriteResult(
                     success=False,
@@ -221,7 +221,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
                 
         except Exception as e:
             self.failed_operations += 1
-            logger.error(f"UnifiedMemoryLayerImpl: Write operation failed: {e}")
+            logger.error(f"MemoryLayerImpl: Write operation failed: {e}")
             
             return WriteResult(
                 success=False,
@@ -260,7 +260,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
         
         return processed_data
     
-    async def query_unified(
+    async def query(
         self,
         query: str,
         top_k: int = 15,
@@ -271,29 +271,29 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
         use_rerank: bool = True,
         session_id: Optional[str] = None,
         scope: str = "all"
-    ) -> UnifiedResult:
-        """Query all active memory layers and return unified results."""
+    ) -> QueryResult:
+        """Query all active memory layers and return results."""
         try:
             if not self.initialized:
                 await self.initialize()
-            
+
             if not self.parallel_manager:
                 raise RuntimeError("Parallel manager not initialized")
-            
-            logger.info(f"UnifiedMemoryLayerImpl: Starting unified query: '{query[:50]}...'")
-            
+
+            logger.info(f"MemoryLayerImpl: Starting query: '{query[:50]}...'")
+
             # For now, delegate to parallel manager's query capabilities
             # This is a placeholder - the actual implementation would need
-            # to be enhanced to support unified querying across layers
-            
-            # TODO: Implement unified querying across M0/M1/M2 layers
+            # to be enhanced to support querying across layers
+
+            # TODO: Implement querying across M0/M1/M2 layers
             # This would involve:
             # 1. Querying each active layer in parallel
             # 2. Aggregating results
             # 3. Applying reranking if enabled
-            # 4. Returning unified result set
-            
-            return UnifiedResult(
+            # 4. Returning result set
+
+            return QueryResult(
                 results=[],
                 layer_sources={"M0": [], "M1": [], "M2": []},
                 total_count=0,
@@ -305,9 +305,9 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
             )
             
         except Exception as e:
-            logger.error(f"UnifiedMemoryLayerImpl: Query operation failed: {e}")
-            
-            return UnifiedResult(
+            logger.error(f"MemoryLayerImpl: Query operation failed: {e}")
+
+            return QueryResult(
                 results=[],
                 layer_sources={"M0": [], "M1": [], "M2": []},
                 total_count=0,
@@ -321,7 +321,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
     async def get_layer_statistics(self) -> Dict[str, Dict[str, Any]]:
         """Get statistics for all memory layers."""
         return {
-            "unified_layer": {
+            "memory_layer": {
                 "total_operations": self.total_operations,
                 "successful_operations": self.successful_operations,
                 "failed_operations": self.failed_operations,
@@ -357,19 +357,19 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
     async def cleanup(self) -> bool:
         """Clean up resources and shut down all memory layers."""
         try:
-            logger.info("UnifiedMemoryLayerImpl: Starting cleanup...")
-            
+            logger.info("MemoryLayerImpl: Starting cleanup...")
+
             if self.parallel_manager:
                 # Cleanup parallel manager if it has cleanup method
                 # await self.parallel_manager.cleanup()
                 pass
-            
+
             self.initialized = False
             self.layer_status = {layer: LayerStatus.INACTIVE for layer in self.layer_status}
-            
-            logger.info("UnifiedMemoryLayerImpl: Cleanup completed")
+
+            logger.info("MemoryLayerImpl: Cleanup completed")
             return True
-            
+
         except Exception as e:
-            logger.error(f"UnifiedMemoryLayerImpl: Cleanup failed: {e}")
+            logger.error(f"MemoryLayerImpl: Cleanup failed: {e}")
             return False

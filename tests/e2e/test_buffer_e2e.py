@@ -3,7 +3,7 @@
 This module tests the complete Buffer workflow including:
 - RoundBuffer token-based FIFO
 - HybridBuffer dual-format management
-- UnifiedQueryBuffer unified retrieval
+- QueryBuffer unified retrieval
 - BufferService integration
 - Client SDK buffer_only parameter
 """
@@ -16,7 +16,7 @@ from memfuse_core.services.service_factory import ServiceFactory
 from memfuse_core.services.buffer_service import BufferService
 from memfuse_core.buffer.round_buffer import RoundBuffer
 from memfuse_core.buffer.hybrid_buffer import HybridBuffer
-from memfuse_core.buffer.unified_query_buffer import UnifiedQueryBuffer
+from memfuse_core.buffer.query_buffer import QueryBuffer
 
 
 class TestBufferEndToEnd:
