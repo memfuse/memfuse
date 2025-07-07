@@ -112,7 +112,7 @@ class ApiResponse(BaseModel):
     errors: Optional[List[ErrorDetail]] = None
 
     @classmethod
-    def success(cls, data: Optional[Dict[str, Any]] = None, message: str = "Success") -> "ApiResponse":
+    def success(cls, data: Optional[Dict[str, Any]] = None, message: str = "Success", code: int = 200) -> "ApiResponse":
         """Create a success response."""
         # Process DictConfig objects
         if data is not None:
@@ -132,7 +132,7 @@ class ApiResponse(BaseModel):
 
         return cls(
             status="success",
-            code=200,
+            code=code,
             data=data,
             message=message,
             errors=None,

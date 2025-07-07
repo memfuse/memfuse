@@ -201,7 +201,7 @@ class TestUsersAPIContract:
             json={"name": "test-user", "description": "Test user"},
             headers=headers
         )
-        assert create_response.status_code == 200  # API returns 200 not 201
+        assert create_response.status_code == 201
         
         # Now query by name
         response = client.get("/api/v1/users?name=test-user", headers=headers)
@@ -246,17 +246,16 @@ class TestUsersAPIContract:
         
         response = client.post("/api/v1/users", json=user_data, headers=headers)
         
-        # Current API behavior: returns 200 instead of 201
-        # TODO: change to 201
-        assert response.status_code == 200
+        # API correctly returns 201 (Created) for new user creation
+        assert response.status_code == 201
         
-        # Validate response schema (using success schema since it returns 200)
+        # Validate response schema
         response_data = response.json()
         self.validate_response_schema(response_data, self.user_create_success_schema)
         
         # Validate specific contract requirements
         assert response_data["status"] == "success"
-        assert response_data["code"] == 200  # API returns 200 not 201
+        assert response_data["code"] == 201  # API now correctly returns 201
         assert response_data["message"] == "User created successfully"
         assert response_data["data"]["user"]["name"] == "new-test-user"
         assert response_data["data"]["user"]["description"] == "A new test user"
@@ -267,7 +266,7 @@ class TestUsersAPIContract:
         
         # Create first user
         response1 = client.post("/api/v1/users", json=user_data, headers=headers)
-        assert response1.status_code == 200  # API returns 200 not 201
+        assert response1.status_code == 201  # API correctly returns 201 for creation
         
         # Try to create duplicate
         response2 = client.post("/api/v1/users", json=user_data, headers=headers)
@@ -308,7 +307,7 @@ class TestUsersAPIContract:
             json={"name": "get-test-user", "description": "User for get test"},
             headers=headers
         )
-        assert create_response.status_code == 200  # API returns 200 not 201
+        assert create_response.status_code == 201  # API correctly returns 201 for creation
         user_id = create_response.json()["data"]["user"]["id"]
         
         # Get user by ID
@@ -351,7 +350,7 @@ class TestUsersAPIContract:
             json={"name": "update-test-user", "description": "Original description"},
             headers=headers
         )
-        assert create_response.status_code == 200  # API returns 200 not 201
+        assert create_response.status_code == 201  # API correctly returns 201 for creation
         user_id = create_response.json()["data"]["user"]["id"]
         
         # Update user
@@ -403,7 +402,7 @@ class TestUsersAPIContract:
         )
 
         # TODO: change to 204
-        assert create_response.status_code == 200  # API returns 200 not 201
+        assert create_response.status_code == 201  # API correctly returns 201 for creation
         user_id = create_response.json()["data"]["user"]["id"]
         
         # Delete user
@@ -473,7 +472,7 @@ class TestUsersAPIContract:
             json={"name": "json-test-user", "description": "User for JSON test"},
             headers=headers
         )
-        assert create_response.status_code == 200  # API returns 200 not 201
+        assert create_response.status_code == 201  # API correctly returns 201 for creation
         user_id = create_response.json()["data"]["user"]["id"]
         
         # Send invalid JSON structure

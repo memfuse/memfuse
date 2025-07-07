@@ -1,7 +1,7 @@
 """User API endpoints."""
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, status
 from typing import Optional
 
 from ..models import (
@@ -56,9 +56,9 @@ async def list_users(
     )
 
 
-@router.post("/", response_model=ApiResponse)
+@router.post("/", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 # Also handle path without trailing slash
-@router.post("", response_model=ApiResponse)
+@router.post("", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 @handle_api_errors("create user")
 async def create_user(
     request: UserCreate,
@@ -82,6 +82,7 @@ async def create_user(
     return ApiResponse.success(
         data={"user": user},
         message="User created successfully",
+        code=201,
     )
 
 
