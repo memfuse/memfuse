@@ -182,15 +182,15 @@ class SQLiteDB(DBBase):
 
         self.commit()
 
-    def insert(self, table: str, data: Dict[str, Any]) -> str:
-        """Insert data into a table.
+    def add(self, table: str, data: Dict[str, Any]) -> str:
+        """Add data to a table.
 
         Args:
             table: Table name
-            data: Data to insert
+            data: Data to add
 
         Returns:
-            ID of the inserted row
+            ID of the added row
         """
         # Convert any dictionary values to JSON
         processed_data = {}
@@ -210,21 +210,6 @@ class SQLiteDB(DBBase):
         self.commit()
 
         return processed_data.get('id', '')
-
-    def add(self, table: str, data: Dict[str, Any]) -> str:
-        """Add method for compatibility with store interface.
-
-        This is an alias for insert() to provide a unified interface
-        that works with both database and store backends.
-
-        Args:
-            table: Table name
-            data: Data to insert
-
-        Returns:
-            ID of the inserted row
-        """
-        return self.insert(table, data)
 
     def select(self, table: str, conditions: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Select data from a table.

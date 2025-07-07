@@ -50,20 +50,48 @@ class StoreBackendAdapter(StorageBackend):
             return False
     
     async def write(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """Write data to the store using appropriate interface."""
+        """Write data to the store using unified add interface."""
         if not self.initialized:
             await self.initialize()
 
         try:
-            # Route to appropriate write method based on storage type
+            # All storage types now use 'add' method - just need proper data conversion
             if self.storage_type == StorageType.VECTOR:
-                return await self._write_to_vector_store(data, metadata)
+                # Vector/Keyword/Graph stores: add(chunks: List[ChunkData])
+                data_list = self._prepare_data_for_store(data)
+                if not data_list:
+                    logger.warning("StoreBackendAdapter: No valid data to write to vector store")
+                    return ""
+                result_ids = await self.store.add(data_list)
+                return result_ids[0] if result_ids else ""
+
             elif self.storage_type == StorageType.KEYWORD:
-                return await self._write_to_keyword_store(data, metadata)
+                # Keyword stores: add(chunks: List[ChunkData])
+                data_list = self._prepare_data_for_store(data)
+                if not data_list:
+                    logger.warning("StoreBackendAdapter: No valid data to write to keyword store")
+                    return ""
+                result_ids = await self.store.add(data_list)
+                return result_ids[0] if result_ids else ""
+
             elif self.storage_type == StorageType.GRAPH:
-                return await self._write_to_graph_store(data, metadata)
+                # Graph stores: add(chunks: List[ChunkData])
+                data_list = self._prepare_data_for_store(data)
+                if not data_list:
+                    logger.warning("StoreBackendAdapter: No valid data to write to graph store")
+                    return ""
+                result_ids = await self.store.add(data_list)
+                return result_ids[0] if result_ids else ""
+
             elif self.storage_type == StorageType.SQL:
-                return await self._write_to_database(data, metadata)
+                # Database: add(table, data)
+                db_data = self._prepare_data_for_database(data, metadata)
+                if not db_data:
+                    logger.warning("StoreBackendAdapter: No valid data to write to database")
+                    return ""
+                table_name = self._get_table_name_for_storage_type()
+                return self.store.add(table_name, db_data)
+
             else:
                 raise NotImplementedError(f"Storage type {self.storage_type.value} not supported")
 
@@ -71,83 +99,7 @@ class StoreBackendAdapter(StorageBackend):
             logger.error(f"StoreBackendAdapter: Write failed for {self.storage_type.value}: {e}")
             raise
 
-    async def _write_to_vector_store(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """Write data to vector store."""
-        # Prepare data as ChunkData list
-        data_list = self._prepare_data_for_store(data)
-        if not data_list:
-            logger.warning("StoreBackendAdapter: No valid data to write to vector store")
-            return ""
 
-        # Vector stores use add method with ChunkData list
-        result_ids = await self.store.add(data_list)
-        return result_ids[0] if result_ids else ""
-
-    async def _write_to_keyword_store(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """Write data to keyword store."""
-        # Handle both single items and lists
-        if isinstance(data, list):
-            # Process first item in list for now (batch processing can be added later)
-            if data and hasattr(data[0], 'content'):
-                data = data[0]
-            else:
-                logger.error(f"StoreBackendAdapter: Invalid list data for keyword store: {type(data)}")
-                return ""
-
-        # Convert to Item format for keyword stores
-        if hasattr(data, 'content'):
-            from ..models.core import Item
-            item = Item(
-                id=getattr(data, 'id', None) or getattr(data, 'chunk_id', None),
-                content=data.content,
-                metadata=getattr(data, 'metadata', {})
-            )
-            return await self.store.add_document(item)
-        else:
-            logger.error(f"StoreBackendAdapter: Invalid data for keyword store: {type(data)}")
-            return ""
-
-    async def _write_to_graph_store(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """Write data to graph store."""
-        # Handle both single items and lists
-        if isinstance(data, list):
-            # Process first item in list for now (batch processing can be added later)
-            if data and hasattr(data[0], 'content'):
-                data = data[0]
-            else:
-                logger.error(f"StoreBackendAdapter: Invalid list data for graph store: {type(data)}")
-                return ""
-
-        # Convert to Node format for graph stores
-        if hasattr(data, 'content'):
-            from ..models.core import Node
-            node = Node(
-                id=getattr(data, 'id', None) or getattr(data, 'chunk_id', None),
-                content=data.content,
-                metadata=getattr(data, 'metadata', {})
-            )
-            return await self.store.add_node(node)
-        else:
-            logger.error(f"StoreBackendAdapter: Invalid data for graph store: {type(data)}")
-            return ""
-
-    async def _write_to_database(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """Write data to database backend."""
-        # Prepare data for database insertion
-        db_data = self._prepare_data_for_database(data, metadata)
-        if not db_data:
-            logger.warning("StoreBackendAdapter: No valid data to write to database")
-            return ""
-
-        # Determine table name based on storage type and context
-        table_name = self._get_table_name_for_storage_type()
-
-        # Use add method if available (for unified interface), otherwise use insert
-        if hasattr(self.store, 'add'):
-            result_id = self.store.add(table_name, db_data)
-        else:
-            result_id = self.store.insert(table_name, db_data)
-        return result_id or ""
 
     def _prepare_data_for_database(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Prepare data for database insertion."""

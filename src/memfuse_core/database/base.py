@@ -37,15 +37,15 @@ class DBBase(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def insert(self, table: str, data: Dict[str, Any]) -> str:
-        """Insert data into a table.
+    def add(self, table: str, data: Dict[str, Any]) -> str:
+        """Add data to a table.
 
         Args:
             table: Table name
-            data: Data to insert
+            data: Data to add
 
         Returns:
-            ID of the inserted row
+            ID of the added row
         """
         pass
 
@@ -169,7 +169,7 @@ class Database:
         }
 
         try:
-            self.backend.insert('users', data)
+            self.backend.add('users', data)
             logger.info(f"Created new user: {name} with ID: {user_id}")
             return user_id
         except Exception as e:
@@ -228,7 +228,7 @@ class Database:
             'updated_at': datetime.now().isoformat()
         }
         
-        self.backend.insert('agents', data)
+        self.backend.add('agents', data)
         logger.info(f"Created new agent: {name} with ID: {agent_id}")
         return agent_id
     
@@ -259,7 +259,7 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.insert('users', data)
+        return self.backend.add('users', data)
 
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get a user by ID.
@@ -448,7 +448,7 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.insert('agents', data)
+        return self.backend.add('agents', data)
 
     def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get an agent by ID.
@@ -504,7 +504,7 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.insert('sessions', data)
+        return self.backend.add('sessions', data)
 
     def get_session_by_name(self, name: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get a session by name.
@@ -554,7 +554,7 @@ class Database:
         }
 
         try:
-            return self.backend.insert('sessions', data)
+            return self.backend.add('sessions', data)
         except Exception as e:
             # Check if this is a uniqueness constraint violation
             error_msg = str(e).lower()
@@ -694,7 +694,7 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.insert('rounds', data)
+        return self.backend.add('rounds', data)
 
     def get_round(self, round_id: str) -> Optional[Dict[str, Any]]:
         """Get a round by ID.
@@ -751,7 +751,7 @@ class Database:
             'updated_at': updated_at
         }
 
-        return self.backend.insert('messages', data)
+        return self.backend.add('messages', data)
 
     def get_message(self, message_id: str) -> Optional[Dict[str, Any]]:
         """Get a message by ID.
@@ -967,7 +967,7 @@ class Database:
             'expires_at': expires_at
         }
 
-        return self.backend.insert('api_keys', data)
+        return self.backend.add('api_keys', data)
 
     def get_api_key(self, api_key_id: str) -> Optional[Dict[str, Any]]:
         """Get an API key by ID.
@@ -1066,7 +1066,7 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.insert('knowledge', data)
+        return self.backend.add('knowledge', data)
 
     def get_knowledge(self, knowledge_id: str) -> Optional[Dict[str, Any]]:
         """Get knowledge by ID.

@@ -1,9 +1,7 @@
 """PostgreSQL backend for MemFuse database."""
 
 import json
-import os
-from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime
+from typing import Dict, List, Any, Optional
 
 from loguru import logger
 
@@ -163,15 +161,15 @@ class PostgresDB(DBBase):
         
         self.commit()
     
-    def insert(self, table: str, data: Dict[str, Any]) -> str:
-        """Insert data into a table.
-        
+    def add(self, table: str, data: Dict[str, Any]) -> str:
+        """Add data to a table.
+
         Args:
             table: Table name
-            data: Data to insert
-            
+            data: Data to add
+
         Returns:
-            ID of the inserted row
+            ID of the added row
         """
         # Convert any dictionary values to JSONB
         processed_data = {}
@@ -180,16 +178,16 @@ class PostgresDB(DBBase):
                 processed_data[key] = json.dumps(value)
             else:
                 processed_data[key] = value
-        
+
         # Build the query
         columns = ', '.join(processed_data.keys())
         placeholders = ', '.join(['%s'] * len(processed_data))
         query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
-        
+
         # Execute the query
         self.execute(query, tuple(processed_data.values()))
         self.commit()
-        
+
         return data.get('id')
     
     def select(self, table: str, conditions: Dict[str, Any] = None) -> List[Dict[str, Any]]:
@@ -281,26 +279,77 @@ class PostgresDB(DBBase):
     
     def delete(self, table: str, conditions: Dict[str, Any]) -> int:
         """Delete data from a table.
-        
+
         Args:
             table: Table name
             conditions: Delete conditions
-            
+
         Returns:
             Number of rows deleted
         """
         # Build the query
         where_clauses = []
         params_list = []
-        
+
         for key, value in conditions.items():
             where_clauses.append(f"{key} = %s")
             params_list.append(value)
-        
+
         query = f"DELETE FROM {table} WHERE " + " AND ".join(where_clauses)
-        
+
         # Execute the query
         cursor = self.execute(query, tuple(params_list))
         self.commit()
-        
+
         return cursor.rowcount
+
+    def batch_add(self, table: str, data_list: List[Dict[str, Any]]) -> List[str]:
+        """Batch add data to a table for improved performance.
+
+        This method provides optimized batch addition for PostgreSQL,
+        which is particularly important for high-throughput scenarios.
+
+        Args:
+            table: Table name
+            data_list: List of data dictionaries to add
+
+        Returns:
+            List of IDs of the added rows
+        """
+        if not data_list:
+            return []
+
+        # Process all data items
+        processed_data_list = []
+        for data in data_list:
+            processed_data = {}
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    processed_data[key] = json.dumps(value)
+                else:
+                    processed_data[key] = value
+            processed_data_list.append(processed_data)
+
+        # Build the batch query
+        if processed_data_list:
+            columns = list(processed_data_list[0].keys())
+            columns_str = ', '.join(columns)
+            placeholders = ', '.join(['%s'] * len(columns))
+
+            # Use VALUES clause for batch add
+            values_clause = ', '.join([f"({placeholders})" for _ in processed_data_list])
+            query = f"INSERT INTO {table} ({columns_str}) VALUES {values_clause}"
+
+            # Flatten the parameters
+            params = []
+            for data in processed_data_list:
+                params.extend([data[col] for col in columns])
+
+            # Execute the batch query
+            self.execute(query, tuple(params))
+            self.commit()
+
+            # Return the IDs
+            return [data.get('id', '') for data in processed_data_list]
+
+        return []
