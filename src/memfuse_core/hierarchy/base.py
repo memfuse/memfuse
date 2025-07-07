@@ -2,7 +2,7 @@
 Legacy data structures for backward compatibility.
 
 This module provides the data structures that were previously in the old base module,
-ensuring compatibility with existing L1 components.
+ensuring compatibility with existing M1 components.
 """
 
 from dataclasses import dataclass, field

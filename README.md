@@ -65,7 +65,7 @@ This repository contains the official server core services for seamless integrat
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | **Lightning Fast**                | Efficient buffering with write aggregation, intelligent prefetching, and query caching for exceptional performance                |
 | **Unified Cognitive Search**      | Seamlessly combines vector, graph, and keyword search with intelligent fusion and re-ranking for superior accuracy and insights   |
-| **Cognitive Memory Architecture** | Human-inspired layered memory system: L0 (raw data/episodic), L1 (structured facts/semantic), and L2 (knowledge graph/conceptual) |
+| **Cognitive Memory Architecture** | Human-inspired layered memory system: M0 (raw data/episodic), M1 (structured facts/semantic), and M2 (knowledge graph/conceptual) |
 | **Local-First**                   | Run the server locally or deploy with Docker — no mandatory cloud dependencies or fees                                            |
 | **Pluggable Backends**            | Compatible with Chroma, Qdrant, pgvector, Neo4j, Redis, and custom adapters (expanding support)                                   |
 | **Multi-Tenant Support**          | Secure isolation between users, agents, and sessions with robust scoping and access controls                                      |

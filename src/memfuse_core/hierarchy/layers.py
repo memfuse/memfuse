@@ -1,7 +1,7 @@
 """
 Optimized memory layer implementations for the MemFuse hierarchy.
 
-This module provides clean, efficient implementations of L0, L1, and L2
+This module provides clean, efficient implementations of M0, M1, and M2
 memory layers with unified interfaces and event-driven processing.
 """
 
@@ -18,15 +18,15 @@ from .core import (
 from ..rag.chunk.base import ChunkData
 
 
-class L0EpisodicLayer(MemoryLayer):
+class M0EpisodicLayer(MemoryLayer):
     """
-    L0 (Episodic Memory) Layer - Raw data storage.
-    
+    M0 (Episodic Memory) Layer - Raw data storage.
+
     Stores raw data in its original form using multiple storage backends:
     - Vector Store: For semantic similarity search
     - Keyword Store: For keyword-based search
     - SQL Store: For structured metadata
-    
+
     Features:
     - Immediate storage of incoming data
     - Multi-backend redundancy
@@ -42,33 +42,33 @@ class L0EpisodicLayer(MemoryLayer):
     ):
         super().__init__(layer_type, config, user_id, storage_manager)
         
-        # L0-specific configuration
+        # M0-specific configuration
         self.storage_backends = config.storage_backends or ["vector", "keyword"]
-        
-        logger.info(f"L0EpisodicLayer: Initialized for user {user_id}")
+
+        logger.info(f"M0EpisodicLayer: Initialized for user {user_id}")
     
     async def initialize(self) -> bool:
-        """Initialize the L0 layer."""
+        """Initialize the M0 layer."""
         try:
             if self.storage_manager:
                 await self.storage_manager.initialize()
 
             self.initialized = True
-            logger.info(f"L0EpisodicLayer: Initialized successfully for user {self.user_id}")
+            logger.info(f"M0EpisodicLayer: Initialized successfully for user {self.user_id}")
             return True
 
         except Exception as e:
-            logger.error(f"L0EpisodicLayer: Initialization failed: {e}")
+            logger.error(f"M0EpisodicLayer: Initialization failed: {e}")
             return False
     
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
         """
-        Process data through L0 layer.
-        
+        Process data through M0 layer.
+
         Args:
             data: Raw data to process
             metadata: Optional metadata
-            
+
         Returns:
             ProcessingResult with storage IDs and status
         """
@@ -109,14 +109,14 @@ class L0EpisodicLayer(MemoryLayer):
             
 
             
-            logger.debug(f"L0EpisodicLayer: Processed data with {len(processed_items)} successful stores")
+            logger.debug(f"M0EpisodicLayer: Processed data with {len(processed_items)} successful stores")
             return result
-            
+
         except Exception as e:
             processing_time = time.time() - start_time
             self._update_stats(processing_time, False)
-            
-            logger.error(f"L0EpisodicLayer: Processing failed: {e}")
+
+            logger.error(f"M0EpisodicLayer: Processing failed: {e}")
             return ProcessingResult(
                 success=False,
                 layer_type=self.layer_type,
@@ -126,12 +126,12 @@ class L0EpisodicLayer(MemoryLayer):
     
     async def query(self, query: str, **kwargs) -> List[Any]:
         """
-        Query data from L0 layer.
-        
+        Query data from M0 layer.
+
         Args:
             query: Query string
             **kwargs: Additional query parameters
-            
+
         Returns:
             List of matching results
         """
@@ -159,11 +159,11 @@ class L0EpisodicLayer(MemoryLayer):
                     )
                     all_results.extend(keyword_results)
             
-            logger.debug(f"L0EpisodicLayer: Query returned {len(all_results)} results")
+            logger.debug(f"M0EpisodicLayer: Query returned {len(all_results)} results")
             return all_results
-            
+
         except Exception as e:
-            logger.error(f"L0EpisodicLayer: Query failed: {e}")
+            logger.error(f"M0EpisodicLayer: Query failed: {e}")
             return []
 
     def _convert_to_chunks(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
@@ -174,17 +174,17 @@ class L0EpisodicLayer(MemoryLayer):
             if isinstance(data, list):
                 # Process list of items
                 for i, item in enumerate(data):
-                    chunk = self._create_chunk_from_item(item, metadata, f"l0_item_{i}")
+                    chunk = self._create_chunk_from_item(item, metadata, f"m0_item_{i}")
                     if chunk:
                         chunks.append(chunk)
             else:
                 # Process single item
-                chunk = self._create_chunk_from_item(data, metadata, "l0_single")
+                chunk = self._create_chunk_from_item(data, metadata, "m0_single")
                 if chunk:
                     chunks.append(chunk)
 
         except Exception as e:
-            logger.error(f"L0EpisodicLayer: Failed to convert data to chunks: {e}")
+            logger.error(f"M0EpisodicLayer: Failed to convert data to chunks: {e}")
 
         return chunks
 
@@ -203,7 +203,7 @@ class L0EpisodicLayer(MemoryLayer):
 
             # Create chunk metadata
             chunk_metadata = {
-                "layer": "L0",
+                "layer": "M0",
                 "source": "episodic_layer",
                 "timestamp": time.time(),
                 **(metadata or {})
@@ -216,21 +216,21 @@ class L0EpisodicLayer(MemoryLayer):
             )
 
         except Exception as e:
-            logger.error(f"L0EpisodicLayer: Failed to create chunk from item: {e}")
+            logger.error(f"M0EpisodicLayer: Failed to create chunk from item: {e}")
             return None
 
 
-class L1SemanticLayer(MemoryLayer):
+class M1SemanticLayer(MemoryLayer):
     """
-    L1 (Semantic Memory) Layer - Facts and concepts.
-    
+    M1 (Semantic Memory) Layer - Facts and concepts.
+
     Extracts and stores facts from raw data using LLM processing:
-    - Fact extraction from L0 data
+    - Fact extraction from M0 data
     - Fact storage and indexing
     - Semantic search over facts
-    
+
     Features:
-    - Event-driven processing (triggered by L0 events)
+    - Event-driven processing (triggered by M0 events)
     - LLM-based fact extraction
     - Fact deduplication and validation
     """
@@ -244,34 +244,34 @@ class L1SemanticLayer(MemoryLayer):
     ):
         super().__init__(layer_type, config, user_id, storage_manager)
         
-        # L1-specific configuration
+        # M1-specific configuration
         self.llm_config = config.custom_config.get("llm_config", {})
         self.fact_extraction_enabled = config.custom_config.get("fact_extraction_enabled", True)
-        
-        logger.info(f"L1SemanticLayer: Initialized for user {user_id}")
+
+        logger.info(f"M1SemanticLayer: Initialized for user {user_id}")
     
     async def initialize(self) -> bool:
-        """Initialize the L1 layer."""
+        """Initialize the M1 layer."""
         try:
             if self.storage_manager:
                 await self.storage_manager.initialize()
 
             self.initialized = True
-            logger.info(f"L1SemanticLayer: Initialized successfully for user {self.user_id}")
+            logger.info(f"M1SemanticLayer: Initialized successfully for user {self.user_id}")
             return True
 
         except Exception as e:
-            logger.error(f"L1SemanticLayer: Initialization failed: {e}")
+            logger.error(f"M1SemanticLayer: Initialization failed: {e}")
             return False
     
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
         """
-        Process data through L1 layer (fact extraction).
-        
+        Process data through M1 layer (fact extraction).
+
         Args:
             data: Data to extract facts from
             metadata: Optional metadata
-            
+
         Returns:
             ProcessingResult with extracted facts
         """
@@ -310,17 +310,17 @@ class L1SemanticLayer(MemoryLayer):
                 processing_time=processing_time
             )
             
-            # Note: Event emission for L2 processing would be handled by the parallel manager
+            # Note: Event emission for M2 processing would be handled by the parallel manager
             # No direct event bus access needed in individual layers
-            
-            logger.debug(f"L1SemanticLayer: Extracted {len(facts)} facts")
+
+            logger.debug(f"M1SemanticLayer: Extracted {len(facts)} facts")
             return result
-            
+
         except Exception as e:
             processing_time = time.time() - start_time
             self._update_stats(processing_time, False)
-            
-            logger.error(f"L1SemanticLayer: Processing failed: {e}")
+
+            logger.error(f"M1SemanticLayer: Processing failed: {e}")
             return ProcessingResult(
                 success=False,
                 layer_type=self.layer_type,
@@ -329,25 +329,25 @@ class L1SemanticLayer(MemoryLayer):
             )
     
     async def query(self, query: str, **kwargs) -> List[Any]:
-        """Query facts from L1 layer."""
+        """Query facts from M1 layer."""
         try:
             if not self.initialized:
                 await self.initialize()
-            
+
             self.total_queries += 1
-            
+
             # Query facts from vector store
             results = []
             if self.storage_manager:
                 results = await self.storage_manager.read_from_backend(
                     StorageType.VECTOR, query, **kwargs
                 )
-            
-            logger.debug(f"L1SemanticLayer: Query returned {len(results)} facts")
+
+            logger.debug(f"M1SemanticLayer: Query returned {len(results)} facts")
             return results
-            
+
         except Exception as e:
-            logger.error(f"L1SemanticLayer: Query failed: {e}")
+            logger.error(f"M1SemanticLayer: Query failed: {e}")
             return []
     
 
@@ -357,14 +357,14 @@ class L1SemanticLayer(MemoryLayer):
         Process new data for fact extraction (compatibility method for MemoryService).
 
         Args:
-            data: Data to process (chunks from L0)
+            data: Data to process (chunks from M0)
             user_id: User identifier
             session_id: Session identifier
 
         Returns:
             ProcessingResult with extracted facts
         """
-        logger.info(f"L1SemanticLayer: Processing new data for user {user_id}, session {session_id}")
+        logger.info(f"M1SemanticLayer: Processing new data for user {user_id}, session {session_id}")
 
         # Add metadata for context
         metadata = {
@@ -377,7 +377,7 @@ class L1SemanticLayer(MemoryLayer):
 
     async def query_facts(self, query: str, top_k: int = 10, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
-        Query facts from L1 layer (compatibility method for MemoryService).
+        Query facts from M1 layer (compatibility method for MemoryService).
 
         Args:
             query: Search query
@@ -387,7 +387,7 @@ class L1SemanticLayer(MemoryLayer):
         Returns:
             List of fact dictionaries
         """
-        logger.debug(f"L1SemanticLayer: Querying facts with query '{query[:50]}...', top_k={top_k}")
+        logger.debug(f"M1SemanticLayer: Querying facts with query '{query[:50]}...', top_k={top_k}")
 
         try:
             results = await self.query(query, top_k=top_k, filters=filters)
@@ -400,16 +400,16 @@ class L1SemanticLayer(MemoryLayer):
                 else:
                     formatted_results.append({"content": str(result)})
 
-            logger.debug(f"L1SemanticLayer: Returning {len(formatted_results)} formatted facts")
+            logger.debug(f"M1SemanticLayer: Returning {len(formatted_results)} formatted facts")
             return formatted_results
 
         except Exception as e:
-            logger.error(f"L1SemanticLayer: Query facts failed: {e}")
+            logger.error(f"M1SemanticLayer: Query facts failed: {e}")
             return []
 
     @property
     def enabled(self) -> bool:
-        """Check if L1 layer is enabled."""
+        """Check if M1 layer is enabled."""
         return self.fact_extraction_enabled and self.initialized
 
     async def _extract_facts(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -428,11 +428,11 @@ class L1SemanticLayer(MemoryLayer):
                 item_facts = await self._extract_facts_from_item(data, metadata)
                 facts.extend(item_facts)
 
-            logger.info(f"L1SemanticLayer: Extracted {len(facts)} facts from data")
+            logger.info(f"M1SemanticLayer: Extracted {len(facts)} facts from data")
             return facts
 
         except Exception as e:
-            logger.error(f"L1SemanticLayer: Fact extraction failed: {e}")
+            logger.error(f"M1SemanticLayer: Fact extraction failed: {e}")
             return []
 
     async def _extract_facts_from_item(self, item: Any, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -457,7 +457,7 @@ class L1SemanticLayer(MemoryLayer):
                 fact = {
                     "content": content[:200] + "..." if len(content) > 200 else content,
                     "type": "extracted_fact",
-                    "source": "l1_semantic_layer",
+                    "source": "m1_semantic_layer",
                     "timestamp": time.time(),
                     "metadata": metadata or {}
                 }
@@ -466,7 +466,7 @@ class L1SemanticLayer(MemoryLayer):
             return facts
 
         except Exception as e:
-            logger.error(f"L1SemanticLayer: Failed to extract facts from item: {e}")
+            logger.error(f"M1SemanticLayer: Failed to extract facts from item: {e}")
             return []
 
     def _convert_facts_to_chunks(self, facts: List[Dict[str, Any]], metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
@@ -482,7 +482,7 @@ class L1SemanticLayer(MemoryLayer):
 
                 # Create chunk metadata combining fact metadata and layer metadata
                 chunk_metadata = {
-                    "layer": "L1",
+                    "layer": "M1",
                     "source": "semantic_layer",
                     "fact_type": fact.get("type", "unknown"),
                     "extraction_timestamp": fact.get("timestamp", time.time()),
@@ -498,15 +498,15 @@ class L1SemanticLayer(MemoryLayer):
                 chunks.append(chunk)
 
         except Exception as e:
-            logger.error(f"L1SemanticLayer: Failed to convert facts to chunks: {e}")
+            logger.error(f"M1SemanticLayer: Failed to convert facts to chunks: {e}")
 
         return chunks
 
 
-class L2RelationalLayer(MemoryLayer):
+class M2RelationalLayer(MemoryLayer):
     """
-    L2 (Relational Memory) Layer - Knowledge graph.
-    
+    M2 (Relational Memory) Layer - Knowledge graph.
+
     Constructs and maintains a knowledge graph from facts:
     - Entity extraction from facts
     - Relationship identification
@@ -514,11 +514,11 @@ class L2RelationalLayer(MemoryLayer):
     - Graph-based querying
     
     Features:
-    - Event-driven processing (triggered by L1 events)
+    - Event-driven processing (triggered by M1 events)
     - Graph database integration
     - Entity resolution and linking
     """
-    
+
     def __init__(
         self,
         layer_type: LayerType,
@@ -527,35 +527,35 @@ class L2RelationalLayer(MemoryLayer):
         storage_manager: Optional[StorageManager] = None
     ):
         super().__init__(layer_type, config, user_id, storage_manager)
-        
-        # L2-specific configuration
+
+        # M2-specific configuration
         self.graph_config = config.custom_config.get("graph_config", {})
         self.entity_extraction_enabled = config.custom_config.get("entity_extraction_enabled", True)
-        
-        logger.info(f"L2RelationalLayer: Initialized for user {user_id}")
+
+        logger.info(f"M2RelationalLayer: Initialized for user {user_id}")
     
     async def initialize(self) -> bool:
-        """Initialize the L2 layer."""
+        """Initialize the M2 layer."""
         try:
             if self.storage_manager:
                 await self.storage_manager.initialize()
 
             self.initialized = True
-            logger.info(f"L2RelationalLayer: Initialized successfully for user {self.user_id}")
+            logger.info(f"M2RelationalLayer: Initialized successfully for user {self.user_id}")
             return True
-            
+
         except Exception as e:
-            logger.error(f"L2RelationalLayer: Initialization failed: {e}")
+            logger.error(f"M2RelationalLayer: Initialization failed: {e}")
             return False
     
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
         """
-        Process data through L2 layer (graph construction).
-        
+        Process data through M2 layer (graph construction).
+
         Args:
             data: Facts to process into graph
             metadata: Optional metadata
-            
+
         Returns:
             ProcessingResult with graph updates
         """
@@ -567,7 +567,7 @@ class L2RelationalLayer(MemoryLayer):
             
             # Extract entities and relationships (placeholder)
             entities, relationships = await self._extract_entities_and_relationships(data, metadata)
-            logger.debug(f"L2RelationalLayer: Extracted {len(entities)} entities, {len(relationships)} relationships from data: {type(data)}")
+            logger.debug(f"M2RelationalLayer: Extracted {len(entities)} entities, {len(relationships)} relationships from data: {type(data)}")
 
             # Convert entities and relationships to ChunkData objects and store
             processed_items = []
@@ -581,21 +581,21 @@ class L2RelationalLayer(MemoryLayer):
                         entity_id = await self.storage_manager.write_to_backend(
                             StorageType.GRAPH, chunk, metadata
                         )
-                        logger.debug(f"L2RelationalLayer: Successfully stored entity to graph storage: {entity_id}")
+                        logger.debug(f"M2RelationalLayer: Successfully stored entity to graph storage: {entity_id}")
                     except Exception as e:
-                        logger.debug(f"L2RelationalLayer: Graph storage not available, using vector storage: {e}")
+                        logger.debug(f"M2RelationalLayer: Graph storage not available, using vector storage: {e}")
                         try:
                             entity_id = await self.storage_manager.write_to_backend(
                                 StorageType.VECTOR, chunk, metadata
                             )
-                            logger.debug(f"L2RelationalLayer: Successfully stored entity to vector storage: {entity_id}")
+                            logger.debug(f"M2RelationalLayer: Successfully stored entity to vector storage: {entity_id}")
                         except Exception as ve:
-                            logger.error(f"L2RelationalLayer: Failed to store entity to vector storage: {ve}")
+                            logger.error(f"M2RelationalLayer: Failed to store entity to vector storage: {ve}")
 
                     if entity_id:
                         processed_items.append(entity_id)
                     else:
-                        logger.warning(f"L2RelationalLayer: Failed to store entity chunk: {chunk.chunk_id}")
+                        logger.warning(f"M2RelationalLayer: Failed to store entity chunk: {chunk.chunk_id}")
 
                 # Convert and store relationships
                 relationship_chunks = self._convert_relationships_to_chunks(relationships, metadata)
@@ -606,21 +606,21 @@ class L2RelationalLayer(MemoryLayer):
                         rel_id = await self.storage_manager.write_to_backend(
                             StorageType.GRAPH, chunk, metadata
                         )
-                        logger.debug(f"L2RelationalLayer: Successfully stored relationship to graph storage: {rel_id}")
+                        logger.debug(f"M2RelationalLayer: Successfully stored relationship to graph storage: {rel_id}")
                     except Exception as e:
-                        logger.debug(f"L2RelationalLayer: Graph storage not available, using vector storage: {e}")
+                        logger.debug(f"M2RelationalLayer: Graph storage not available, using vector storage: {e}")
                         try:
                             rel_id = await self.storage_manager.write_to_backend(
                                 StorageType.VECTOR, chunk, metadata
                             )
-                            logger.debug(f"L2RelationalLayer: Successfully stored relationship to vector storage: {rel_id}")
+                            logger.debug(f"M2RelationalLayer: Successfully stored relationship to vector storage: {rel_id}")
                         except Exception as ve:
-                            logger.error(f"L2RelationalLayer: Failed to store relationship to vector storage: {ve}")
+                            logger.error(f"M2RelationalLayer: Failed to store relationship to vector storage: {ve}")
 
                     if rel_id:
                         processed_items.append(rel_id)
                     else:
-                        logger.warning(f"L2RelationalLayer: Failed to store relationship chunk: {chunk.chunk_id}")
+                        logger.warning(f"M2RelationalLayer: Failed to store relationship chunk: {chunk.chunk_id}")
             
             processing_time = time.time() - start_time
             success = len(processed_items) > 0
@@ -640,14 +640,14 @@ class L2RelationalLayer(MemoryLayer):
                 processing_time=processing_time
             )
 
-            logger.debug(f"L2RelationalLayer: Processed {len(entities)} entities, {len(relationships)} relationships, success={success}, processed_items={len(processed_items)}")
+            logger.debug(f"M2RelationalLayer: Processed {len(entities)} entities, {len(relationships)} relationships, success={success}, processed_items={len(processed_items)}")
             return result
-            
+
         except Exception as e:
             processing_time = time.time() - start_time
             self._update_stats(processing_time, False)
-            
-            logger.error(f"L2RelationalLayer: Processing failed: {e}")
+
+            logger.error(f"M2RelationalLayer: Processing failed: {e}")
             return ProcessingResult(
                 success=False,
                 layer_type=self.layer_type,
@@ -670,18 +670,18 @@ class L2RelationalLayer(MemoryLayer):
                     StorageType.GRAPH, query, **kwargs
                 )
             
-            logger.debug(f"L2RelationalLayer: Query returned {len(results)} graph results")
+            logger.debug(f"M2RelationalLayer: Query returned {len(results)} graph results")
             return results
-            
+
         except Exception as e:
-            logger.error(f"L2RelationalLayer: Query failed: {e}")
+            logger.error(f"M2RelationalLayer: Query failed: {e}")
             return []
     
 
     
     async def _extract_entities_and_relationships(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Extract entities and relationships from data (placeholder)."""
-        # This would integrate with the existing L2 graph construction logic
+        # This would integrate with the existing M2 graph construction logic
         # For now, return simple representations based on actual data format
         entities = []
         relationships = []
@@ -739,10 +739,10 @@ class L2RelationalLayer(MemoryLayer):
                 entities.append({"entity": f"Entity from data: {content}..."})
                 relationships.append({"relationship": "derived_from", "source": "data", "target": "entity"})
 
-            logger.debug(f"L2RelationalLayer: Extracted {len(entities)} entities and {len(relationships)} relationships from data")
+            logger.debug(f"M2RelationalLayer: Extracted {len(entities)} entities and {len(relationships)} relationships from data")
 
         except Exception as e:
-            logger.error(f"L2RelationalLayer: Entity extraction failed: {e}")
+            logger.error(f"M2RelationalLayer: Entity extraction failed: {e}")
             # Return empty lists on error
             entities = []
             relationships = []
@@ -762,7 +762,7 @@ class L2RelationalLayer(MemoryLayer):
 
                 # Create chunk metadata
                 chunk_metadata = {
-                    "layer": "L2",
+                    "layer": "M2",
                     "source": "relational_layer",
                     "data_type": "entity",
                     "extraction_timestamp": time.time(),
@@ -777,7 +777,7 @@ class L2RelationalLayer(MemoryLayer):
                 chunks.append(chunk)
 
         except Exception as e:
-            logger.error(f"L2RelationalLayer: Failed to convert entities to chunks: {e}")
+            logger.error(f"M2RelationalLayer: Failed to convert entities to chunks: {e}")
 
         return chunks
 
@@ -798,7 +798,7 @@ class L2RelationalLayer(MemoryLayer):
 
                 # Create chunk metadata
                 chunk_metadata = {
-                    "layer": "L2",
+                    "layer": "M2",
                     "source": "relational_layer",
                     "data_type": "relationship",
                     "relationship_type": rel_type,
@@ -814,6 +814,6 @@ class L2RelationalLayer(MemoryLayer):
                 chunks.append(chunk)
 
         except Exception as e:
-            logger.error(f"L2RelationalLayer: Failed to convert relationships to chunks: {e}")
+            logger.error(f"M2RelationalLayer: Failed to convert relationships to chunks: {e}")
 
         return chunks

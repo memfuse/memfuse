@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Performance test script to trigger HybridBuffer flush mechanism and test L0/L1/L2 parallel processing.
+Performance test script to trigger HybridBuffer flush mechanism and test M0/M1/M2 parallel processing.
 
 This script simulates high-volume message writing to test:
 1. HybridBuffer flush behavior under load
-2. L0/L1/L2 parallel processing performance
+2. M0/M1/M2 parallel processing performance
 3. Memory layer scalability
 4. End-to-end pipeline performance
 
@@ -82,7 +82,7 @@ def create_session(user_id: str, agent_id: str) -> str:
     session_data = {
         "user_id": user_id,
         "agent_id": agent_id,
-        "description": "Performance test session for L0/L1/L2 parallel processing"
+        "description": "Performance test session for M0/M1/M2 parallel processing"
     }
 
     response = requests.post(f"{BASE_URL}/sessions", json=session_data)
@@ -120,7 +120,7 @@ def generate_test_messages(count: int) -> List[str]:
     """Generate test messages with varying content to trigger different processing patterns."""
     messages = []
 
-    # Technical discussion messages (good for L1 fact extraction)
+    # Technical discussion messages (good for M1 fact extraction)
     tech_topics = [
         "Machine learning algorithms like neural networks require large datasets for training.",
         "Distributed systems face challenges with consistency, availability, and partition tolerance.",
@@ -129,7 +129,7 @@ def generate_test_messages(count: int) -> List[str]:
         "Cloud computing offers elasticity and cost efficiency for modern applications."
     ]
 
-    # Conversational messages (good for L0 episodic memory)
+    # Conversational messages (good for M0 episodic memory)
     conversations = [
         "I'm working on a new project that involves data processing.",
         "The weather has been quite unpredictable lately.",
@@ -138,7 +138,7 @@ def generate_test_messages(count: int) -> List[str]:
         "The new restaurant downtown has excellent reviews."
     ]
 
-    # Complex analytical content (good for L2 relational processing)
+    # Complex analytical content (good for M2 relational processing)
     analytical = [
         "The correlation between user engagement and feature adoption shows a strong positive relationship.",
         "Market analysis indicates three key trends: automation, personalization, and sustainability.",
@@ -159,8 +159,8 @@ def generate_test_messages(count: int) -> List[str]:
 
 
 def run_performance_test():
-    """Run the performance test for L0/L1/L2 parallel processing."""
-    print("🚀 MemFuse L0/L1/L2 Parallel Processing Performance Test")
+    """Run the performance test for M0/M1/M2 parallel processing."""
+    print("🚀 MemFuse M0/M1/M2 Parallel Processing Performance Test")
     print("=" * 70)
 
     try:
@@ -182,7 +182,7 @@ def run_performance_test():
         print(f"   Expected flush triggers: ~{message_count // 5} (based on max_size=5)")
 
         # Send messages and measure performance
-        print("\n🔄 Sending messages to trigger L0/L1/L2 parallel processing...")
+        print("\n🔄 Sending messages to trigger M0/M1/M2 parallel processing...")
 
         start_time = time.time()
         responses = []
@@ -220,7 +220,7 @@ def run_performance_test():
         print(f"   Avg processing time: {sum(processing_times) / len(processing_times):.3f}s")
 
         print("\n✅ Performance test completed successfully!")
-        print("   Check server logs for L0/L1/L2 parallel processing details")
+        print("   Check server logs for M0/M1/M2 parallel processing details")
         print("   Look for 'ParallelMemoryLayerManager' and 'UnifiedMemoryLayerImpl' log entries")
 
         return {

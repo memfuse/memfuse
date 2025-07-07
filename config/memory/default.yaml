@@ -1,6 +1,6 @@
 # @package memory
 # MemFuse Memory System Configuration
-# Optimized and unified configuration for L0/L1/L2 memory hierarchy
+# Optimized and unified configuration for M0/M1/M2 memory hierarchy
 
 # =============================================================================
 # CORE ARCHITECTURE SETTINGS
@@ -28,53 +28,53 @@ processing:
 # =============================================================================
 
 layers:
-  # L0: Episodic Memory - Raw data storage
-  l0:
+  # M0: Episodic Memory - Raw data storage
+  m0:
     enabled: true
     priority: 1
 
-    # L0-specific settings
+    # M0-specific settings
     buffer_size: 1000
     auto_flush_interval: 60    # seconds
     storage_backends: ["vector", "keyword", "sql"]
 
-    # L0 storage tables
+    # M0 storage tables
     storage:
-      message_table: "l0_messages"
-      metadata_table: "l0_metadata"
+      message_table: "m0_messages"
+      metadata_table: "m0_metadata"
 
-  # L1: Semantic Memory - Fact extraction and processing
-  l1:
+  # M1: Semantic Memory - Fact extraction and processing
+  m1:
     enabled: true
     priority: 2
 
-    # L1-specific settings (for future implementation)
+    # M1-specific settings (for future implementation)
     fact_extraction_enabled: true
     llm_model: "grok-3-mini"
     batch_size: 5
     min_confidence_threshold: 0.7
 
-    # L1 storage tables
+    # M1 storage tables
     storage:
-      fact_table: "l1_facts"
-      lineage_table: "l1_lineage"
-      conflicts_table: "l1_conflicts"
+      fact_table: "m1_facts"
+      lineage_table: "m1_lineage"
+      conflicts_table: "m1_conflicts"
 
-  # L2: Relational Memory - Knowledge graph construction
-  l2:
+  # M2: Relational Memory - Knowledge graph construction
+  m2:
     enabled: true
     priority: 3
 
-    # L2-specific settings
+    # M2-specific settings
     graph_update_strategy: "incremental"
     entity_resolution_threshold: 0.8
     entity_extraction_enabled: true
 
-    # L2 storage tables
+    # M2 storage tables
     storage:
-      entity_table: "l2_entities"
-      relationship_table: "l2_relationships"
-      graph_table: "l2_graphs"
+      entity_table: "m2_entities"
+      relationship_table: "m2_relationships"
+      graph_table: "m2_graphs"
 
 # =============================================================================
 # STORAGE BACKEND CONFIGURATION
@@ -117,7 +117,7 @@ storage:
 
 # Memory service configuration - controls how MemoryService integrates with layers
 memory_service:
-  parallel_enabled: true        # Enable L0/L1/L2 parallel processing
+  parallel_enabled: true        # Enable M0/M1/M2 parallel processing
   parallel_strategy: "parallel" # Processing strategy
   enable_fallback: true         # Fallback to traditional processing on errors
   log_processing_mode: true     # Log processing decisions

@@ -16,7 +16,7 @@ improving performance and enabling advanced features:
 6. CoherencyController (Cache Coherence Controller):
    Ensures data consistency across multiple buffers
 
-The buffer system serves as a foundation for the hierarchical memory system (L0/L1/L2).
+The buffer system serves as a foundation for the hierarchical memory system (M0/M1/M2).
 """
 
 # Buffer components

@@ -3,17 +3,17 @@ Optimized memory hierarchy system for MemFuse.
 
 This module provides a clean, unified architecture for the three-tier memory system:
 
-1. L0 (Episodic Memory): Stores raw data in its original form
+1. M0 (Episodic Memory): Stores raw data in its original form
    - Vector Store: For semantic similarity search
    - Keyword Store: For keyword-based search
    - SQL Store: For structured metadata
 
-2. L1 (Semantic Memory): Extracts and stores facts from raw data
+2. M1 (Semantic Memory): Extracts and stores facts from raw data
    - LLM-based fact extraction
    - Fact storage and indexing
    - Semantic search over facts
 
-3. L2 (Relational Memory): Constructs a knowledge graph from facts
+3. M2 (Relational Memory): Constructs a knowledge graph from facts
    - Entity extraction from facts
    - Relationship identification
    - Graph construction and updates
@@ -39,7 +39,7 @@ from .core import (
 from .storage import UnifiedStorageManager, StoreBackendAdapter
 
 # Memory layer implementations
-from .layers import L0EpisodicLayer, L1SemanticLayer, L2RelationalLayer
+from .layers import M0EpisodicLayer, M1SemanticLayer, M2RelationalLayer
 
 # Main memory manager
 from .manager import MemoryHierarchyManager, create_memory_manager
@@ -64,9 +64,9 @@ __all__ = [
     "StoreBackendAdapter",
 
     # Memory layers
-    "L0EpisodicLayer",
-    "L1SemanticLayer",
-    "L2RelationalLayer",
+    "M0EpisodicLayer",
+    "M1SemanticLayer",
+    "M2RelationalLayer",
 
     # Main manager
     "MemoryHierarchyManager",

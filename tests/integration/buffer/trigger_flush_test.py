@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-手动触发flush来测试L1层处理
+手动触发flush来测试M1层处理
 """
 
 import requests
@@ -84,7 +84,7 @@ def add_many_messages(session_id, count=10):
 
 def check_facts_table():
     """检查所有用户的facts表"""
-    print("\n🔍 检查所有用户的L1 facts表...")
+    print("\n🔍 检查所有用户的M1 facts表...")
     
     data_dir = Path("data")
     user_dirs = [d for d in data_dir.iterdir() if d.is_dir() and len(d.name) == 36]
@@ -118,7 +118,7 @@ def check_facts_table():
 
 def main():
     """主函数"""
-    print("🚀 手动触发flush测试L1层")
+    print("🚀 手动触发flush测试M1层")
     print("=" * 50)
     
     # 检查服务器
@@ -150,9 +150,9 @@ def main():
     has_facts = check_facts_table()
     
     if has_facts:
-        print("\n🎉 成功！L1层已经处理数据并提取了事实")
+        print("\n🎉 成功！M1层已经处理数据并提取了事实")
     else:
-        print("\n⚠️ L1层可能还在处理中，或者存在问题")
+        print("\n⚠️ M1层可能还在处理中，或者存在问题")
         print("   建议检查服务器日志")
     
     print("\n" + "=" * 50)

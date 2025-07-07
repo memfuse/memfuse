@@ -52,17 +52,17 @@ This positioning allows for:
 
 ### Current Implementation Status
 
-The MemFuse memory hierarchy is currently **partially operational** with only L0 layer actively processing data:
+The MemFuse memory hierarchy is currently **partially operational** with only M0 layer actively processing data:
 
-- **L0 (Episodic)**: ✅ **Active** - Handles immediate message storage and retrieval through MemoryService
-- **L1 (Semantic)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
-- **L2 (Relational)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
+- **M0 (Episodic)**: ✅ **Active** - Handles immediate message storage and retrieval through MemoryService
+- **M1 (Semantic)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
+- **M2 (Relational)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
 
-**Current Data Flow**: `API → BufferService → MemoryService → L0 Processing Only → Store Classes`
+**Current Data Flow**: `API → BufferService → MemoryService → M0 Processing Only → Store Classes`
 
-**Processing Model**: MemoryService currently only processes L0 episodic memory. L1 and L2 layers exist as complete implementations in the hierarchy/ directory but are not activated or integrated into the main execution flow.
+**Processing Model**: MemoryService currently only processes M0 episodic memory. M1 and M2 layers exist as complete implementations in the hierarchy/ directory but are not activated or integrated into the main execution flow.
 
-**Future Vision**: The architecture is designed for eventual unified Memory Layer abstraction where MemoryService would call a single Memory Layer that handles parallel L0/L1/L2 processing internally, completely decoupled from MemoryService logic.
+**Future Vision**: The architecture is designed for eventual unified Memory Layer abstraction where MemoryService would call a single Memory Layer that handles parallel M0/M1/M2 processing internally, completely decoupled from MemoryService logic.
 
 ## Layer Architecture
 
@@ -125,7 +125,7 @@ The MemFuse memory hierarchy is currently **partially operational** with only L0
 
 #### Data Flow Architecture
 
-**L0 Episodic Memory Ingestion Flow**:
+**M0 Episodic Memory Ingestion Flow**:
 
 ```mermaid
 ---
@@ -140,17 +140,17 @@ flowchart TD
         KeywordIndex["Keyword Index<br>(Text Matching)"]
         TemporalIndex["Temporal/Meta Index<br>(Time & Context)"]
   end
- subgraph l0_flow["L0: Episodic Memory Ingestion Flow"]
+ subgraph m0_flow["M0: Episodic Memory Ingestion Flow"]
         EpisodeFormation["Episode Formation<br>(Conversation Segmentation)"]
         Input["Conversation Data<br>(Raw Dialogue)"]
         indexing_sub
         Storage["Persist to Storage Layer<br>(Multi-Path Storage)"]
-        TriggerL1["Trigger L1 Fact Extraction<br>(Semantic Processing)"]
+        TriggerM1["Trigger M1 Fact Extraction<br>(Semantic Processing)"]
   end
     Input --> EpisodeFormation
     EpisodeFormation --> indexing_sub
     indexing_sub --> Storage
-    Storage --> TriggerL1
+    Storage --> TriggerM1
      VectorIndex:::node_style
      KeywordIndex:::node_style
      TemporalIndex:::node_style
@@ -158,8 +158,8 @@ flowchart TD
      Input:::node_style
      indexing_sub:::header_style
      Storage:::node_style
-     TriggerL1:::node_style
-     l0_flow:::header_style
+     TriggerM1:::node_style
+     m0_flow:::header_style
     classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap
     classDef node_style fill:#E3F2FD,stroke:#42A5F5
@@ -187,9 +187,9 @@ Memory Service Query → Context Analysis → Multi-Path Search → Episode Reco
 
 #### Interface Specifications
 
-**L0Manager Interface**:
+**M0Manager Interface**:
 ```python
-class L0Manager(MemoryLayer):
+class M0Manager(MemoryLayer):
     async def add(self, item: Any) -> str
     async def add_batch(self, items: List[Any]) -> List[str]
     async def get(self, item_id: str) -> Optional[Any]
@@ -213,7 +213,7 @@ class StoreCoordinator:
 
 **Store Configuration**:
 ```yaml
-l0:
+m0:
   metadata_db:
     path: "data/metadata.db"
     connection_pool_size: 10
@@ -236,7 +236,7 @@ l0:
 
 **Performance Tuning**:
 ```yaml
-l0_performance:
+m0_performance:
   batch_size: 50
   parallel_workers: 4
   cache_ttl: 3600
@@ -250,7 +250,7 @@ l0_performance:
 
 **Cognitive Analogy**: Human Semantic Memory - stores decontextualized, universal facts that have been abstracted from specific episodic experiences, creating a repository of general knowledge.
 
-**Core Function**: Extracts universal knowledge from L0 episodes through LLM-based abstraction, performing knowledge validation, conflict detection, temporal processing, and memory consolidation to produce high-quality, structured fact repositories.
+**Core Function**: Extracts universal knowledge from M0 episodes through LLM-based abstraction, performing knowledge validation, conflict detection, temporal processing, and memory consolidation to produce high-quality, structured fact repositories.
 
 #### Core Components
 
@@ -304,7 +304,7 @@ l0_performance:
 - **Adaptive Batching**: Dynamic batch size based on content complexity
 
 **Comprehensive Source Lineage**:
-- **Multi-Level Tracking**: Links to L0 chunks, sessions, and users
+- **Multi-Level Tracking**: Links to M0 chunks, sessions, and users
 - **Provenance Graphs**: Visual representation of fact derivation
 - **Source Weighting**: Credibility scoring for different source types
 - **Update Propagation**: Automatic updates when source data changes
@@ -333,7 +333,7 @@ l0_performance:
 
 #### Processing Workflows
 
-**L1 Semantic Memory Abstraction & Consolidation Flow**:
+**M1 Semantic Memory Abstraction & Consolidation Flow**:
 
 ```mermaid
 ---
@@ -341,27 +341,27 @@ config:
   theme: neo
 ---
 graph TD
-    subgraph l1_flow ["L1: Semantic Memory Abstraction & Consolidation Flow"]
-        Input["L0 Episodic Chunks<br/>(Conversation Episodes)"] --> AbstractionEngine["Knowledge Abstraction Engine (LLM)<br/>(Fact Extraction)"]
+    subgraph m1_flow ["M1: Semantic Memory Abstraction & Consolidation Flow"]
+        Input["M0 Episodic Chunks<br/>(Conversation Episodes)"] --> AbstractionEngine["Knowledge Abstraction Engine (LLM)<br/>(Fact Extraction)"]
         subgraph processing_sub ["Fact Processing Pipeline"]
             direction LR
             ConflictDetection["Conflict Detection"] --> TemporalProcessing["Temporal Processing"] --> Consolidation["Memory Consolidation"]
         end
         AbstractionEngine -- "Extract Raw Facts" --> processing_sub
         processing_sub --> Output["Structured Facts<br/>(Knowledge Repository)<br/>Store in Database"]
-        Output --> TriggerL2["Trigger L2 Relationship Building<br/>(Graph Construction)"]
+        Output --> TriggerM2["Trigger M2 Relationship Building<br/>(Graph Construction)"]
     end
     classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap;
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap;
     classDef node_style fill:#E8F5E9,stroke:#66BB6A;
-    class Input,AbstractionEngine,ConflictDetection,TemporalProcessing,Consolidation,Output,TriggerL2 node_style;
-    l1_flow:::header_style;
+    class Input,AbstractionEngine,ConflictDetection,TemporalProcessing,Consolidation,Output,TriggerM2 node_style;
+    m1_flow:::header_style;
     processing_sub:::header_style;
 ```
 
 **Real-Time Fact Extraction**:
 ```
-L0 Chunks (batch of 5) → Context Assembly → LLM Fact Extraction → Raw Facts
+M0 Chunks (batch of 5) → Context Assembly → LLM Fact Extraction → Raw Facts
                                                                       ↓
 Raw Facts → Conflict Detection → Temporal Processing → Source Lineage → Facts DB
                     ↓                      ↓                ↓
@@ -369,7 +369,7 @@ Raw Facts → Conflict Detection → Temporal Processing → Source Lineage → 
                     ↓                      ↓                ↓
             Updated Facts         Temporal Relations    Lineage Table
                                                               ↓
-                                                    Trigger L2 Processing
+                                                    Trigger M2 Processing
 ```
 
 **Background Consolidation Workflow**:
@@ -383,9 +383,9 @@ Re-validation Results → Conflict Analysis → Confidence Updates → Database 
 
 #### Interface Specifications
 
-**L1Manager Interface**:
+**M1Manager Interface**:
 ```python
-class L1Manager(MemoryLayer):
+class M1Manager(MemoryLayer):
     async def process_batch(self, chunks: List[ChunkData]) -> List[str]
     async def extract_facts(self, content: str, context: List[str]) -> List[Fact]
     async def detect_conflicts(self, facts: List[Fact]) -> List[Conflict]
@@ -415,7 +415,7 @@ class Fact:
 
 **Extraction Configuration**:
 ```yaml
-l1:
+m1:
   extraction:
     batch_size: 5
     context_window: 2  # chunks before/after
@@ -445,7 +445,7 @@ l1:
 
 **Cognitive Analogy**: Higher Cognitive Functions - represents the human brain's ability to form complex associative networks between concepts, enabling analogical reasoning, inference, and discovery of implicit relationships.
 
-**Core Function**: Extracts entities and relationships from L1 facts to construct knowledge graphs, enabling advanced reasoning (multi-hop queries) and advanced retrieval (DPR/PPR) for contextual answers and insights generation.
+**Core Function**: Extracts entities and relationships from M1 facts to construct knowledge graphs, enabling advanced reasoning (multi-hop queries) and advanced retrieval (DPR/PPR) for contextual answers and insights generation.
 
 #### Core Components
 
@@ -502,7 +502,7 @@ l1:
 #### Key Features
 
 **Incremental Knowledge Construction**:
-- **Real-Time Updates**: Immediate graph updates from L1 facts
+- **Real-Time Updates**: Immediate graph updates from M1 facts
 - **Incremental Learning**: Continuous knowledge graph refinement
 - **Change Propagation**: Efficient updates across related entities
 - **Version Control**: Knowledge graph versioning and rollback capabilities
@@ -535,7 +535,7 @@ l1:
 
 #### Processing Workflows
 
-**L2 Relational Knowledge Construction & Reasoning Flow**:
+**M2 Relational Knowledge Construction & Reasoning Flow**:
 
 ```mermaid
 ---
@@ -543,8 +543,8 @@ config:
   theme: neo
 ---
 graph TD
-    subgraph l2_flow ["L2: Relational Knowledge Construction & Reasoning Flow"]
-        Input["L1 Structured Facts<br/>(Semantic Knowledge)"] --> Extraction["Entity & Relationship Extraction<br/>(Graph Element Identification)"]
+    subgraph m2_flow ["M2: Relational Knowledge Construction & Reasoning Flow"]
+        Input["M1 Structured Facts<br/>(Semantic Knowledge)"] --> Extraction["Entity & Relationship Extraction<br/>(Graph Element Identification)"]
         Extraction --> KG["Knowledge Graph Construction & Maintenance<br/>(Network Building)"]
         subgraph reasoning_sub ["Advanced Applications"]
             direction LR
@@ -559,13 +559,13 @@ graph TD
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap;
     classDef node_style fill:#F3E5F5,stroke:#AB47BC;
     class Input,Extraction,KG,Reasoning,Retrieval,Insights,Output node_style;
-    l2_flow:::header_style;
+    m2_flow:::header_style;
     reasoning_sub:::header_style;
 ```
 
 **Knowledge Graph Construction**:
 ```
-L1 Facts → Entity Extraction → Entity Linking → Relationship Extraction
+M1 Facts → Entity Extraction → Entity Linking → Relationship Extraction
                                     ↓                    ↓
                             Entity Validation    Relationship Validation
                                     ↓                    ↓
@@ -596,9 +596,9 @@ Consolidation Trigger → Entity Resolution → Relationship Optimization → Gr
 
 #### Interface Specifications
 
-**L2Manager Interface**:
+**M2Manager Interface**:
 ```python
-class L2Manager(MemoryLayer):
+class M2Manager(MemoryLayer):
     async def process_fact(self, fact: Fact) -> GraphUpdateResult
     async def extract_entities(self, fact: Fact) -> List[Entity]
     async def extract_relationships(self, fact: Fact, entities: List[Entity]) -> List[Relationship]
@@ -642,7 +642,7 @@ class Relationship:
 
 **Graph Configuration**:
 ```yaml
-l2:
+m2:
   graph_database:
     type: "neo4j"  # neo4j, networkx, custom
     connection_url: "bolt://localhost:7687"
@@ -813,7 +813,7 @@ class HierarchyMemoryManager(MemoryInterface):
         return {
             "status": "success",
             "message_ids": chunk_ids,
-            "layers_processed": ["l0", "l1", "l2"]
+            "layers_processed": ["m0", "m1", "m2"]
         }
 
     async def query(self, query: str, top_k: int = 5, **kwargs) -> Dict[str, Any]:
@@ -930,24 +930,24 @@ class HierarchyMigrationManager:
 
 1. **Message Input**: User-assistant message pairs arrive via API
 2. **Buffer Processing**: Messages flow through RoundBuffer → HybridBuffer
-3. **L0 Storage**: Chunks stored in vector/keyword/graph/metadata stores
-4. **L1 Trigger**: Batch of 5 chunks triggers fact extraction
-5. **L2 Trigger**: New facts trigger knowledge graph updates
+3. **M0 Storage**: Chunks stored in vector/keyword/graph/metadata stores
+4. **M1 Trigger**: Batch of 5 chunks triggers fact extraction
+5. **M2 Trigger**: New facts trigger knowledge graph updates
 
 ### Query Processing Workflow
 
 1. **Query Analysis**: Determine optimal layer(s) for retrieval
-2. **Multi-Layer Search**: 
-   - L0: Direct vector/keyword/graph search
-   - L1: Fact-based retrieval with temporal filtering
-   - L2: Graph traversal with DPR+PPR ranking
+2. **Multi-Layer Search**:
+   - M0: Direct vector/keyword/graph search
+   - M1: Fact-based retrieval with temporal filtering
+   - M2: Graph traversal with DPR+PPR ranking
 3. **Result Fusion**: Combine and rank results from multiple layers
 4. **Context Enhancement**: Enrich results with cross-layer information
 
 ### Background Consolidation Workflow
 
-1. **L1 Consolidation**: Periodic fact verification and conflict resolution
-2. **L2 Consolidation**: Knowledge graph optimization and cross-session linking
+1. **M1 Consolidation**: Periodic fact verification and conflict resolution
+2. **M2 Consolidation**: Knowledge graph optimization and cross-session linking
 3. **Performance Optimization**: Index maintenance and cache warming
 4. **Data Lifecycle**: Automated archival and cleanup of old data
 
@@ -957,17 +957,17 @@ class HierarchyMigrationManager:
 
 ```yaml
 hierarchy:
-  l0:
+  m0:
     enabled: true
     stores: ["vector", "keyword", "graph", "metadata"]
     buffer_integration: true
-  l1:
+  m1:
     enabled: true
     extraction_batch_size: 5
     consolidation_interval: 3600  # 1 hour
     conflict_detection: true
     temporal_awareness: true
-  l2:
+  m2:
     enabled: true
     session_graphs: true
     people_graphs: true
@@ -1015,33 +1015,33 @@ flowchart TD
   end
  subgraph hierarchy_sub["3-Layer Memory System"]
     direction TB
-        L0["L0: Episodic Memory<br>(Experience Layer)"]
-        L1["L1: Semantic Memory<br>(Knowledge Layer)"]
-        L2["L2: Relational Knowledge<br>(Reasoning Layer)"]
+        M0["M0: Episodic Memory<br>(Experience Layer)"]
+        M1["M1: Semantic Memory<br>(Knowledge Layer)"]
+        M2["M2: Relational Knowledge<br>(Reasoning Layer)"]
   end
  subgraph storage_sub["Storage Layer"]
         SL["Database Agnostic Storage<br>(Backend)"]
   end
-    L0 -- "Abstraction & Extraction" --> L1
-    L1 -- "Relationship Modeling & Reasoning" --> L2
-    MS -- "Raw Data I/O & Query" --> L0
-    L0 -- "Persistence" --> SL
-    L1 -- "Persistence" --> SL
-    L2 -- "Persistence" --> SL
-    MS -- "Advanced Memory Query" --> L2
+    M0 -- "Abstraction & Extraction" --> M1
+    M1 -- "Relationship Modeling & Reasoning" --> M2
+    MS -- "Raw Data I/O & Query" --> M0
+    M0 -- "Persistence" --> SL
+    M1 -- "Persistence" --> SL
+    M2 -- "Persistence" --> SL
+    MS -- "Advanced Memory Query" --> M2
      MS:::service_style
-     L0:::l0_style
-     L1:::l1_style
-     L2:::l2_style
+     M0:::m0_style
+     M1:::m1_style
+     M2:::m2_style
      SL:::service_style
      service_sub:::header_style
      hierarchy_sub:::header_style
      storage_sub:::header_style
     classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap
-    classDef l0_style fill:#E3F2FD,stroke:#42A5F5
-    classDef l1_style fill:#E8F5E9,stroke:#66BB6A
-    classDef l2_style fill:#F3E5F5,stroke:#AB47BC
+    classDef m0_style fill:#E3F2FD,stroke:#42A5F5
+    classDef m1_style fill:#E8F5E9,stroke:#66BB6A
+    classDef m2_style fill:#F3E5F5,stroke:#AB47BC
     classDef service_style fill:#FFFDE7,stroke:#FDD835
 ```
 
@@ -1053,23 +1053,23 @@ graph TB
     MS[Memory Service] --> HM[Hierarchy Manager<br/>Cognitive Processing]
 
     %% Layer 0: Episodic Memory
-    HM --> L0[Layer 0: Episodic Memory<br/>Raw Conversational Episodes]
-    L0 --> ES[Episode Storage<br/>Contextual & Temporal]
-    L0 --> MI[Multi-Path Indexing<br/>Vector, Keyword, Graph, Temporal]
+    HM --> M0[Layer 0: Episodic Memory<br/>Raw Conversational Episodes]
+    M0 --> ES[Episode Storage<br/>Contextual & Temporal]
+    M0 --> MI[Multi-Path Indexing<br/>Vector, Keyword, Graph, Temporal]
 
     %% Layer 1: Semantic Memory
-    L0 --> L1[Layer 1: Semantic Memory<br/>Decontextualized Knowledge]
-    L1 --> KAE[Knowledge Abstraction Engine<br/>LLM-Based Processing]
-    L1 --> SKR[Semantic Knowledge Repository<br/>Facts & Concepts]
-    L1 --> CD[Conflict Detection<br/>Knowledge Validation]
-    L1 --> TC[Temporal Consolidation<br/>Background Processing]
+    M0 --> M1[Layer 1: Semantic Memory<br/>Decontextualized Knowledge]
+    M1 --> KAE[Knowledge Abstraction Engine<br/>LLM-Based Processing]
+    M1 --> SKR[Semantic Knowledge Repository<br/>Facts & Concepts]
+    M1 --> CD[Conflict Detection<br/>Knowledge Validation]
+    M1 --> TC[Temporal Consolidation<br/>Background Processing]
 
     %% Layer 2: Relational Knowledge
-    L1 --> L2[Layer 2: Relational Knowledge<br/>Interconnected Networks]
-    L2 --> RME[Relationship Modeling Engine<br/>Network Construction]
-    L2 --> KN[Knowledge Networks<br/>Concept Relationships]
-    L2 --> AR[Advanced Reasoning<br/>Inference & Analogy]
-    L2 --> CSI[Cross-Session Integration<br/>Knowledge Synthesis]
+    M1 --> M2[Layer 2: Relational Knowledge<br/>Interconnected Networks]
+    M2 --> RME[Relationship Modeling Engine<br/>Network Construction]
+    M2 --> KN[Knowledge Networks<br/>Concept Relationships]
+    M2 --> AR[Advanced Reasoning<br/>Inference & Analogy]
+    M2 --> CSI[Cross-Session Integration<br/>Knowledge Synthesis]
 
     %% Storage Layer Abstraction
     ES --> SL[Storage Layer<br/>Database Agnostic]
@@ -1079,9 +1079,9 @@ graph TB
 
     %% Query Processing
     MS --> QP[Cognitive Query Processor]
-    QP --> L0
-    QP --> L1
-    QP --> L2
+    QP --> M0
+    QP --> M1
+    QP --> M2
     QP --> QR[Synthesized Results<br/>Multi-Layer Integration]
     QR --> MS
 ```
@@ -1093,7 +1093,7 @@ The Layer 1 processes episodic memories through semantic abstraction and knowled
 ```mermaid
 graph TD
     %% Input from Layer 0
-    L0_EPISODES[Layer 0 Episodes<br/>Contextual Conversations] --> CONTEXT_ANALYSIS[Context Analysis<br/>Episode Understanding]
+    M0_EPISODES[Layer 0 Episodes<br/>Contextual Conversations] --> CONTEXT_ANALYSIS[Context Analysis<br/>Episode Understanding]
 
     %% Semantic Abstraction Pipeline
     CONTEXT_ANALYSIS --> SEMANTIC_EXTRACT[Semantic Extraction<br/>Knowledge Abstraction Engine]
@@ -1106,7 +1106,7 @@ graph TD
 
     %% Storage and Consolidation
     CONFLICT_DETECT --> SEMANTIC_REPO[Semantic Knowledge Repository<br/>Abstract Facts Storage]
-    SEMANTIC_REPO --> L2_TRIGGER[Trigger Layer 2<br/>Relationship Modeling]
+    SEMANTIC_REPO --> M2_TRIGGER[Trigger Layer 2<br/>Relationship Modeling]
 
     %% Background Consolidation
     BG_CONSOLIDATION[Background Consolidation] --> KNOWLEDGE_REVIEW[Knowledge Review<br/>Semantic Validation]
@@ -1121,7 +1121,7 @@ The Layer 2 builds interconnected knowledge networks enabling sophisticated reas
 ```mermaid
 graph TD
     %% Input from Layer 1
-    L1_SEMANTIC[Layer 1 Semantic Knowledge<br/>Abstract Facts & Concepts] --> RELATIONSHIP_ANALYSIS[Relationship Analysis<br/>Concept Connection Discovery]
+    M1_SEMANTIC[Layer 1 Semantic Knowledge<br/>Abstract Facts & Concepts] --> RELATIONSHIP_ANALYSIS[Relationship Analysis<br/>Concept Connection Discovery]
 
     %% Relationship Modeling
     RELATIONSHIP_ANALYSIS --> CONCEPT_MAPPING[Concept Mapping<br/>Semantic Relationships]
@@ -1162,14 +1162,14 @@ graph TD
     COGNITIVE_ANALYZER --> RELATIONAL_NEED[Relational Memory Need?<br/>Reasoning & Inference]
 
     %% Layer-Specific Processing
-    EPISODIC_NEED --> L0_EPISODIC[Layer 0: Episodic Retrieval<br/>Contextual Episode Search]
-    SEMANTIC_NEED --> L1_SEMANTIC[Layer 1: Semantic Retrieval<br/>Abstract Knowledge Search]
-    RELATIONAL_NEED --> L2_RELATIONAL[Layer 2: Relational Retrieval<br/>Network-Based Reasoning]
+    EPISODIC_NEED --> M0_EPISODIC[Layer 0: Episodic Retrieval<br/>Contextual Episode Search]
+    SEMANTIC_NEED --> M1_SEMANTIC[Layer 1: Semantic Retrieval<br/>Abstract Knowledge Search]
+    RELATIONAL_NEED --> M2_RELATIONAL[Layer 2: Relational Retrieval<br/>Network-Based Reasoning]
 
     %% Cognitive Synthesis
-    L0_EPISODIC --> COGNITIVE_SYNTHESIS[Cognitive Synthesis<br/>Human-Like Integration]
-    L1_SEMANTIC --> COGNITIVE_SYNTHESIS
-    L2_RELATIONAL --> COGNITIVE_SYNTHESIS
+    M0_EPISODIC --> COGNITIVE_SYNTHESIS[Cognitive Synthesis<br/>Human-Like Integration]
+    M1_SEMANTIC --> COGNITIVE_SYNTHESIS
+    M2_RELATIONAL --> COGNITIVE_SYNTHESIS
 
     %% Result Processing
     COGNITIVE_SYNTHESIS --> CONTEXT_RECONSTRUCTION[Context Reconstruction<br/>Episodic Enhancement]
@@ -1181,11 +1181,11 @@ graph TD
 ## Implementation Roadmap
 
 ### Phase 1: Foundation (Weeks 1-4)
-**L0 Layer Enhancement**:
-- [ ] Enhance existing L0Manager with improved store coordination
+**M0 Layer Enhancement**:
+- [ ] Enhance existing M0Manager with improved store coordination
 - [ ] Implement parallel indexing across vector/keyword/graph stores
 - [ ] Add comprehensive buffer integration hooks
-- [ ] Implement unified query interface for L0 stores
+- [ ] Implement unified query interface for M0 stores
 - [ ] Add performance monitoring and metrics collection
 
 **Core Infrastructure**:
@@ -1196,7 +1196,7 @@ graph TD
 - [ ] Establish testing framework for hierarchy components
 
 ### Phase 2: Facts Layer (Weeks 5-8)
-**L1 Implementation**:
+**M1 Implementation**:
 - [ ] Implement advanced LLM service integration
 - [ ] Build conflict detection and resolution engine
 - [ ] Create temporal processing and time awareness system
@@ -1204,14 +1204,14 @@ graph TD
 - [ ] Add fact validation and confidence scoring
 
 **Integration Testing**:
-- [ ] Test L0 → L1 data flow and processing
+- [ ] Test M0 → M1 data flow and processing
 - [ ] Validate fact extraction quality and accuracy
 - [ ] Performance testing for batch processing
 - [ ] Integration testing with existing buffer system
 - [ ] End-to-end testing of fact lifecycle
 
 ### Phase 3: Knowledge Graph (Weeks 9-12)
-**L2 Implementation**:
+**M2 Implementation**:
 - [ ] Implement entity extraction and relationship mapping
 - [ ] Build session and people-centric graph organization
 - [ ] Develop DPR + PPR retrieval system
@@ -1276,17 +1276,17 @@ graph TD
 ### Metrics Collection
 ```yaml
 hierarchy_metrics:
-  l0_metrics:
+  m0_metrics:
     - chunks_processed_per_second
     - store_indexing_latency
     - query_response_time
     - cache_hit_ratio
-  l1_metrics:
+  m1_metrics:
     - facts_extracted_per_batch
     - conflict_detection_rate
     - consolidation_effectiveness
     - llm_api_usage
-  l2_metrics:
+  m2_metrics:
     - entities_extracted_per_fact
     - graph_update_latency
     - retrieval_accuracy
@@ -1316,7 +1316,7 @@ hierarchy_metrics:
 
 ## Conclusion
 
-The three-layer memory hierarchy architecture provides a sophisticated foundation for building human-like memory systems in MemFuse. By combining the immediate access of L0 raw data, the structured knowledge of L1 facts, and the relationship intelligence of L2 knowledge graphs, the system enables both efficient retrieval and advanced reasoning capabilities.
+The three-layer memory hierarchy architecture provides a sophisticated foundation for building human-like memory systems in MemFuse. By combining the immediate access of M0 raw data, the structured knowledge of M1 facts, and the relationship intelligence of M2 knowledge graphs, the system enables both efficient retrieval and advanced reasoning capabilities.
 
 The architecture is designed for:
 - **Scalability**: Handle growing data volumes and user bases

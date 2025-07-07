@@ -541,7 +541,7 @@ class FlushManager:
 
         Since we now use a unified MemoryService handler instead of separate SQLite/Qdrant handlers,
         this method only needs to call the SQLite handler (which is actually the MemoryService handler).
-        The MemoryService will handle routing to L0/L1/L2 layers and all storage operations.
+        The MemoryService will handle routing to M0/M1/M2 layers and all storage operations.
 
         Args:
             rounds: List of message rounds to flush
@@ -556,7 +556,7 @@ class FlushManager:
         success = await self._execute_sqlite_flush(rounds)
 
         if success:
-            logger.info(f"Unified MemoryService flush completed: {len(rounds)} rounds processed through L0/L1/L2 hierarchy")
+            logger.info(f"Unified MemoryService flush completed: {len(rounds)} rounds processed through M0/M1/M2 hierarchy")
         else:
             logger.error(f"Unified MemoryService flush failed for {len(rounds)} rounds")
 

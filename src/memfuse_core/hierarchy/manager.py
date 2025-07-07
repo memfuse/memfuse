@@ -12,7 +12,7 @@ from loguru import logger
 
 from .core import LayerType, LayerConfig, ProcessingResult, StorageManager
 from .storage import UnifiedStorageManager
-from .layers import L0EpisodicLayer, L1SemanticLayer, L2RelationalLayer
+from .layers import M0EpisodicLayer, M1SemanticLayer, M2RelationalLayer
 
 
 class MemoryHierarchyManager:
@@ -74,32 +74,32 @@ class MemoryHierarchyManager:
             # Initialize memory layers
             layers_config = self.config.get("layers", {})
             
-            # L0 Layer
-            if layers_config.get("l0", {}).get("enabled", True):
-                l0_config = self._create_layer_config(layers_config.get("l0", {}))
-                self.layers[LayerType.L0] = L0EpisodicLayer(
-                    LayerType.L0, l0_config, self.user_id,
+            # M0 Layer
+            if layers_config.get("m0", {}).get("enabled", True):
+                m0_config = self._create_layer_config(layers_config.get("m0", {}))
+                self.layers[LayerType.M0] = M0EpisodicLayer(
+                    LayerType.M0, m0_config, self.user_id,
                     self.storage_manager
                 )
-                await self.layers[LayerType.L0].initialize()
+                await self.layers[LayerType.M0].initialize()
 
-            # L1 Layer
-            if layers_config.get("l1", {}).get("enabled", True):
-                l1_config = self._create_layer_config(layers_config.get("l1", {}))
-                self.layers[LayerType.L1] = L1SemanticLayer(
-                    LayerType.L1, l1_config, self.user_id,
+            # M1 Layer
+            if layers_config.get("m1", {}).get("enabled", True):
+                m1_config = self._create_layer_config(layers_config.get("m1", {}))
+                self.layers[LayerType.M1] = M1SemanticLayer(
+                    LayerType.M1, m1_config, self.user_id,
                     self.storage_manager
                 )
-                await self.layers[LayerType.L1].initialize()
+                await self.layers[LayerType.M1].initialize()
 
-            # L2 Layer
-            if layers_config.get("l2", {}).get("enabled", True):
-                l2_config = self._create_layer_config(layers_config.get("l2", {}))
-                self.layers[LayerType.L2] = L2RelationalLayer(
-                    LayerType.L2, l2_config, self.user_id,
+            # M2 Layer
+            if layers_config.get("m2", {}).get("enabled", True):
+                m2_config = self._create_layer_config(layers_config.get("m2", {}))
+                self.layers[LayerType.M2] = M2RelationalLayer(
+                    LayerType.M2, m2_config, self.user_id,
                     self.storage_manager
                 )
-                await self.layers[LayerType.L2].initialize()
+                await self.layers[LayerType.M2].initialize()
             
             self.initialized = True
             logger.info(f"MemoryHierarchyManager: Initialized {len(self.layers)} layers successfully")
@@ -112,42 +112,42 @@ class MemoryHierarchyManager:
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
         """
         Process data through the memory hierarchy.
-        
-        Data flows: Input -> L0 -> (event) -> L1 -> (event) -> L2
-        
+
+        Data flows: Input -> M0 -> (event) -> M1 -> (event) -> M2
+
         Args:
             data: Data to process
             metadata: Optional metadata
-            
+
         Returns:
-            ProcessingResult from L0 layer (downstream processing is async)
+            ProcessingResult from M0 layer (downstream processing is async)
         """
         try:
             if not self.initialized:
                 await self.initialize()
             
-            # Process through L0 layer (entry point)
-            l0_layer = self.layers.get(LayerType.L0)
-            if not l0_layer:
-                raise ValueError("L0 layer not available")
-            
-            result = await l0_layer.process_data(data, metadata)
+            # Process through M0 layer (entry point)
+            m0_layer = self.layers.get(LayerType.M0)
+            if not m0_layer:
+                raise ValueError("M0 layer not available")
+
+            result = await m0_layer.process_data(data, metadata)
             
             # Update statistics
             self.total_operations += 1
             if not result.success:
                 self.total_errors += 1
             
-            logger.debug(f"MemoryHierarchyManager: Processed data through L0, success={result.success}")
+            logger.debug(f"MemoryHierarchyManager: Processed data through M0, success={result.success}")
             return result
-            
+
         except Exception as e:
             self.total_errors += 1
             logger.error(f"MemoryHierarchyManager: Data processing failed: {e}")
-            
+
             return ProcessingResult(
                 success=False,
-                layer_type=LayerType.L0,
+                layer_type=LayerType.M0,
                 errors=[str(e)]
             )
     

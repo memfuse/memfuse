@@ -2,7 +2,7 @@
 Unified Memory Layer Implementation for MemFuse.
 
 This implementation provides the concrete implementation of UnifiedMemoryLayer,
-coordinating parallel processing across L0/L1/L2 memory layers.
+coordinating parallel processing across M0/M1/M2 memory layers.
 """
 
 import asyncio
@@ -27,7 +27,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
     """
     Concrete implementation of UnifiedMemoryLayer.
     
-    This class coordinates parallel processing across L0/L1/L2 memory layers,
+    This class coordinates parallel processing across M0/M1/M2 memory layers,
     providing a unified interface for MemoryService while handling all the
     complexity of parallel processing internally.
     """
@@ -49,9 +49,9 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
         # State tracking
         self.initialized = False
         self.layer_status = {
-            "L0": LayerStatus.INACTIVE,
-            "L1": LayerStatus.INACTIVE,
-            "L2": LayerStatus.INACTIVE
+            "M0": LayerStatus.INACTIVE,
+            "M1": LayerStatus.INACTIVE,
+            "M2": LayerStatus.INACTIVE
         }
         
         # Statistics
@@ -75,9 +75,9 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
             if config:
                 memory_service_config = config.get("memory_service", {})
                 self.config = UnifiedMemoryLayerConfig(
-                    l0_enabled=config.get("l0_enabled", True),
-                    l1_enabled=config.get("l1_enabled", True),
-                    l2_enabled=config.get("l2_enabled", True),
+                    m0_enabled=config.get("m0_enabled", True),
+                    m1_enabled=config.get("m1_enabled", True),
+                    m2_enabled=config.get("m2_enabled", True),
                     parallel_strategy=memory_service_config.get("parallel_strategy", "parallel"),
                     enable_fallback=memory_service_config.get("enable_fallback", True),
                     timeout_per_layer=memory_service_config.get("timeout_per_layer", 30.0),
@@ -99,9 +99,9 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
 
             hierarchy_config = {
                 "layers": {
-                    "l0": {"enabled": self.config.l0_enabled},
-                    "l1": {"enabled": self.config.l1_enabled},
-                    "l2": {"enabled": self.config.l2_enabled}
+                    "m0": {"enabled": self.config.m0_enabled},
+                    "m1": {"enabled": self.config.m1_enabled},
+                    "m2": {"enabled": self.config.m2_enabled}
                 },
                 "storage": storage_config
             }
@@ -127,9 +127,9 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
                 return False
             
             # Update layer status based on configuration
-            self.layer_status["L0"] = LayerStatus.ACTIVE if self.config.l0_enabled else LayerStatus.INACTIVE
-            self.layer_status["L1"] = LayerStatus.ACTIVE if self.config.l1_enabled else LayerStatus.INACTIVE
-            self.layer_status["L2"] = LayerStatus.ACTIVE if self.config.l2_enabled else LayerStatus.INACTIVE
+            self.layer_status["M0"] = LayerStatus.ACTIVE if self.config.m0_enabled else LayerStatus.INACTIVE
+            self.layer_status["M1"] = LayerStatus.ACTIVE if self.config.m1_enabled else LayerStatus.INACTIVE
+            self.layer_status["M2"] = LayerStatus.ACTIVE if self.config.m2_enabled else LayerStatus.INACTIVE
             
             self.initialized = True
             logger.info("UnifiedMemoryLayerImpl: Initialization successful")
@@ -286,7 +286,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
             # This is a placeholder - the actual implementation would need
             # to be enhanced to support unified querying across layers
             
-            # TODO: Implement unified querying across L0/L1/L2 layers
+            # TODO: Implement unified querying across M0/M1/M2 layers
             # This would involve:
             # 1. Querying each active layer in parallel
             # 2. Aggregating results
@@ -295,7 +295,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
             
             return UnifiedResult(
                 results=[],
-                layer_sources={"L0": [], "L1": [], "L2": []},
+                layer_sources={"M0": [], "M1": [], "M2": []},
                 total_count=0,
                 metadata={
                     "query": query,
@@ -309,7 +309,7 @@ class UnifiedMemoryLayerImpl(UnifiedMemoryLayer):
             
             return UnifiedResult(
                 results=[],
-                layer_sources={"L0": [], "L1": [], "L2": []},
+                layer_sources={"M0": [], "M1": [], "M2": []},
                 total_count=0,
                 metadata={"error": str(e)}
             )

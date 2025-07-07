@@ -147,9 +147,9 @@ class SQLiteDB(DBBase):
         )
         ''')
 
-        # Create L0 messages table for memory hierarchy storage
+        # Create M0 messages table for memory hierarchy storage
         self.execute('''
-        CREATE TABLE IF NOT EXISTS l0_messages (
+        CREATE TABLE IF NOT EXISTS m0_messages (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             metadata TEXT,
@@ -158,9 +158,9 @@ class SQLiteDB(DBBase):
         )
         ''')
 
-        # Create L1 facts table for memory hierarchy storage
+        # Create M1 facts table for memory hierarchy storage
         self.execute('''
-        CREATE TABLE IF NOT EXISTS l1_facts (
+        CREATE TABLE IF NOT EXISTS m1_facts (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             metadata TEXT,
@@ -169,9 +169,9 @@ class SQLiteDB(DBBase):
         )
         ''')
 
-        # Create L2 relations table for memory hierarchy storage
+        # Create M2 relations table for memory hierarchy storage
         self.execute('''
-        CREATE TABLE IF NOT EXISTS l2_relations (
+        CREATE TABLE IF NOT EXISTS m2_relations (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             metadata TEXT,

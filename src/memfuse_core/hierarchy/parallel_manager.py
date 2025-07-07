@@ -1,7 +1,7 @@
 """
 Parallel Memory Layer Manager for MemFuse.
 
-This module implements a unified interface for parallel writing to L0/L1/L2 layers,
+This module implements a unified interface for parallel writing to M0/M1/M2 layers,
 providing improved performance through concurrent processing while maintaining
 data consistency and error handling.
 """
@@ -26,7 +26,7 @@ class ParallelMemoryLayerManager:
     """
     Unified manager for parallel memory layer operations.
     
-    This manager coordinates writes across L0/L1/L2 layers with different
+    This manager coordinates writes across M0/M1/M2 layers with different
     strategies to optimize performance while maintaining consistency.
     """
     
@@ -109,7 +109,14 @@ class ParallelMemoryLayerManager:
         """
         start_time = time.time()
         strategy = strategy or self.default_strategy
-        
+
+        # Ensure strategy is a WriteStrategy enum
+        if isinstance(strategy, str):
+            try:
+                strategy = WriteStrategy(strategy)
+            except ValueError:
+                raise ValueError(f"Invalid write strategy: {strategy}")
+
         try:
             self.total_operations += 1
             logger.info(f"ParallelMemoryLayerManager: Writing data using {strategy.value} strategy")
@@ -252,7 +259,7 @@ class ParallelMemoryLayerManager:
         data: Any,
         metadata: Optional[Dict[str, Any]] = None
     ) -> ParallelWriteResult:
-        """Write to layers sequentially (L0 -> L1 -> L2)."""
+        """Write to layers sequentially (M0 -> M1 -> M2)."""
         logger.debug("ParallelMemoryLayerManager: Executing sequential write strategy")
         
         if not self.hierarchy_manager:
@@ -267,8 +274,8 @@ class ParallelMemoryLayerManager:
         layer_results = {}
         overall_success = True
         
-        # Process layers in order: L0, L1, L2
-        for layer_type in [LayerType.L0, LayerType.L1, LayerType.L2]:
+        # Process layers in order: M0, M1, M2
+        for layer_type in [LayerType.M0, LayerType.M1, LayerType.M2]:
             layer = self.hierarchy_manager.layers.get(layer_type)
             if layer and layer.initialized:
                 try:
@@ -305,7 +312,7 @@ class ParallelMemoryLayerManager:
         data: Any,
         metadata: Optional[Dict[str, Any]] = None
     ) -> ParallelWriteResult:
-        """Write L0 first, then L1/L2 in parallel."""
+        """Write M0 first, then M1/M2 in parallel."""
         logger.debug("ParallelMemoryLayerManager: Executing hybrid write strategy")
         
         if not self.hierarchy_manager:
@@ -320,20 +327,20 @@ class ParallelMemoryLayerManager:
         layer_results = {}
         overall_success = True
         
-        # Step 1: Write to L0 first
-        l0_layer = self.hierarchy_manager.layers.get(LayerType.L0)
-        if l0_layer and l0_layer.initialized:
+        # Step 1: Write to M0 first
+        m0_layer = self.hierarchy_manager.layers.get(LayerType.M0)
+        if m0_layer and m0_layer.initialized:
             try:
-                l0_result = await self._write_to_layer(LayerType.L0, l0_layer, data, metadata)
-                layer_results[LayerType.L0] = l0_result
-                
-                if not l0_result.success:
+                m0_result = await self._write_to_layer(LayerType.M0, m0_layer, data, metadata)
+                layer_results[LayerType.M0] = m0_result
+
+                if not m0_result.success:
                     overall_success = False
-                    logger.warning("ParallelMemoryLayerManager: L0 write failed in hybrid strategy")
+                    logger.warning("ParallelMemoryLayerManager: M0 write failed in hybrid strategy")
                 
             except Exception as e:
-                logger.error(f"ParallelMemoryLayerManager: L0 write failed: {e}")
-                layer_results[LayerType.L0] = LayerWriteResult(
+                logger.error(f"ParallelMemoryLayerManager: M0 write failed: {e}")
+                layer_results[LayerType.M0] = LayerWriteResult(
                     success=False,
                     result=None,
                     processed_items=[],
@@ -343,25 +350,25 @@ class ParallelMemoryLayerManager:
                 )
                 overall_success = False
         
-        # Step 2: Write to L1 and L2 in parallel
-        l1_l2_tasks = []
-        l1_l2_types = []
-        
-        for layer_type in [LayerType.L1, LayerType.L2]:
+        # Step 2: Write to M1 and M2 in parallel
+        m1_m2_tasks = []
+        m1_m2_types = []
+
+        for layer_type in [LayerType.M1, LayerType.M2]:
             layer = self.hierarchy_manager.layers.get(layer_type)
             if layer and layer.initialized:
                 task = asyncio.create_task(
                     self._write_to_layer(layer_type, layer, data, metadata)
                 )
-                l1_l2_tasks.append(task)
-                l1_l2_types.append(layer_type)
-        
-        if l1_l2_tasks:
+                m1_m2_tasks.append(task)
+                m1_m2_types.append(layer_type)
+
+        if m1_m2_tasks:
             try:
-                l1_l2_results = await asyncio.gather(*l1_l2_tasks, return_exceptions=True)
-                
-                for i, result in enumerate(l1_l2_results):
-                    layer_type = l1_l2_types[i]
+                m1_m2_results = await asyncio.gather(*m1_m2_tasks, return_exceptions=True)
+
+                for i, result in enumerate(m1_m2_results):
+                    layer_type = m1_m2_types[i]
                     
                     if isinstance(result, Exception):
                         logger.error(f"ParallelMemoryLayerManager: Layer {layer_type.value} failed: {result}")
@@ -380,7 +387,7 @@ class ParallelMemoryLayerManager:
                             overall_success = False
                 
             except Exception as e:
-                logger.error(f"ParallelMemoryLayerManager: L1/L2 parallel write failed: {e}")
+                logger.error(f"ParallelMemoryLayerManager: M1/M2 parallel write failed: {e}")
                 overall_success = False
         
         return ParallelWriteResult(

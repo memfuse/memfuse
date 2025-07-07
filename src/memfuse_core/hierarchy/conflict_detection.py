@@ -1,5 +1,5 @@
 """
-Conflict Detection Engine for MemFuse L1 Layer.
+Conflict Detection Engine for MemFuse M1 Layer.
 
 This module provides sophisticated conflict detection and resolution
 capabilities for facts in the semantic memory layer.
@@ -54,7 +54,7 @@ class ConflictDetectionResult:
 
 class ConflictDetectionEngine:
     """
-    Advanced conflict detection engine for L1 semantic memory.
+    Advanced conflict detection engine for M1 semantic memory.
     
     Detects and analyzes conflicts between new facts and existing facts
     using LLM-based semantic analysis and rule-based detection.

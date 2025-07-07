@@ -2,7 +2,7 @@
 Unified Memory Layer Interface for MemFuse.
 
 This interface provides a unified abstraction for all memory operations,
-decoupling MemoryService from specific memory layer implementations (L0/L1/L2).
+decoupling MemoryService from specific memory layer implementations (M0/M1/M2).
 The unified layer handles parallel processing across all memory layers internally.
 """
 
@@ -57,7 +57,7 @@ class UnifiedResult:
         metadata: Optional[Dict[str, Any]] = None
     ):
         self.results = results
-        self.layer_sources = layer_sources  # Results grouped by layer (L0, L1, L2)
+        self.layer_sources = layer_sources  # Results grouped by layer (M0, M1, M2)
         self.total_count = total_count
         self.metadata = metadata or {}
         
@@ -76,11 +76,11 @@ class UnifiedMemoryLayer(ABC):
     Unified Memory Layer Interface.
     
     This interface provides a single point of interaction for all memory operations,
-    abstracting away the complexity of L0/L1/L2 parallel processing from MemoryService.
-    
+    abstracting away the complexity of M0/M1/M2 parallel processing from MemoryService.
+
     Key Design Principles:
     1. Complete decoupling from MemoryService
-    2. Parallel processing of L0/L1/L2 layers
+    2. Parallel processing of M0/M1/M2 layers
     3. Unified result aggregation
     4. Configuration-driven layer activation
     5. Graceful error handling and fallback
@@ -110,9 +110,9 @@ class UnifiedMemoryLayer(ABC):
         Write data to all active memory layers in parallel.
         
         This method handles:
-        - L0: Immediate episodic storage (vector/keyword/graph)
-        - L1: Semantic fact extraction and storage (parallel, not triggered)
-        - L2: Relational knowledge graph construction (parallel, not triggered)
+        - M0: Immediate episodic storage (vector/keyword/graph)
+        - M1: Semantic fact extraction and storage (parallel, not triggered)
+        - M2: Relational knowledge graph construction (parallel, not triggered)
         
         Args:
             message_batch_list: Batch of message lists to process
@@ -141,7 +141,7 @@ class UnifiedMemoryLayer(ABC):
         Query all active memory layers and return unified results.
         
         This method:
-        1. Queries L0, L1, L2 layers in parallel
+        1. Queries M0, M1, M2 layers in parallel
         2. Aggregates and ranks results
         3. Applies reranking if enabled
         4. Returns unified result set
@@ -168,7 +168,7 @@ class UnifiedMemoryLayer(ABC):
         Get the current status of all memory layers.
         
         Returns:
-            Dictionary mapping layer names (L0, L1, L2) to their status
+            Dictionary mapping layer names (M0, M1, M2) to their status
         """
         pass
     
@@ -208,9 +208,9 @@ class UnifiedMemoryLayerConfig:
     
     def __init__(
         self,
-        l0_enabled: bool = True,
-        l1_enabled: bool = True,
-        l2_enabled: bool = True,
+        m0_enabled: bool = True,
+        m1_enabled: bool = True,
+        m2_enabled: bool = True,
         parallel_strategy: str = "parallel",
         fallback_strategy: str = "sequential",
         enable_fallback: bool = True,
@@ -219,9 +219,9 @@ class UnifiedMemoryLayerConfig:
         max_retries: int = 3,
         enable_monitoring: bool = True
     ):
-        self.l0_enabled = l0_enabled
-        self.l1_enabled = l1_enabled
-        self.l2_enabled = l2_enabled
+        self.m0_enabled = m0_enabled
+        self.m1_enabled = m1_enabled
+        self.m2_enabled = m2_enabled
         self.parallel_strategy = parallel_strategy
         self.fallback_strategy = fallback_strategy
         self.enable_fallback = enable_fallback
@@ -233,9 +233,9 @@ class UnifiedMemoryLayerConfig:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format."""
         return {
-            "l0_enabled": self.l0_enabled,
-            "l1_enabled": self.l1_enabled,
-            "l2_enabled": self.l2_enabled,
+            "m0_enabled": self.m0_enabled,
+            "m1_enabled": self.m1_enabled,
+            "m2_enabled": self.m2_enabled,
             "parallel_strategy": self.parallel_strategy,
             "fallback_strategy": self.fallback_strategy,
             "enable_fallback": self.enable_fallback,

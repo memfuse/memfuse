@@ -2,7 +2,7 @@
 Unit tests for MemoryService with Unified Memory Layer integration.
 
 Tests the integration between MemoryService and UnifiedMemoryLayer,
-ensuring proper L0/L1/L2 parallel processing functionality.
+ensuring proper M0/M1/M2 parallel processing functionality.
 """
 
 import pytest
@@ -27,9 +27,9 @@ class TestMemoryServiceUnifiedLayer:
                 "memory_service": {
                     "parallel_enabled": True
                 },
-                "l0_enabled": True,
-                "l1_enabled": True,
-                "l2_enabled": True
+                "m0_enabled": True,
+                "m1_enabled": True,
+                "m2_enabled": True
             },
             "store": {
                 "multi_path": {
@@ -157,7 +157,7 @@ class TestMemoryServiceUnifiedLayer:
             mock_write_result = WriteResult(
                 success=True,
                 message="Successfully processed through unified layer",
-                layer_results={"L0": {"processed_count": 3}, "L1": {"processed_count": 3}, "L2": {"processed_count": 3}},
+                layer_results={"M0": {"processed_count": 3}, "M1": {"processed_count": 3}, "M2": {"processed_count": 3}},
                 metadata={"processing_method": "unified_parallel"}
             )
             mock_unified_layer.write_parallel = AsyncMock(return_value=mock_write_result)
@@ -229,8 +229,8 @@ class TestMemoryServiceUnifiedLayer:
             mock_unified_layer = Mock()
             mock_write_result = WriteResult(
                 success=False,
-                message="Processing failed due to L1 layer error",
-                layer_results={"L0": {"processed_count": 3}, "L1": {"error": "Connection timeout"}},
+                message="Processing failed due to M1 layer error",
+                layer_results={"M0": {"processed_count": 3}, "M1": {"error": "Connection timeout"}},
                 metadata={}
             )
             mock_unified_layer.write_parallel = AsyncMock(return_value=mock_write_result)
@@ -245,7 +245,7 @@ class TestMemoryServiceUnifiedLayer:
             
             # Verify error handling
             assert result["status"] == "error"
-            assert "Processing failed due to L1 layer error" in result["message"]
+            assert "Processing failed due to M1 layer error" in result["message"]
 
 
 if __name__ == "__main__":

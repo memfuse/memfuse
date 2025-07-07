@@ -486,8 +486,8 @@ class HybridBuffer:
         """
         if success:
             logger.debug("HybridBuffer: Flush completed successfully")
-            # Note: L1 triggering is now handled by ParallelMemoryAdapter in the new architecture
-            # No need to trigger L1 here as it processes data in parallel with L0
+            # Note: M1 triggering is now handled by ParallelMemoryAdapter in the new architecture
+            # No need to trigger M1 here as it processes data in parallel with M0
         else:
             logger.error(f"HybridBuffer: Flush failed: {error_message}")
 

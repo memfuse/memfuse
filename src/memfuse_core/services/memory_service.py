@@ -115,7 +115,7 @@ class MemoryService(MessageInterface):
         # Initialize chunk strategy (will be configured in initialize method)
         self.chunk_strategy = MessageChunkStrategy()
 
-        # Initialize Unified Memory Layer for L0/L1/L2 parallel processing
+        # Initialize Unified Memory Layer for M0/M1/M2 parallel processing
         self.unified_memory_layer: Optional[UnifiedMemoryLayer] = None
         self.use_unified_layer = self._should_use_unified_layer()
 
@@ -292,7 +292,7 @@ class MemoryService(MessageInterface):
 
         return self
     async def _initialize_unified_memory_layer(self):
-        """Initialize the unified memory layer for L0/L1/L2 parallel processing."""
+        """Initialize the unified memory layer for M0/M1/M2 parallel processing."""
         try:
             logger.info("MemoryService: Initializing Unified Memory Layer...")
 
@@ -365,7 +365,7 @@ class MemoryService(MessageInterface):
 
 
     async def _process_with_unified_layer(self, message_batch_list: MessageBatchList, **kwargs) -> Dict[str, Any]:
-        """Process message batch using Unified Memory Layer (L0/L1/L2 parallel processing)."""
+        """Process message batch using Unified Memory Layer (M0/M1/M2 parallel processing)."""
         try:
             if not self.unified_memory_layer:
                 logger.error("MemoryService: Unified Memory Layer not initialized")
@@ -381,7 +381,7 @@ class MemoryService(MessageInterface):
             )
             logger.info(f"MemoryService._process_with_unified_layer: Stored {len(message_ids)} messages")
 
-            # Process through Unified Memory Layer (L0/L1/L2 parallel processing)
+            # Process through Unified Memory Layer (M0/M1/M2 parallel processing)
             metadata = {
                 "session_id": session_id,
                 "round_id": round_id,
@@ -410,7 +410,7 @@ class MemoryService(MessageInterface):
 
                 return self._success_response(
                     message_ids,
-                    f"Processed {len(message_batch_list)} message lists through L0/L1/L2 parallel processing",
+                    f"Processed {len(message_batch_list)} message lists through M0/M1/M2 parallel processing",
                     chunk_count=total_processed,
                     layer_results=layer_results,
                     processing_method="unified_parallel"
@@ -537,10 +537,10 @@ class MemoryService(MessageInterface):
 
             # Choose processing method based on configuration
             if self.use_unified_layer and self.unified_memory_layer:
-                logger.info("MemoryService.add_batch: Using Unified Memory Layer (L0/L1/L2 parallel processing)")
+                logger.info("MemoryService.add_batch: Using Unified Memory Layer (M0/M1/M2 parallel processing)")
                 return await self._process_with_unified_layer(message_batch_list, **kwargs)
             else:
-                logger.info("MemoryService.add_batch: Using traditional method (L0-only processing)")
+                logger.info("MemoryService.add_batch: Using traditional method (M0-only processing)")
                 return await self._process_with_traditional_method(message_batch_list, **kwargs)
 
         except Exception as e:

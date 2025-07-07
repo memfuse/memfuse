@@ -12,8 +12,8 @@ from typing import Optional
 class WriteStrategy(Enum):
     """Strategy for writing data to memory layers."""
     PARALLEL = "parallel"      # Write to all layers simultaneously
-    SEQUENTIAL = "sequential"  # Write to layers in order (L0 -> L1 -> L2)
-    HYBRID = "hybrid"         # Write to L0 first, then L1 and L2 in parallel
+    SEQUENTIAL = "sequential"  # Write to layers in order (M0 -> M1 -> M2)
+    HYBRID = "hybrid"         # Write to M0 first, then M1 and M2 in parallel
 
 
 @dataclass

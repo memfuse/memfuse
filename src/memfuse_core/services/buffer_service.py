@@ -145,18 +145,18 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         """Create unified MemoryService handler for FlushManager.
 
         This handler delegates all storage operations to MemoryService, which then
-        routes data through the UnifiedMemoryLayer to trigger parallel L0/L1/L2 processing.
+        routes data through the UnifiedMemoryLayer to trigger parallel M0/M1/M2 processing.
         This maintains proper architectural separation and enables the full memory hierarchy.
 
         Key responsibilities:
         - Route all buffer data through MemoryService.add_batch()
-        - Trigger parallel L0/L1/L2 processing via UnifiedMemoryLayer
+        - Trigger parallel M0/M1/M2 processing via UnifiedMemoryLayer
         - Maintain architectural separation between buffer and storage layers
         - Handle errors gracefully with proper logging and exception propagation
         - Support batch operations for efficient processing
 
         Architecture flow:
-        BufferService → MemoryService.add_batch() → UnifiedMemoryLayer → L0/L1/L2 parallel processing
+        BufferService → MemoryService.add_batch() → UnifiedMemoryLayer → M0/M1/M2 parallel processing
 
         Returns:
             Async callable that handles unified memory service operations
@@ -176,7 +176,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     logger.info(f"BufferService: Processing {len(rounds)} rounds through MemoryService")
                     result = await self.memory_service.add_batch(rounds)
                     if result.get("status") == "success":
-                        logger.info(f"BufferService: MemoryService processing successful - parallel L0/L1/L2 triggered")
+                        logger.info(f"BufferService: MemoryService processing successful - parallel M0/M1/M2 triggered")
                     else:
                         logger.error(f"BufferService: MemoryService processing failed: {result.get('message')}")
                         raise Exception(f"MemoryService processing failed: {result.get('message')}")

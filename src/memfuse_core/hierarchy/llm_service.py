@@ -1,8 +1,8 @@
 """
-Advanced LLM Service for MemFuse L1 Layer.
+Advanced LLM Service for MemFuse M1 Layer.
 
 This module provides sophisticated LLM-based services for fact extraction,
-validation, and processing in the L1 semantic memory layer.
+validation, and processing in the M1 semantic memory layer.
 """
 
 import asyncio
@@ -38,7 +38,7 @@ class ValidationResult:
 
 class AdvancedLLMService:
     """
-    Advanced LLM service for L1 semantic memory operations.
+    Advanced LLM service for M1 semantic memory operations.
     
     Provides sophisticated fact extraction, validation, and conflict resolution
     using LLM capabilities with structured prompts and response parsing.
