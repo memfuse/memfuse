@@ -1,0 +1,32 @@
+# @package database
+# Database configuration for MemFuse
+
+# Database type: sqlite or postgres
+type: "postgres"
+
+# PostgreSQL configuration
+postgres:
+  host: ${oc.env:POSTGRES_HOST,localhost}
+  port: ${oc.env:POSTGRES_PORT,5432}
+  database: ${oc.env:POSTGRES_DB,memfuse}
+  user: ${oc.env:POSTGRES_USER,postgres}
+  password: ${oc.env:POSTGRES_PASSWORD,postgres}
+  pool_size: 10
+  max_overflow: 20
+  
+# SQLite configuration (fallback)
+sqlite:
+  path: "data/memfuse.db"
+
+# pgai specific configuration
+pgai:
+  enabled: true
+  vectorizer_worker_enabled: true
+  auto_embedding: true
+  embedding_model: "text-embedding-3-small"
+  embedding_dimensions: 1536
+  chunk_size: 1000
+  chunk_overlap: 200
+  batch_size: 100
+  max_retries: 3
+  retry_delay: 5.0

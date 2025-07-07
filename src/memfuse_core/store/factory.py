@@ -215,6 +215,23 @@ class StoreFactory:
                 cache_size=cache_size,
                 **kwargs
             )
+        elif backend == StoreBackend.PGAI:
+            from .pgai_store import PgaiStore
+            # For pgai, we create a wrapper that implements VectorStore interface
+            from .pgai_vector_wrapper import PgaiVectorWrapper
+
+            pgai_store = PgaiStore(
+                table_name=kwargs.get('table_name', 'm0_messages')
+            )
+            await pgai_store.initialize()
+
+            # Wrap pgai store to implement VectorStore interface
+            store = PgaiVectorWrapper(
+                pgai_store=pgai_store,
+                encoder=encoder,
+                cache_size=cache_size
+            )
+            await store.initialize()
         else:
             raise ValueError(f"Unknown store backend: {backend}")
 

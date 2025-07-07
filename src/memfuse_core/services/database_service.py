@@ -35,12 +35,14 @@ class DatabaseService:
             
             # Create appropriate backend based on configuration
             if db_type == "postgres":
-                # PostgreSQL backend
-                host = db_config.get("host", "localhost")
-                port = db_config.get("port", 5432)
-                database = db_config.get("database", "memfuse")
-                user = db_config.get("user", "postgres")
-                password = db_config.get("password", "")
+                # PostgreSQL backend - check environment variables first
+                import os
+                postgres_config = db_config.get("postgres", {})
+                host = os.getenv("POSTGRES_HOST", postgres_config.get("host", "localhost"))
+                port = int(os.getenv("POSTGRES_PORT", postgres_config.get("port", 5432)))
+                database = os.getenv("POSTGRES_DB", postgres_config.get("database", "memfuse"))
+                user = os.getenv("POSTGRES_USER", postgres_config.get("user", "postgres"))
+                password = os.getenv("POSTGRES_PASSWORD", postgres_config.get("password", ""))
                 
                 try:
                     backend = PostgresDB(host, port, database, user, password)

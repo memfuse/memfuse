@@ -1,0 +1,92 @@
+name: memfuse-local
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg17
+    environment:
+      POSTGRES_DB: memfuse_local
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local_dev
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_local_data:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d memfuse_local"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb"]
+
+  # Lightweight MemFuse service for quick local development
+  memfuse-local:
+    build:
+      context: ../..
+      dockerfile: docker/app/Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=memfuse_local
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=local_dev
+      - LOG_LEVEL=DEBUG
+      - PYTHONUNBUFFERED=1
+      - RELOAD=true
+    volumes:
+      - ../../src:/app/src:ro
+      - ../../config:/app/config:ro
+      - ../../examples:/app/examples:ro
+      - local_data:/app/data
+      - local_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Optional: pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@memfuse.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    profiles:
+      - admin
+
+  # Optional: Redis for local caching experiments
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_local_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - cache
+
+volumes:
+  postgres_local_data:
+  local_data:
+  local_logs:
+  pgadmin_data:
+  redis_local_data:
+
+networks:
+  default:
+    name: memfuse-local-network

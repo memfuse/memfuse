@@ -86,9 +86,9 @@ storage:
     connection_pool_size: 5
     timeout: 30.0
     batch_size: 100
-    store_type: "qdrant"
+    store_type: "pgai"
     enable_transactions: true
-    backend: "sqlite"
+    backend: "pgai"
 
   keyword:
     connection_pool_size: 3

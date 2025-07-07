@@ -2,13 +2,21 @@
 # Store configuration aligned with actual implementation
 
 # Default store configuration
-backend: "qdrant"
+backend: "pgai"
 buffer_size: 10
 cache_size: 100
 
 # Query defaults (as specified in memories - 2x top_k for first stage, exact top_k for second stage)
 top_k: 5
 similarity_threshold: 0.3
+
+# pgai-specific settings
+pgai:
+  table_name: "m0_messages"
+  embedding_view: "m0_messages_embedding"
+  vectorizer_name: "m0_messages_vectorizer"
+  auto_initialize: true
+  connection_pool_size: 10
 
 # Multi-path retrieval configuration
 multi_path:

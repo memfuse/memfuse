@@ -1,0 +1,48 @@
+name: memfuse-dev
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg17
+    environment:
+      POSTGRES_DB: memfuse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d memfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb"]
+
+  memfuse:
+    build:
+      context: ../..
+      dockerfile: docker/app/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=memfuse
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ../../src:/app/src
+      - ../../config:/app/config
+      - ../../data:/app/data
+      - ../../logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:

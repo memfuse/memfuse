@@ -1,10 +1,13 @@
-# MemFuse Test Makefile
+# MemFuse Makefile
 
 .PHONY: help test test-unit test-integration test-e2e test-chunking test-quick test-coverage clean
+.PHONY: docker-build docker-dev docker-prod docker-test docker-local docker-clean docker-health
 
 # Default target
 help:
-	@echo "MemFuse Test Commands:"
+	@echo "MemFuse Commands:"
+	@echo ""
+	@echo "Testing:"
 	@echo "  make test           - Run all tests"
 	@echo "  make test-unit      - Run unit tests only"
 	@echo "  make test-integration - Run integration tests only"
@@ -13,6 +16,15 @@ help:
 	@echo "  make test-quick     - Run quick tests (unit, no slow)"
 	@echo "  make test-coverage  - Run tests with coverage report"
 	@echo "  make clean          - Clean test artifacts"
+	@echo ""
+	@echo "Docker:"
+	@echo "  make docker-build   - Build Docker image"
+	@echo "  make docker-dev     - Start development environment"
+	@echo "  make docker-prod    - Start production environment"
+	@echo "  make docker-test    - Start test environment"
+	@echo "  make docker-local   - Start local development environment"
+	@echo "  make docker-clean   - Clean Docker resources"
+	@echo "  make docker-health  - Check service health"
 
 # Run all tests
 test:
@@ -71,6 +83,47 @@ lint-tests:
 	@echo "🔍 Linting test files..."
 	python -m flake8 tests/ --max-line-length=120
 	python -m black tests/ --check
+
+# Docker Commands
+
+# Build Docker image
+docker-build:
+	@echo "🐳 Building Docker image..."
+	./docker/scripts/build.sh
+
+# Start development environment
+docker-dev:
+	@echo "🐳 Starting development environment..."
+	./docker/scripts/deploy.sh -e dev -a up -d
+
+# Start production environment
+docker-prod:
+	@echo "🐳 Starting production environment..."
+	./docker/scripts/deploy.sh -e prod -a up -d
+
+# Start test environment
+docker-test:
+	@echo "🐳 Starting test environment..."
+	./docker/scripts/deploy.sh -e test -a up -d
+
+# Start local development environment
+docker-local:
+	@echo "🐳 Starting local development environment..."
+	./docker/scripts/deploy.sh -e local -a up -d
+
+# Clean Docker resources
+docker-clean:
+	@echo "🐳 Cleaning Docker resources..."
+	./docker/scripts/deploy.sh -e dev -a down
+	./docker/scripts/deploy.sh -e prod -a down
+	./docker/scripts/deploy.sh -e test -a down
+	./docker/scripts/deploy.sh -e local -a down
+	docker system prune -f
+
+# Check service health
+docker-health:
+	@echo "🏥 Checking service health..."
+	./docker/scripts/health-check.sh -v
 
 # Format tests
 format-tests:

@@ -104,7 +104,7 @@ class StoreBackendAdapter(StorageBackend):
     def _prepare_data_for_database(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Prepare data for database insertion."""
         import uuid
-        import time
+        from datetime import datetime
 
         # Handle different data types
         if hasattr(data, 'id') and hasattr(data, 'content'):
@@ -112,8 +112,8 @@ class StoreBackendAdapter(StorageBackend):
             db_data = {
                 'id': data.id or str(uuid.uuid4()),
                 'content': data.content,
-                'created_at': time.time(),
-                'updated_at': time.time()
+                'created_at': datetime.now(),
+                'updated_at': datetime.now()
             }
 
             # Add metadata if available
@@ -128,9 +128,9 @@ class StoreBackendAdapter(StorageBackend):
             if 'id' not in db_data:
                 db_data['id'] = str(uuid.uuid4())
             if 'created_at' not in db_data:
-                db_data['created_at'] = time.time()
+                db_data['created_at'] = datetime.now()
             if 'updated_at' not in db_data:
-                db_data['updated_at'] = time.time()
+                db_data['updated_at'] = datetime.now()
             if metadata and 'metadata' not in db_data:
                 db_data['metadata'] = metadata
 
@@ -139,8 +139,8 @@ class StoreBackendAdapter(StorageBackend):
             db_data = {
                 'id': str(uuid.uuid4()),
                 'content': data,
-                'created_at': time.time(),
-                'updated_at': time.time()
+                'created_at': datetime.now(),
+                'updated_at': datetime.now()
             }
             if metadata:
                 db_data['metadata'] = metadata
@@ -149,8 +149,8 @@ class StoreBackendAdapter(StorageBackend):
             db_data = {
                 'id': str(uuid.uuid4()),
                 'content': str(data),
-                'created_at': time.time(),
-                'updated_at': time.time()
+                'created_at': datetime.now(),
+                'updated_at': datetime.now()
             }
             if metadata:
                 db_data['metadata'] = metadata
@@ -161,7 +161,7 @@ class StoreBackendAdapter(StorageBackend):
         """Get the appropriate table name for the storage type."""
         # Map storage types to table names
         table_mapping = {
-            StorageType.SQL: "l0_messages",  # Default table for SQL storage
+            StorageType.SQL: "m0_messages",  # Default table for SQL storage (M0 layer)
             StorageType.VECTOR: "vector_data",
             StorageType.KEYWORD: "keyword_data",
             StorageType.GRAPH: "graph_data"
@@ -517,17 +517,36 @@ class UnifiedStorageManager(StorageManager):
         try:
             # This would integrate with the existing StoreFactory
             from ..store.factory import StoreFactory
+            from ..models.core import StoreBackend
 
             if storage_type == StorageType.VECTOR:
+                # Pass the backend configuration from memory layer to StoreFactory
+                backend = None
+                if "backend" in config:
+                    backend = StoreBackend(config["backend"])
+
                 store = await StoreFactory.create_vector_store(
+                    backend=backend,
                     data_dir=config.get("data_dir", f"data/{self.user_id}")
                 )
             elif storage_type == StorageType.GRAPH:
+                # Pass the backend configuration from memory layer to StoreFactory
+                backend = None
+                if "backend" in config:
+                    backend = StoreBackend(config["backend"])
+
                 store = await StoreFactory.create_graph_store(
+                    backend=backend,
                     data_dir=config.get("data_dir", f"data/{self.user_id}")
                 )
             elif storage_type == StorageType.KEYWORD:
+                # Pass the backend configuration from memory layer to StoreFactory
+                backend = None
+                if "backend" in config:
+                    backend = StoreBackend(config["backend"])
+
                 store = await StoreFactory.create_keyword_store(
+                    backend=backend,
                     data_dir=config.get("data_dir", f"data/{self.user_id}")
                 )
             elif storage_type == StorageType.SQL:

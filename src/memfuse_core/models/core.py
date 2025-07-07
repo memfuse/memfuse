@@ -19,6 +19,7 @@ class StoreBackend(str, Enum):
     QDRANT = "qdrant"
     SQLITE = "sqlite"
     PGVECTOR = "pgvector"
+    PGAI = "pgai"
     IGRAPH = "igraph"
     NEO4J = "neo4j"
     HYBRID = "hybrid"

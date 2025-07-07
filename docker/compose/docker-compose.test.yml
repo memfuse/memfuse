@@ -1,0 +1,121 @@
+name: memfuse-test
+services:
+  postgres-test:
+    image: timescale/timescaledb-ha:pg17
+    environment:
+      POSTGRES_DB: memfuse_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_test_data:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d memfuse_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb", "-c", "fsync=off", "-c", "synchronous_commit=off"]
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+
+  memfuse-test:
+    build:
+      context: ../..
+      dockerfile: docker/app/Dockerfile
+    environment:
+      - POSTGRES_HOST=postgres-test
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=memfuse_test
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=test_password
+      - LOG_LEVEL=DEBUG
+      - PYTHONUNBUFFERED=1
+      - TESTING=true
+    volumes:
+      - ../../src:/app/src
+      - ../../config:/app/config
+      - ../../tests:/app/tests
+      - test_data:/app/data
+      - test_logs:/app/logs
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    command: ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]
+
+  # Test runner service for CI/CD
+  test-runner:
+    build:
+      context: ../..
+      dockerfile: docker/app/Dockerfile
+    environment:
+      - POSTGRES_HOST=postgres-test
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=memfuse_test
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=test_password
+      - PYTHONUNBUFFERED=1
+      - TESTING=true
+    volumes:
+      - ../../src:/app/src
+      - ../../config:/app/config
+      - ../../tests:/app/tests
+      - test_coverage:/app/htmlcov
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    profiles:
+      - testing
+    command: >
+      sh -c "
+        echo 'Running test suite...' &&
+        python -m pytest tests/ -v --cov=src/memfuse_core --cov-report=html --cov-report=term-missing &&
+        echo 'Tests completed successfully!'
+      "
+
+  # Integration test service
+  integration-test:
+    build:
+      context: ../..
+      dockerfile: docker/app/Dockerfile
+    environment:
+      - POSTGRES_HOST=postgres-test
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=memfuse_test
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=test_password
+      - PYTHONUNBUFFERED=1
+      - TESTING=true
+    volumes:
+      - ../../src:/app/src
+      - ../../config:/app/config
+      - ../../tests:/app/tests
+    depends_on:
+      memfuse-test:
+        condition: service_healthy
+    profiles:
+      - integration
+    command: >
+      sh -c "
+        echo 'Running integration tests...' &&
+        python -m pytest tests/integration/ -v &&
+        python -m pytest tests/e2e/ -v &&
+        echo 'Integration tests completed!'
+      "
+
+volumes:
+  postgres_test_data:
+  test_data:
+  test_logs:
+  test_coverage:
+
+networks:
+  default:
+    name: memfuse-test-network
