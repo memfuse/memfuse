@@ -8,7 +8,7 @@ debug: false
 reload: false
 
 # API configuration
-rate_limit_per_minute: 1000
+rate_limit_per_minute: 20000
 cors_origins: ["*"]
 api_key_validation: false
 api_key_header: "Authorization"
