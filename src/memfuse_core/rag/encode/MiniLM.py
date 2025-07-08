@@ -6,8 +6,15 @@ from the sentence-transformers library.
 
 from typing import List, Optional, Any, Dict
 import numpy as np
+import os
 from loguru import logger
 import asyncio
+
+# Set offline mode before importing sentence_transformers
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
+
 from sentence_transformers import SentenceTransformer
 
 from .base import EncoderBase, EncoderRegistry
@@ -63,15 +70,18 @@ class MiniLMEncoder(EncoderBase):
             # Load the model
             try:
                 logger.info(f"Loading MiniLM embedding model: {model_name}")
-                self.model = SentenceTransformer(
-                    model_name, trust_remote_code=False)
+                # Ensure correct model name format (remove sentence-transformers/ prefix if present)
+                clean_model_name = model_name.replace("sentence-transformers/", "")
+
+                self.model = SentenceTransformer(clean_model_name, trust_remote_code=False)
+                self.model_name = clean_model_name
+                logger.info(f"Successfully loaded model {clean_model_name}")
             except Exception as e:
                 logger.error(f"Error loading model {model_name}: {e}")
                 # Use hardcoded default as last resort
                 logger.warning("Using hardcoded default: all-MiniLM-L6-v2")
                 self.model_name = "all-MiniLM-L6-v2"
-                self.model = SentenceTransformer(
-                    "all-MiniLM-L6-v2", trust_remote_code=False)
+                self.model = SentenceTransformer("all-MiniLM-L6-v2", trust_remote_code=False)
 
         # Set up caching
         self.cache = Cache[str, np.ndarray](max_size=cache_size)

@@ -121,23 +121,25 @@ class PgaiStore(ChunkStoreInterface):
         self.db_url = self._build_database_url()
     
     def _build_database_url(self) -> str:
-        """Build PostgreSQL database URL from configuration."""
-        # Handle both config manager format and direct config format
+        """Build PostgreSQL database URL from configuration and environment variables."""
+        import os
+
+        # Priority order: 1. Environment variables, 2. Config, 3. Defaults
         if "postgres" in self.db_config:
             # Config manager format
             postgres_config = self.db_config.get("postgres", {})
-            host = postgres_config.get("host", "localhost")
-            port = postgres_config.get("port", 5432)
-            database = postgres_config.get("database", "memfuse")
-            user = postgres_config.get("user", "postgres")
-            password = postgres_config.get("password", "password")
+            host = os.getenv("POSTGRES_HOST", postgres_config.get("host", "localhost"))
+            port = int(os.getenv("POSTGRES_PORT", postgres_config.get("port", 5432)))
+            database = os.getenv("POSTGRES_DB", postgres_config.get("database", "memfuse"))
+            user = os.getenv("POSTGRES_USER", postgres_config.get("user", "postgres"))
+            password = os.getenv("POSTGRES_PASSWORD", postgres_config.get("password", "postgres"))
         else:
-            # Direct config format (for testing)
-            host = self.db_config.get("host", "localhost")
-            port = self.db_config.get("port", 5432)
-            database = self.db_config.get("database", "memfuse")
-            user = self.db_config.get("user", "postgres")
-            password = self.db_config.get("password", "password")
+            # Direct config format (for testing) - still check environment variables first
+            host = os.getenv("POSTGRES_HOST", self.db_config.get("host", "localhost"))
+            port = int(os.getenv("POSTGRES_PORT", self.db_config.get("port", 5432)))
+            database = os.getenv("POSTGRES_DB", self.db_config.get("database", "memfuse"))
+            user = os.getenv("POSTGRES_USER", self.db_config.get("user", "postgres"))
+            password = os.getenv("POSTGRES_PASSWORD", self.db_config.get("password", "postgres"))
 
         return f"postgresql://{user}:{password}@{host}:{port}/{database}"
     
@@ -330,16 +332,22 @@ class PgaiStore(ChunkStoreInterface):
         """Get encoder with priority for global singleton model."""
         # Priority 1: Use the encoder from PgaiVectorWrapper if available
         if hasattr(self, 'encoder') and self.encoder is not None:
+            logger.debug("Using pre-configured encoder")
             return self.encoder
 
         # Priority 2: Get encoder from ModelRegistry (global model provider)
-        from ..interfaces.model_provider import ModelRegistry
-        model_provider = ModelRegistry.get_provider()
-        if model_provider and hasattr(model_provider, 'get_encoder'):
-            encoder = model_provider.get_encoder()
-            if encoder is not None:
-                logger.debug("Using encoder from ModelRegistry")
-                return encoder
+        try:
+            from ..interfaces.model_provider import ModelRegistry
+            model_provider = ModelRegistry.get_provider()
+            if model_provider and hasattr(model_provider, 'get_encoder'):
+                encoder = model_provider.get_encoder()
+                if encoder is not None:
+                    logger.info("Using encoder from ModelRegistry (global provider)")
+                    # Cache the encoder to avoid repeated lookups
+                    self.encoder = encoder
+                    return encoder
+        except Exception as e:
+            logger.debug(f"ModelRegistry access failed: {e}")
 
         # Priority 3: Get global embedding model from ServiceFactory
         try:
@@ -349,22 +357,32 @@ class PgaiStore(ChunkStoreInterface):
             if global_embedding_model is not None:
                 logger.info("Using global singleton embedding model from ServiceFactory")
                 # Create a wrapper to make the model compatible with encoder interface
-                return GlobalEmbeddingModelWrapper(global_embedding_model)
+                wrapper = GlobalEmbeddingModelWrapper(global_embedding_model)
+                # Cache the wrapper
+                self.encoder = wrapper
+                return wrapper
         except Exception as e:
-            logger.warning(f"Failed to get global embedding model: {e}")
+            logger.debug(f"Failed to get global embedding model: {e}")
 
         # Priority 4: Create direct encoder as last resort
         try:
             logger.info("Creating direct MiniLM encoder as fallback")
             from ..rag.encode.MiniLM import MiniLMEncoder
             # Use the configured model name
-            from ..utils.config import config_manager
-            config = config_manager.get_config()
-            model_name = config.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
-            return MiniLMEncoder(model_name=model_name)
+            try:
+                from ..utils.config import config_manager
+                config = config_manager.get_config()
+                model_name = config.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
+            except:
+                model_name = "all-MiniLM-L6-v2"
+
+            encoder = MiniLMEncoder(model_name=model_name)
+            # Cache the encoder
+            self.encoder = encoder
+            return encoder
         except Exception as e:
             logger.error(f"Failed to create fallback encoder: {e}")
-            return None
+            raise RuntimeError(f"All encoder initialization methods failed. Cannot proceed without embedding capability. Last error: {e}")
 
     def _convert_embedding_to_list(self, embedding) -> List[float]:
         """Convert embedding to list format."""
