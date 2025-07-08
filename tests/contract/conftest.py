@@ -22,6 +22,8 @@ def mock_database_service():
     user_counter = 0
     mock_agents = {}
     agent_counter = 0
+    mock_sessions = {}
+    session_counter = 0
     
     def create_user(name, description=None):
         nonlocal user_counter
@@ -129,6 +131,64 @@ def mock_database_service():
             return True
         return False
     
+    def create_session(user_id, agent_id, name=None):
+        nonlocal session_counter
+        # Validate user and agent exist
+        if user_id not in mock_users:
+            raise ValueError(f"User with ID '{user_id}' not found")
+        if agent_id not in mock_agents:
+            raise ValueError(f"Agent with ID '{agent_id}' not found")
+        
+        session_counter += 1
+        session_id = f"session-{session_counter}"
+        mock_sessions[session_id] = {
+            "id": session_id,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "name": name,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        return session_id
+    
+    def get_session(session_id):
+        return mock_sessions.get(session_id)
+    
+    def get_sessions(user_id=None, agent_id=None):
+        sessions = list(mock_sessions.values())
+        
+        # Filter by user_id if provided
+        if user_id:
+            sessions = [s for s in sessions if s["user_id"] == user_id]
+        
+        # Filter by agent_id if provided
+        if agent_id:
+            sessions = [s for s in sessions if s["agent_id"] == agent_id]
+        
+        return sessions
+    
+    def get_session_by_name(name, user_id=None):
+        for session in mock_sessions.values():
+            if session["name"] == name:
+                if user_id is None or session["user_id"] == user_id:
+                    return session
+        return None
+    
+    def update_session(session_id, name=None):
+        if session_id not in mock_sessions:
+            return False
+        
+        if name is not None:
+            mock_sessions[session_id]["name"] = name
+        mock_sessions[session_id]["updated_at"] = datetime.now().isoformat()
+        return True
+    
+    def delete_session(session_id):
+        if session_id in mock_sessions:
+            del mock_sessions[session_id]
+            return True
+        return False
+    
     # Create a mock instance
     mock_instance = MagicMock()
     mock_instance.create_user.side_effect = create_user
@@ -143,6 +203,12 @@ def mock_database_service():
     mock_instance.get_agent_by_name.side_effect = get_agent_by_name
     mock_instance.update_agent.side_effect = update_agent
     mock_instance.delete_agent.side_effect = delete_agent
+    mock_instance.create_session.side_effect = create_session
+    mock_instance.get_session.side_effect = get_session
+    mock_instance.get_sessions.side_effect = get_sessions
+    mock_instance.get_session_by_name.side_effect = get_session_by_name
+    mock_instance.update_session.side_effect = update_session
+    mock_instance.delete_session.side_effect = delete_session
     
     with patch('memfuse_core.services.database_service.DatabaseService') as mock_class:
         mock_class.get_instance.return_value = mock_instance

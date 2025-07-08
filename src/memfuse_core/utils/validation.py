@@ -300,3 +300,26 @@ def validate_session_name_available(db: Database, name: str, user_id: Optional[s
             ],
         )
     return True, None
+
+
+def ensure_session_exists(db: Database, session_id: str) -> Dict[str, Any]:
+    """Validate that a session exists, raise HTTPException if not."""
+    is_valid, error_response, session = validate_session_exists(db, session_id)
+    if not is_valid:
+        raise_api_error(error_response)
+    return session
+
+
+def ensure_session_by_name_exists(db: Database, name: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+    """Validate that a session with the given name exists, raise HTTPException if not."""
+    is_valid, error_response, session = validate_session_by_name_exists(db, name, user_id)
+    if not is_valid:
+        raise_api_error(error_response)
+    return session
+
+
+def ensure_session_name_available(db: Database, name: str, user_id: Optional[str] = None) -> None:
+    """Validate that a session name is available, raise HTTPException if not."""
+    is_valid, error_response = validate_session_name_available(db, name, user_id)
+    if not is_valid:
+        raise_api_error(error_response)

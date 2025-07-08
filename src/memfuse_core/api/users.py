@@ -117,7 +117,7 @@ async def update_user(
     db = DatabaseService.get_instance()
 
     # Check if user exists
-    user = ensure_user_exists(db, user_id)
+    _ = ensure_user_exists(db, user_id)
 
     # Update the user
     success = db.update_user(
@@ -153,7 +153,7 @@ async def delete_user(
     db = DatabaseService.get_instance()
 
     # Check if user exists
-    user = ensure_user_exists(db, user_id)
+    _ = ensure_user_exists(db, user_id)
 
     # Delete the user
     success = db.delete_user(user_id)

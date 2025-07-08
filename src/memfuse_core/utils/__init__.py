@@ -19,6 +19,9 @@ from .validation import (
     ensure_agent_exists,
     ensure_agent_by_name_exists,
     ensure_agent_name_available,
+    ensure_session_exists,
+    ensure_session_by_name_exists,
+    ensure_session_name_available,
     raise_api_error,
 )
 from .error_handling import handle_api_errors
@@ -77,6 +80,9 @@ __all__ = [
     "ensure_agent_exists",
     "ensure_agent_by_name_exists",
     "ensure_agent_name_available",
+    "ensure_session_exists",
+    "ensure_session_by_name_exists",
+    "ensure_session_name_available",
     "raise_api_error",
     # From error_handling
     "handle_api_errors",

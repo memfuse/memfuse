@@ -17,7 +17,6 @@ from ..utils import (
     ensure_agent_by_name_exists,
     ensure_agent_name_available,
     handle_api_errors,
-    prepare_response_data,
     raise_api_error,
 )
 
@@ -118,7 +117,7 @@ async def update_agent(
     db = DatabaseService.get_instance()
 
     # Check if agent exists
-    agent = ensure_agent_exists(db, agent_id)
+    _ = ensure_agent_exists(db, agent_id)
 
     # Update the agent
     success = db.update_agent(
@@ -156,7 +155,7 @@ async def delete_agent(
     db = DatabaseService.get_instance()
 
     # Check if agent exists
-    agent = ensure_agent_exists(db, agent_id)
+    _ = ensure_agent_exists(db, agent_id)
 
     # Delete the agent
     success = db.delete_agent(agent_id)
