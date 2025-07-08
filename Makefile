@@ -94,22 +94,22 @@ docker-build:
 # Start development environment
 docker-dev:
 	@echo "🐳 Starting development environment..."
-	./docker/scripts/deploy.sh -e dev -a up -d
+	./docker/scripts/deploy.sh -e dev -a up
 
 # Start production environment
 docker-prod:
 	@echo "🐳 Starting production environment..."
-	./docker/scripts/deploy.sh -e prod -a up -d
+	./docker/scripts/deploy.sh -e prod -a up
 
 # Start test environment
 docker-test:
 	@echo "🐳 Starting test environment..."
-	./docker/scripts/deploy.sh -e test -a up -d
+	./docker/scripts/deploy.sh -e test -a up
 
 # Start local development environment
 docker-local:
 	@echo "🐳 Starting local development environment..."
-	./docker/scripts/deploy.sh -e local -a up -d
+	./docker/scripts/deploy.sh -e local -a up
 
 # Clean Docker resources
 docker-clean:

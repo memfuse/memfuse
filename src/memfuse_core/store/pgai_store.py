@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import numpy as np
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
@@ -31,6 +32,53 @@ from ..interfaces.chunk_store import ChunkStoreInterface
 from ..rag.chunk.base import ChunkData
 from ..models import Query
 from ..utils.config import config_manager
+
+
+class GlobalEmbeddingModelWrapper:
+    """Wrapper to make global embedding model compatible with encoder interface."""
+
+    def __init__(self, embedding_model):
+        """Initialize wrapper with global embedding model.
+
+        Args:
+            embedding_model: Global SentenceTransformer model instance
+        """
+        self.model = embedding_model
+        self.model_name = getattr(embedding_model, 'model_name', 'all-MiniLM-L6-v2')
+
+    async def encode_text(self, text: str) -> np.ndarray:
+        """Encode a single text using the global model.
+
+        Args:
+            text: Text to encode
+
+        Returns:
+            Embedding vector as numpy array
+        """
+        try:
+            # Use asyncio.to_thread to run the synchronous encode in a thread
+            embedding = await asyncio.to_thread(self.model.encode, text, convert_to_numpy=True)
+            return embedding
+        except Exception as e:
+            logger.error(f"GlobalEmbeddingModelWrapper: Failed to encode text: {e}")
+            raise
+
+    async def encode_texts(self, texts: List[str]) -> List[np.ndarray]:
+        """Encode multiple texts using the global model.
+
+        Args:
+            texts: List of texts to encode
+
+        Returns:
+            List of embedding vectors as numpy arrays
+        """
+        try:
+            # Use asyncio.to_thread to run the synchronous encode in a thread
+            embeddings = await asyncio.to_thread(self.model.encode, texts, convert_to_numpy=True)
+            return embeddings
+        except Exception as e:
+            logger.error(f"GlobalEmbeddingModelWrapper: Failed to encode texts: {e}")
+            raise
 
 
 class PgaiStore(ChunkStoreInterface):
@@ -279,19 +327,44 @@ class PgaiStore(ChunkStoreInterface):
         return chunk_ids
 
     def _get_encoder(self):
-        """Get encoder with fallback logic."""
-        # Use the encoder from PgaiVectorWrapper if available
+        """Get encoder with priority for global singleton model."""
+        # Priority 1: Use the encoder from PgaiVectorWrapper if available
         if hasattr(self, 'encoder') and self.encoder is not None:
             return self.encoder
 
-        # Fallback: try to get encoder from model service
+        # Priority 2: Get encoder from ModelRegistry (global model provider)
         from ..interfaces.model_provider import ModelRegistry
-
         model_provider = ModelRegistry.get_provider()
         if model_provider and hasattr(model_provider, 'get_encoder'):
-            return model_provider.get_encoder()
+            encoder = model_provider.get_encoder()
+            if encoder is not None:
+                logger.debug("Using encoder from ModelRegistry")
+                return encoder
 
-        return None
+        # Priority 3: Get global embedding model from ServiceFactory
+        try:
+            from ..services.service_factory import ServiceFactory
+            global_embedding_model = ServiceFactory.get_global_embedding_model()
+
+            if global_embedding_model is not None:
+                logger.info("Using global singleton embedding model from ServiceFactory")
+                # Create a wrapper to make the model compatible with encoder interface
+                return GlobalEmbeddingModelWrapper(global_embedding_model)
+        except Exception as e:
+            logger.warning(f"Failed to get global embedding model: {e}")
+
+        # Priority 4: Create direct encoder as last resort
+        try:
+            logger.info("Creating direct MiniLM encoder as fallback")
+            from ..rag.encode.MiniLM import MiniLMEncoder
+            # Use the configured model name
+            from ..utils.config import config_manager
+            config = config_manager.get_config()
+            model_name = config.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
+            return MiniLMEncoder(model_name=model_name)
+        except Exception as e:
+            logger.error(f"Failed to create fallback encoder: {e}")
+            return None
 
     def _convert_embedding_to_list(self, embedding) -> List[float]:
         """Convert embedding to list format."""
@@ -303,20 +376,23 @@ class PgaiStore(ChunkStoreInterface):
 
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the configured encoder."""
-        try:
-            encoder = self._get_encoder()
-            if encoder:
-                embedding = await encoder.encode_text(text)
-                return self._convert_embedding_to_list(embedding)
+        encoder = self._get_encoder()
+        if encoder is None:
+            raise RuntimeError("No encoder available for embedding generation. Ensure ModelService is initialized.")
 
-            logger.error("No encoder available for embedding generation")
-            # Return zero vector as fallback
-            return [0.0] * 384
+        try:
+            embedding = await encoder.encode_text(text)
+            embedding_list = self._convert_embedding_to_list(embedding)
+
+            # Validate embedding is not zero vector
+            if all(abs(x) < 1e-10 for x in embedding_list):
+                raise RuntimeError("Generated zero vector - encoder may not be working correctly")
+
+            return embedding_list
 
         except Exception as e:
-            logger.error(f"Failed to generate embedding: {e}")
-            # Return zero vector as fallback
-            return [0.0] * 384
+            logger.error(f"Failed to generate embedding for text: {text[:50]}... Error: {e}")
+            raise
 
     async def _generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts in batch for better performance.
@@ -330,20 +406,24 @@ class PgaiStore(ChunkStoreInterface):
         if not texts:
             return []
 
-        try:
-            encoder = self._get_encoder()
-            if encoder:
-                embeddings = await encoder.encode_texts(texts)
-                return [self._convert_embedding_to_list(embedding) for embedding in embeddings]
+        encoder = self._get_encoder()
+        if encoder is None:
+            raise RuntimeError("No encoder available for batch embedding generation. Ensure ModelService is initialized.")
 
-            logger.error("No encoder available for batch embedding generation")
-            # Return zero vectors as fallback
-            return [[0.0] * 384] * len(texts)
+        try:
+            embeddings = await encoder.encode_texts(texts)
+            embedding_lists = [self._convert_embedding_to_list(embedding) for embedding in embeddings]
+
+            # Validate no zero vectors
+            for i, embedding_list in enumerate(embedding_lists):
+                if all(abs(x) < 1e-10 for x in embedding_list):
+                    raise RuntimeError(f"Generated zero vector for text {i}: {texts[i][:50]}...")
+
+            return embedding_lists
 
         except Exception as e:
-            logger.error(f"Failed to generate batch embeddings: {e}")
-            # Return zero vectors as fallback
-            return [[0.0] * 384] * len(texts)
+            logger.error(f"Failed to generate batch embeddings for {len(texts)} texts. Error: {e}")
+            raise
 
     async def read(self, chunk_ids: List[str], filters: Optional[Dict[str, Any]] = None) -> List[Optional[ChunkData]]:
         """Read chunks by their IDs with optional metadata filters."""
