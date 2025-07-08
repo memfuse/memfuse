@@ -1,0 +1,210 @@
+# @package store
+# Unified pgai configuration for MemFuse
+# This file consolidates all pgai-related settings to eliminate duplication
+
+# =============================================================================
+# CORE PGAI BACKEND CONFIGURATION
+# =============================================================================
+
+# Primary backend selection
+backend: "pgai"
+
+# =============================================================================
+# DATABASE CONNECTION SETTINGS
+# =============================================================================
+
+# PostgreSQL connection (inherited from database config but can be overridden)
+database:
+  host: ${oc.env:POSTGRES_HOST,localhost}
+  port: ${oc.env:POSTGRES_PORT,5432}
+  database: ${oc.env:POSTGRES_DB,memfuse}
+  user: ${oc.env:POSTGRES_USER,postgres}
+  password: ${oc.env:POSTGRES_PASSWORD,postgres}
+  
+  # Connection pool settings (unified across all pgai usage)
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30.0
+  pool_recycle: 3600
+
+# =============================================================================
+# PGAI-SPECIFIC SETTINGS
+# =============================================================================
+
+pgai:
+  # Core pgai features
+  enabled: true
+  vectorizer_worker_enabled: true
+  auto_embedding: true
+  auto_initialize: true
+  
+  # Embedding configuration
+  embedding:
+    model: "text-embedding-3-small"
+    dimensions: 1536
+    batch_size: 100
+    
+  # Chunking configuration
+  chunking:
+    chunk_size: 1000
+    chunk_overlap: 200
+    
+  # Performance settings
+  performance:
+    max_retries: 3
+    retry_delay: 5.0
+    timeout: 30.0
+    enable_transactions: true
+
+# =============================================================================
+# TABLE AND VIEW NAMING CONVENTIONS
+# =============================================================================
+
+# Unified table naming for different memory layers
+tables:
+  # M0 layer tables
+  m0:
+    messages: "m0_messages"
+    metadata: "m0_metadata"
+    embedding_view: "m0_messages_embedding"
+    vectorizer_name: "m0_messages_vectorizer"
+    
+  # M1 layer tables (for future implementation)
+  m1:
+    facts: "m1_facts"
+    lineage: "m1_lineage"
+    conflicts: "m1_conflicts"
+    embedding_view: "m1_facts_embedding"
+    vectorizer_name: "m1_facts_vectorizer"
+    
+  # M2 layer tables (for future implementation)
+  m2:
+    entities: "m2_entities"
+    relationships: "m2_relationships"
+    graphs: "m2_graphs"
+    embedding_view: "m2_entities_embedding"
+    vectorizer_name: "m2_entities_vectorizer"
+
+# =============================================================================
+# STORE-SPECIFIC SETTINGS
+# =============================================================================
+
+# Store interface settings
+store:
+  buffer_size: 10
+  cache_size: 100
+  
+  # Query defaults
+  top_k: 5
+  similarity_threshold: 0.3
+  
+  # Multi-path retrieval configuration
+  multi_path:
+    keyword_weight: 0.2
+    vector_weight: 0.5
+    graph_weight: 0.3
+    use_keyword: true
+    use_vector: true
+    use_graph: false
+    fusion_strategy: "rrf"
+
+# =============================================================================
+# MEMORY LAYER INTEGRATION
+# =============================================================================
+
+# Memory layer specific configurations
+memory_layers:
+  # M0 layer configuration
+  m0:
+    enabled: true
+    priority: 1
+    buffer_size: 1000
+    auto_flush_interval: 60
+    storage_backends: ["vector", "keyword", "sql"]
+    
+  # M1 layer configuration (future)
+  m1:
+    enabled: true
+    priority: 2
+    fact_extraction_enabled: true
+    llm_model: "grok-3-mini"
+    batch_size: 5
+    min_confidence_threshold: 0.7
+    
+  # M2 layer configuration (future)
+  m2:
+    enabled: true
+    priority: 3
+    graph_update_strategy: "incremental"
+    entity_resolution_threshold: 0.8
+    entity_extraction_enabled: true
+
+# =============================================================================
+# STORAGE BACKEND CONFIGURATION
+# =============================================================================
+
+# Unified storage backend settings for pgai
+storage_backends:
+  vector:
+    connection_pool_size: 5
+    timeout: 30.0
+    batch_size: 100
+    store_type: "pgai"
+    enable_transactions: true
+    backend: "pgai"
+    
+  keyword:
+    connection_pool_size: 3
+    timeout: 15.0
+    enable_transactions: true
+    backend: "sqlite"  # Keyword search still uses SQLite for performance
+    
+  graph:
+    connection_pool_size: 3
+    timeout: 20.0
+    enable_auto_save: true
+    store_type: "networkx"
+    enable_transactions: true
+    backend: "sqlite"  # Graph storage uses SQLite for simplicity
+    
+  sql:
+    connection_pool_size: 5
+    timeout: 30.0
+    enable_wal_mode: true
+    enable_transactions: true
+    backend: "pgai"  # SQL operations use pgai/PostgreSQL
+
+# =============================================================================
+# ENVIRONMENT-SPECIFIC OVERRIDES
+# =============================================================================
+
+# Development environment settings
+development:
+  pgai:
+    vectorizer_worker_enabled: false  # Disable worker in dev for simplicity
+    auto_embedding: false             # Manual embedding control in dev
+  database:
+    pool_size: 5                      # Smaller pool for dev
+  performance:
+    enable_debug_logging: true
+    
+# Production environment settings  
+production:
+  pgai:
+    vectorizer_worker_enabled: true   # Enable worker in production
+    auto_embedding: true              # Auto embedding in production
+  database:
+    pool_size: 20                     # Larger pool for production
+  performance:
+    enable_metrics_collection: true
+    metrics_export_interval: 300
+
+# =============================================================================
+# MIGRATION AND COMPATIBILITY
+# =============================================================================
+
+# Settings for backward compatibility and migration
+compatibility:
+  legacy_table_names: false          # Use new unified naming convention
+  auto_migrate_tables: true          # Automatically migrate old table structures
+  preserve_old_data: true            # Keep old data during migration

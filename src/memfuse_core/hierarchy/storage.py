@@ -513,41 +513,32 @@ class UnifiedStorageManager(StorageManager):
         logger.info("UnifiedStorageManager: Shutdown complete")
     
     async def _create_backend(self, storage_type: StorageType, config: Dict[str, Any]) -> Optional[StorageBackend]:
-        """Create a storage backend from configuration."""
+        """Create a storage backend from configuration with unified config hierarchy."""
         try:
             # This would integrate with the existing StoreFactory
             from ..store.factory import StoreFactory
             from ..models.core import StoreBackend
+            from ..utils.config import config_manager
+
+            # Get unified configuration with proper hierarchy
+            unified_config = self._get_unified_backend_config(storage_type, config)
+            backend = unified_config.get("backend")
+            backend_enum = StoreBackend(backend) if backend else None
 
             if storage_type == StorageType.VECTOR:
-                # Pass the backend configuration from memory layer to StoreFactory
-                backend = None
-                if "backend" in config:
-                    backend = StoreBackend(config["backend"])
-
                 store = await StoreFactory.create_vector_store(
-                    backend=backend,
-                    data_dir=config.get("data_dir", f"data/{self.user_id}")
+                    backend=backend_enum,
+                    data_dir=unified_config.get("data_dir", f"data/{self.user_id}")
                 )
             elif storage_type == StorageType.GRAPH:
-                # Pass the backend configuration from memory layer to StoreFactory
-                backend = None
-                if "backend" in config:
-                    backend = StoreBackend(config["backend"])
-
                 store = await StoreFactory.create_graph_store(
-                    backend=backend,
-                    data_dir=config.get("data_dir", f"data/{self.user_id}")
+                    backend=backend_enum,
+                    data_dir=unified_config.get("data_dir", f"data/{self.user_id}")
                 )
             elif storage_type == StorageType.KEYWORD:
-                # Pass the backend configuration from memory layer to StoreFactory
-                backend = None
-                if "backend" in config:
-                    backend = StoreBackend(config["backend"])
-
                 store = await StoreFactory.create_keyword_store(
-                    backend=backend,
-                    data_dir=config.get("data_dir", f"data/{self.user_id}")
+                    backend=backend_enum,
+                    data_dir=unified_config.get("data_dir", f"data/{self.user_id}")
                 )
             elif storage_type == StorageType.SQL:
                 # SQL storage backend - use existing database service
@@ -564,3 +555,57 @@ class UnifiedStorageManager(StorageManager):
         except Exception as e:
             logger.error(f"UnifiedStorageManager: Failed to create {storage_type.value} backend: {e}")
             return None
+
+    def _get_unified_backend_config(self, storage_type: StorageType, layer_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Get unified backend configuration with proper hierarchy.
+
+        Configuration precedence (highest to lowest):
+        1. Layer-specific config (from memory layer)
+        2. Store-specific config (from store config)
+        3. Global defaults
+
+        Args:
+            storage_type: Type of storage backend
+            layer_config: Configuration from memory layer
+
+        Returns:
+            Unified configuration dictionary
+        """
+        from ..utils.config import config_manager
+
+        # Get global configuration
+        global_config = config_manager.get_config()
+
+        # Start with global defaults
+        unified_config = {}
+
+        # 1. Apply store-level defaults
+        store_config = global_config.get("store", {})
+        if store_config:
+            unified_config.update(store_config)
+
+        # 2. Apply pgai-specific configuration if backend is pgai
+        backend = layer_config.get("backend") or store_config.get("backend", "qdrant")
+        if backend == "pgai":
+            # Try to load pgai-specific configuration
+            pgai_config = global_config.get("store", {}).get("pgai", {})
+            if pgai_config:
+                # Apply general pgai config first
+                pgai_general = {k: v for k, v in pgai_config.items() if k != "storage_backends"}
+                unified_config.update(pgai_general)
+
+                # Apply storage backend specific settings
+                storage_backends = pgai_config.get("storage_backends", {})
+                storage_specific = storage_backends.get(storage_type.value, {})
+                if storage_specific:
+                    unified_config.update(storage_specific)
+
+        # 3. Apply layer-specific overrides (highest priority)
+        unified_config.update(layer_config)
+
+        # Ensure backend is set - but allow storage-specific backend to override
+        if "backend" not in unified_config:
+            unified_config["backend"] = backend
+
+        logger.debug(f"UnifiedStorageManager: Unified config for {storage_type.value}: {unified_config}")
+        return unified_config

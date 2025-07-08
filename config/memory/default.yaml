@@ -81,20 +81,18 @@ layers:
 # =============================================================================
 
 storage:
-  # Backend-specific connection settings
+  # Backend-specific connection settings (inherits from store.pgai config)
   vector:
     connection_pool_size: 5
     timeout: 30.0
     batch_size: 100
-    store_type: "pgai"
-    enable_transactions: true
-    backend: "pgai"
+    # backend inherited from store config
 
   keyword:
     connection_pool_size: 3
     timeout: 15.0
     enable_transactions: true
-    backend: "sqlite"
+    backend: "sqlite"  # Keyword search optimized for SQLite
 
   graph:
     connection_pool_size: 3
@@ -102,14 +100,14 @@ storage:
     enable_auto_save: true
     store_type: "networkx"
     enable_transactions: true
-    backend: "sqlite"
+    backend: "sqlite"  # Graph storage uses SQLite for simplicity
 
   sql:
     connection_pool_size: 5
     timeout: 30.0
     enable_wal_mode: true
     enable_transactions: true
-    backend: "sqlite"
+    # backend inherited from store config
 
 # =============================================================================
 # MEMORY SERVICE INTEGRATION
