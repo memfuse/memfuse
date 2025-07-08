@@ -821,17 +821,19 @@ class Database:
         Returns:
             List of message data
         """
-        # First, get all rounds for the session
-        rounds = self.backend.select('rounds', {'session_id': session_id})
-
-        if not rounds:
-            return []
-
-        # Then, get all messages for each round
+        # Get messages from both traditional messages table and l0_messages table
         messages = []
-        for round_data in rounds:
-            round_messages = self.get_messages_by_round(round_data['id'])
-            messages.extend(round_messages)
+        
+        # First, get messages from traditional messages table (rounds-based)
+        rounds = self.backend.select('rounds', {'session_id': session_id})
+        if rounds:
+            for round_data in rounds:
+                round_messages = self.get_messages_by_round(round_data['id'])
+                messages.extend(round_messages)
+
+        # Second, get messages from l0_messages table (memory hierarchy)
+        l0_messages = self.get_l0_messages_by_session(session_id)
+        messages.extend(l0_messages)
 
         # Sort messages based on the specified field and order
         if sort_by == 'timestamp':
@@ -846,6 +848,78 @@ class Database:
             messages = messages[:limit]
 
         return messages
+
+    def get_l0_messages_by_session(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get messages from l0_messages table for a specific session.
+
+        Args:
+            session_id: Session ID to filter by
+
+        Returns:
+            List of message data from l0_messages table
+        """
+        import json
+        from datetime import datetime
+        
+        try:
+            # Get all messages from l0_messages table
+            all_l0_messages = self.backend.select('l0_messages')
+            
+            session_messages = []
+            for message in all_l0_messages:
+                try:
+                    # Parse metadata JSON to check for session_id
+                    metadata_str = message.get('metadata', '{}')
+                    if metadata_str:
+                        metadata = json.loads(metadata_str) if isinstance(metadata_str, str) else metadata_str
+                        if metadata.get('session_id') == session_id:
+                            # Convert l0_message format to standard message format
+                            formatted_message = {
+                                'id': message['id'],
+                                'role': metadata.get('role', 'user'),  # Default to 'user' if no role
+                                'content': message['content'],
+                                'created_at': self._convert_timestamp(message.get('created_at')),
+                                'updated_at': self._convert_timestamp(message.get('updated_at')),
+                                'round_id': None,  # l0_messages don't have round_id
+                                'metadata': metadata
+                            }
+                            session_messages.append(formatted_message)
+                except (json.JSONDecodeError, TypeError) as e:
+                    # Skip messages with invalid metadata
+                    logger.warning(f"Invalid metadata in l0_message {message.get('id')}: {e}")
+                    continue
+            
+            logger.info(f"Retrieved {len(session_messages)} messages from l0_messages for session {session_id}")
+            return session_messages
+            
+        except Exception as e:
+            logger.error(f"Error getting l0_messages by session: {e}")
+            return []
+
+    def _convert_timestamp(self, timestamp) -> Optional[str]:
+        """Convert timestamp to ISO format string.
+        
+        Args:
+            timestamp: Timestamp (could be float, string, or None)
+            
+        Returns:
+            ISO format timestamp string or None
+        """
+        if timestamp is None:
+            return None
+            
+        try:
+            if isinstance(timestamp, (int, float)):
+                # Convert from Unix timestamp
+                from datetime import datetime
+                return datetime.fromtimestamp(timestamp).isoformat()
+            elif isinstance(timestamp, str):
+                # Already a string, return as-is
+                return timestamp
+            else:
+                return str(timestamp)
+        except (ValueError, TypeError, OSError):
+            return None
 
     # API key methods
 
