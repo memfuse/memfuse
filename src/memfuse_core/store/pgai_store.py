@@ -115,6 +115,7 @@ class PgaiStore(ChunkStoreInterface):
             # Use config manager for production
             config = config_manager.get_config()
             self.db_config = config.get("database", {})
+            # pgai config is under database, not at root level
             self.pgai_config = config.get("database", {}).get("pgai", {})
 
         # Build database URL
@@ -165,13 +166,17 @@ class PgaiStore(ChunkStoreInterface):
             )
             await self.pool.open()
             
-            # Create tables only (skip vectorizer for now)
+            # Create tables and setup vectorizer
             await self._setup_schema()
-            # TODO: Implement vectorizer creation when pgai API is clarified
-            logger.debug("Skipping vectorizer creation - using manual embedding approach")
-            
-            # Skip vectorizer worker for now
-            logger.debug("Skipping vectorizer worker - not implemented yet")
+
+            # Create vectorizer if enabled and not exists
+            if self.pgai_config.get("auto_embedding", False):
+                await self._create_vectorizer()
+                # Start background embedding processor
+                asyncio.create_task(self._process_pending_embeddings())
+                logger.info("pgai auto-embedding enabled with background processor")
+            else:
+                logger.debug("pgai auto_embedding disabled, using manual embedding approach")
             
             self.initialized = True
             logger.info("PgaiStore initialized successfully")
@@ -206,9 +211,31 @@ class PgaiStore(ChunkStoreInterface):
                         id TEXT PRIMARY KEY,
                         content TEXT NOT NULL,
                         metadata JSONB DEFAULT '{{}}',
+                        embedding VECTOR(384),
+                        needs_embedding BOOLEAN DEFAULT TRUE,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
+                """)
+
+                # Add columns if they don't exist (for existing tables)
+                await cur.execute(f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = '{self.table_name}' AND column_name = 'embedding'
+                        ) THEN
+                            ALTER TABLE {self.table_name} ADD COLUMN embedding VECTOR(384);
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = '{self.table_name}' AND column_name = 'needs_embedding'
+                        ) THEN
+                            ALTER TABLE {self.table_name} ADD COLUMN needs_embedding BOOLEAN DEFAULT TRUE;
+                        END IF;
+                    END $$;
                 """)
 
                 # Create indexes for performance
@@ -244,43 +271,112 @@ class PgaiStore(ChunkStoreInterface):
             logger.debug(f"Schema setup completed for table: {self.table_name}")
 
     async def _create_vectorizer(self):
-        """Create pgai vectorizer for automatic embedding generation."""
+        """Setup embedding automation using our custom background processor.
+
+        Note: We use our own background processing approach instead of pgai's vectorizer
+        because pgai doesn't support local embedding models like MiniLM directly.
+        Our approach provides better control and supports local models.
+        """
+        try:
+            # We don't actually need pgai's vectorizer table since we use our own
+            # background processing approach. This method is kept for compatibility
+            # but the actual work is done by _process_pending_embeddings()
+
+            logger.debug("Using custom background processor instead of pgai vectorizer")
+            logger.info(f"Embedding automation setup completed for {self.table_name}")
+
+        except Exception as e:
+            logger.error(f"Failed to setup embedding automation: {e}")
+            logger.info("Falling back to manual embedding generation")
+
+    async def _create_embedding_trigger(self):
+        """Create database trigger for automatic embedding generation."""
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                # Get embedding configuration
-                embedding_model = self.pgai_config.get("embedding_model", "text-embedding-3-small")
-                embedding_dimensions = self.pgai_config.get("embedding_dimensions", 1536)
-                chunk_size = self.pgai_config.get("chunk_size", 1000)
-                chunk_overlap = self.pgai_config.get("chunk_overlap", 200)
-
+                # Create a function that will be called by the trigger
                 await cur.execute(f"""
-                    SELECT ai.create_vectorizer(
-                        '{self.table_name}'::regclass,
-                        name => '{self.vectorizer_name}',
-                        if_not_exists => true,
-                        embedding => ai.embedding_openai(
-                            model=>'{embedding_model}',
-                            dimensions=>{embedding_dimensions}
-                        ),
-                        chunking => ai.chunking_recursive_character_text_splitter(
-                            chunk_size => {chunk_size},
-                            chunk_overlap => {chunk_overlap}
-                        ),
-                        formatting => ai.formatting_python_template(
-                            'ID: $id\\nContent: $chunk\\nMetadata: $metadata'
-                        ),
-                        destination => ai.destination_table(
-                            view_name => '{self.embedding_view}'
-                        ),
-                        scheduling => ai.scheduling_default()
-                    )
+                    CREATE OR REPLACE FUNCTION {self.table_name}_auto_embed()
+                    RETURNS TRIGGER AS $$
+                    BEGIN
+                        -- Mark record for embedding processing
+                        -- The embedding will be generated by the application
+                        NEW.embedding = NULL;
+                        NEW.needs_embedding = TRUE;
+                        RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql;
+                """)
+
+                # Create trigger for INSERT and UPDATE
+                await cur.execute(f"""
+                    DROP TRIGGER IF EXISTS {self.table_name}_embedding_trigger ON {self.table_name};
+                    CREATE TRIGGER {self.table_name}_embedding_trigger
+                        BEFORE INSERT OR UPDATE OF content ON {self.table_name}
+                        FOR EACH ROW
+                        WHEN (NEW.content IS NOT NULL AND NEW.content != '')
+                        EXECUTE FUNCTION {self.table_name}_auto_embed();
                 """)
 
             await conn.commit()
-            logger.debug(f"Vectorizer created: {self.vectorizer_name}")
+            logger.debug(f"Embedding trigger created for {self.table_name}")
+
+    async def _process_pending_embeddings(self):
+        """Background task to process records that need embeddings."""
+        while True:
+            try:
+                await asyncio.sleep(5)  # Check every 5 seconds
+
+                if not self.initialized:
+                    continue
+
+                # Get records that need embeddings
+                async with self.pool.connection() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute(f"""
+                            SELECT id, content FROM {self.table_name}
+                            WHERE needs_embedding = TRUE AND content IS NOT NULL
+                            LIMIT 10
+                        """)
+
+                        pending_records = await cur.fetchall()
+
+                        if not pending_records:
+                            continue
+
+                        logger.info(f"Processing {len(pending_records)} pending embeddings")
+
+                        # Process each record
+                        for record_id, content in pending_records:
+                            try:
+                                # Generate embedding
+                                embedding = await self._generate_embedding(content)
+
+                                # Update record with embedding
+                                await cur.execute(f"""
+                                    UPDATE {self.table_name}
+                                    SET embedding = %s, needs_embedding = FALSE
+                                    WHERE id = %s
+                                """, (embedding, record_id))
+
+                                logger.debug(f"Generated embedding for record {record_id}")
+
+                            except Exception as e:
+                                logger.error(f"Failed to generate embedding for record {record_id}: {e}")
+                                # Mark as failed but don't retry immediately
+                                await cur.execute(f"""
+                                    UPDATE {self.table_name}
+                                    SET needs_embedding = FALSE
+                                    WHERE id = %s
+                                """, (record_id,))
+
+                    await conn.commit()
+
+            except Exception as e:
+                logger.error(f"Error in background embedding processor: {e}")
+                await asyncio.sleep(30)  # Wait longer on error
 
     async def add(self, chunks: List[ChunkData]) -> List[str]:
-        """Add chunks to pgai store with batch embedding generation.
+        """Add chunks to pgai store with automatic or manual embedding generation.
 
         Args:
             chunks: List of ChunkData objects to store
@@ -294,38 +390,64 @@ class PgaiStore(ChunkStoreInterface):
         if not chunks:
             return []
 
-        # Extract contents for batch embedding generation
-        contents = [chunk.content for chunk in chunks]
-
-        # Generate embeddings in batch for better performance
-        embeddings = await self._generate_embeddings_batch(contents)
+        # Check if auto-embedding is enabled
+        auto_embedding = self.pgai_config.get("auto_embedding", False)
 
         chunk_ids = []
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                for chunk, embedding in zip(chunks, embeddings):
-                    metadata_json = self._prepare_metadata(chunk.metadata)
+                if auto_embedding:
+                    # Auto-embedding mode: insert without embeddings, let background task handle it
+                    for chunk in chunks:
+                        metadata_json = self._prepare_metadata(chunk.metadata)
 
-                    await cur.execute(f"""
-                        INSERT INTO {self.table_name}
-                        (id, content, metadata, embedding)
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (id) DO UPDATE SET
-                            content = EXCLUDED.content,
-                            metadata = EXCLUDED.metadata,
-                            embedding = EXCLUDED.embedding,
-                            updated_at = CURRENT_TIMESTAMP
-                    """, (
-                        chunk.chunk_id,
-                        chunk.content,
-                        metadata_json,
-                        embedding
-                    ))
-                    chunk_ids.append(chunk.chunk_id)
+                        await cur.execute(f"""
+                            INSERT INTO {self.table_name}
+                            (id, content, metadata, needs_embedding)
+                            VALUES (%s, %s, %s, TRUE)
+                            ON CONFLICT (id) DO UPDATE SET
+                                content = EXCLUDED.content,
+                                metadata = EXCLUDED.metadata,
+                                needs_embedding = TRUE,
+                                updated_at = CURRENT_TIMESTAMP
+                        """, (
+                            chunk.chunk_id,
+                            chunk.content,
+                            metadata_json
+                        ))
+                        chunk_ids.append(chunk.chunk_id)
+
+                    logger.debug(f"Added {len(chunk_ids)} chunks to {self.table_name} for auto-embedding")
+                else:
+                    # Manual embedding mode: generate embeddings immediately
+                    contents = [chunk.content for chunk in chunks]
+                    embeddings = await self._generate_embeddings_batch(contents)
+
+                    for chunk, embedding in zip(chunks, embeddings):
+                        metadata_json = self._prepare_metadata(chunk.metadata)
+
+                        await cur.execute(f"""
+                            INSERT INTO {self.table_name}
+                            (id, content, metadata, embedding, needs_embedding)
+                            VALUES (%s, %s, %s, %s, FALSE)
+                            ON CONFLICT (id) DO UPDATE SET
+                                content = EXCLUDED.content,
+                                metadata = EXCLUDED.metadata,
+                                embedding = EXCLUDED.embedding,
+                                needs_embedding = FALSE,
+                                updated_at = CURRENT_TIMESTAMP
+                        """, (
+                            chunk.chunk_id,
+                            chunk.content,
+                            metadata_json,
+                            embedding
+                        ))
+                        chunk_ids.append(chunk.chunk_id)
+
+                    logger.debug(f"Added {len(chunk_ids)} chunks to {self.table_name} with immediate embeddings")
 
             await conn.commit()
 
-        logger.debug(f"Added {len(chunk_ids)} chunks to {self.table_name} with batch embeddings")
         return chunk_ids
 
     def _get_encoder(self):

@@ -23,8 +23,8 @@ pgai:
   enabled: true
   vectorizer_worker_enabled: true
   auto_embedding: true
-  embedding_model: "text-embedding-3-small"
-  embedding_dimensions: 1536
+  embedding_model: "all-MiniLM-L6-v2"
+  embedding_dimensions: 384
   chunk_size: 1000
   chunk_overlap: 200
   batch_size: 100
