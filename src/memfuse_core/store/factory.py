@@ -1,7 +1,6 @@
 """Store factory for MemFuse server."""
 
 from typing import Dict, Optional, Any
-import os
 from loguru import logger
 
 from ..models import StoreBackend
@@ -223,6 +222,8 @@ class StoreFactory:
             pgai_store = PgaiStore(
                 table_name=kwargs.get('table_name', 'm0_messages')
             )
+            # Set encoder on pgai_store for direct access to embedding generation
+            pgai_store.encoder = encoder
             await pgai_store.initialize()
 
             # Wrap pgai store to implement VectorStore interface

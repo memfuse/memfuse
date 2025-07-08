@@ -2,12 +2,10 @@
 
 import asyncio
 import json
-import time
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from loguru import logger
 
 try:
-    import pgai
     from pgai.vectorizer import Worker
     import psycopg
     from psycopg_pool import AsyncConnectionPool
@@ -29,7 +27,7 @@ except ImportError:
 
     logger.warning("pgai dependencies not available. Install with: pip install pgai psycopg pgvector")
 
-from ..interfaces.chunk_store import ChunkStoreInterface, StorageError
+from ..interfaces.chunk_store import ChunkStoreInterface
 from ..rag.chunk.base import ChunkData
 from ..models import Query
 from ..utils.config import config_manager
@@ -126,7 +124,7 @@ class PgaiStore(ChunkStoreInterface):
             logger.debug("Skipping vectorizer worker - not implemented yet")
             
             self.initialized = True
-            logger.info(f"PgaiStore initialized successfully")
+            logger.info("PgaiStore initialized successfully")
             return True
             
         except Exception as e:
@@ -232,7 +230,7 @@ class PgaiStore(ChunkStoreInterface):
             logger.debug(f"Vectorizer created: {self.vectorizer_name}")
 
     async def add(self, chunks: List[ChunkData]) -> List[str]:
-        """Add chunks to pgai store with embedding generation.
+        """Add chunks to pgai store with batch embedding generation.
 
         Args:
             chunks: List of ChunkData objects to store
@@ -246,15 +244,17 @@ class PgaiStore(ChunkStoreInterface):
         if not chunks:
             return []
 
+        # Extract contents for batch embedding generation
+        contents = [chunk.content for chunk in chunks]
+
+        # Generate embeddings in batch for better performance
+        embeddings = await self._generate_embeddings_batch(contents)
+
         chunk_ids = []
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                for chunk in chunks:
-                    # Convert metadata to JSON string if needed
-                    metadata_json = json.dumps(chunk.metadata) if chunk.metadata else '{}'
-
-                    # Generate embedding for the content
-                    embedding = await self._generate_embedding(chunk.content)
+                for chunk, embedding in zip(chunks, embeddings):
+                    metadata_json = self._prepare_metadata(chunk.metadata)
 
                     await cur.execute(f"""
                         INSERT INTO {self.table_name}
@@ -275,29 +275,75 @@ class PgaiStore(ChunkStoreInterface):
 
             await conn.commit()
 
-        logger.debug(f"Added {len(chunk_ids)} chunks to {self.table_name} with embeddings")
+        logger.debug(f"Added {len(chunk_ids)} chunks to {self.table_name} with batch embeddings")
         return chunk_ids
+
+    def _get_encoder(self):
+        """Get encoder with fallback logic."""
+        # Use the encoder from PgaiVectorWrapper if available
+        if hasattr(self, 'encoder') and self.encoder is not None:
+            return self.encoder
+
+        # Fallback: try to get encoder from model service
+        from ..interfaces.model_provider import ModelRegistry
+
+        model_provider = ModelRegistry.get_provider()
+        if model_provider and hasattr(model_provider, 'get_encoder'):
+            return model_provider.get_encoder()
+
+        return None
+
+    def _convert_embedding_to_list(self, embedding) -> List[float]:
+        """Convert embedding to list format."""
+        return embedding.tolist() if hasattr(embedding, 'tolist') else embedding
+
+    def _prepare_metadata(self, metadata: Optional[Dict[str, Any]]) -> str:
+        """Convert metadata to JSON string."""
+        return json.dumps(metadata) if metadata else '{}'
 
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the configured encoder."""
         try:
-            # Get the encoder from the global service factory
-            from ..services.service_factory import ServiceFactory
-            encoder = ServiceFactory.get_global_encoder()
+            encoder = self._get_encoder()
+            if encoder:
+                embedding = await encoder.encode_text(text)
+                return self._convert_embedding_to_list(embedding)
 
-            if encoder is None:
-                logger.error("No encoder available for embedding generation")
-                # Return zero vector as fallback
-                return [0.0] * 384
-
-            # Generate embedding
-            embedding = encoder.encode([text])[0]
-            return embedding.tolist()
+            logger.error("No encoder available for embedding generation")
+            # Return zero vector as fallback
+            return [0.0] * 384
 
         except Exception as e:
             logger.error(f"Failed to generate embedding: {e}")
             # Return zero vector as fallback
             return [0.0] * 384
+
+    async def _generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for multiple texts in batch for better performance.
+
+        Args:
+            texts: List of texts to generate embeddings for
+
+        Returns:
+            List of embedding vectors as lists of floats
+        """
+        if not texts:
+            return []
+
+        try:
+            encoder = self._get_encoder()
+            if encoder:
+                embeddings = await encoder.encode_texts(texts)
+                return [self._convert_embedding_to_list(embedding) for embedding in embeddings]
+
+            logger.error("No encoder available for batch embedding generation")
+            # Return zero vectors as fallback
+            return [[0.0] * 384] * len(texts)
+
+        except Exception as e:
+            logger.error(f"Failed to generate batch embeddings: {e}")
+            # Return zero vectors as fallback
+            return [[0.0] * 384] * len(texts)
 
     async def read(self, chunk_ids: List[str], filters: Optional[Dict[str, Any]] = None) -> List[Optional[ChunkData]]:
         """Read chunks by their IDs with optional metadata filters."""
@@ -349,22 +395,64 @@ class PgaiStore(ChunkStoreInterface):
         return results
 
     async def update(self, chunk_id: str, chunk: ChunkData) -> bool:
-        """Update an existing chunk."""
+        """Update an existing chunk with new embedding."""
         if not self.initialized:
             await self.initialize()
 
+        # Generate new embedding for updated content
+        embedding = await self._generate_embedding(chunk.content)
+
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                metadata_json = json.dumps(chunk.metadata) if chunk.metadata else '{}'
+                metadata_json = self._prepare_metadata(chunk.metadata)
 
                 await cur.execute(f"""
                     UPDATE {self.table_name}
-                    SET content = %s, metadata = %s, updated_at = CURRENT_TIMESTAMP
+                    SET content = %s, metadata = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
-                """, (chunk.content, metadata_json, chunk_id))
+                """, (chunk.content, metadata_json, embedding, chunk_id))
 
                 await conn.commit()
                 return cur.rowcount > 0
+
+    async def update_batch(self, chunk_ids: List[str], chunks: List[ChunkData]) -> List[bool]:
+        """Update multiple chunks with batch embedding generation.
+
+        Args:
+            chunk_ids: List of chunk IDs to update
+            chunks: List of new ChunkData objects
+
+        Returns:
+            List of success flags for each update
+        """
+        if not self.initialized:
+            await self.initialize()
+
+        if not chunk_ids or not chunks or len(chunk_ids) != len(chunks):
+            return [False] * len(chunk_ids)
+
+        # Generate embeddings in batch for better performance
+        contents = [chunk.content for chunk in chunks]
+        embeddings = await self._generate_embeddings_batch(contents)
+
+        results = []
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                for chunk_id, chunk, embedding in zip(chunk_ids, chunks, embeddings):
+                    metadata_json = self._prepare_metadata(chunk.metadata)
+
+                    await cur.execute(f"""
+                        UPDATE {self.table_name}
+                        SET content = %s, metadata = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                    """, (chunk.content, metadata_json, embedding, chunk_id))
+
+                    results.append(cur.rowcount > 0)
+
+            await conn.commit()
+
+        logger.debug(f"Updated {sum(results)} out of {len(chunk_ids)} chunks with batch embeddings")
+        return results
 
     async def delete(self, chunk_ids: List[str]) -> List[bool]:
         """Delete chunks by their IDs."""
