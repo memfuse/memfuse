@@ -10,12 +10,13 @@ Users are the primary entities in MemFuse that own sessions, knowledge, and API 
 
 The Users API follows MemFuse's standard resource identification pattern:
 
-* **Query Operations**: Resources can be queried by ID or name
+- **Query Operations**: Resources can be queried by ID or name
 
-  * By ID: `GET /api/v1/users/{user_id}`
-  * By name: `GET /api/v1/users?name={name}`
-* **Create Operations**: Names must be provided when creating users
-* **Update/Delete Operations**: Must use IDs, not names
+  - By ID: `GET /api/v1/users/{user_id}`
+  - By name: `GET /api/v1/users?name={name}`
+
+- **Create Operations**: Names must be provided when creating users
+- **Update/Delete Operations**: Must use IDs, not names
 
 ## Endpoints
 
@@ -59,7 +60,7 @@ Retrieves a user by their name. This is primarily used for getting the user ID f
 
 **Parameters:**
 
-* `name` (string, required): The user's name
+- `name` (string, required): The user's name
 
 **Response:**
 
@@ -119,8 +120,8 @@ Creates a new user. The user name must be unique.
 
 **Parameters:**
 
-* `name` (string, required): Unique name for the user
-* `description` (string, optional): User description
+- `name` (string, required): Unique name for the user
+- `description` (string, optional): User description
 
 **Response:**
 
@@ -169,7 +170,7 @@ Retrieves a specific user by their ID.
 
 **Parameters:**
 
-* `user_id` (string, required): The user's unique ID
+- `user_id` (string, required): The user's unique ID
 
 **Response:**
 
@@ -218,7 +219,7 @@ Updates an existing user. Only the user ID can be used for updates, not the name
 
 **Parameters:**
 
-* `user_id` (string, required): The user's unique ID
+- `user_id` (string, required): The user's unique ID
 
 **Request Body:**
 
@@ -231,8 +232,8 @@ Updates an existing user. Only the user ID can be used for updates, not the name
 
 **Request Parameters:**
 
-* `name` (string, optional): New name for the user
-* `description` (string, optional): New description for the user
+- `name` (string, optional): New name for the user
+- `description` (string, optional): New description for the user
 
 **Response (Success):**
 
@@ -298,7 +299,7 @@ Deletes a user and all associated data (sessions, knowledge, API keys).
 
 **Parameters:**
 
-* `user_id` (string, required): The user's unique ID
+- `user_id` (string, required): The user's unique ID
 
 **Response (Success):**
 
@@ -348,24 +349,43 @@ Deletes a user and all associated data (sessions, knowledge, API keys).
 }
 ```
 
+### Query User Memory
+
+For querying memory across all sessions for a user, see the [Memory Query API](memory.md).
+
+```
+POST /api/v1/users/{user_id}/query
+```
+
+This endpoint allows searching across all sessions, messages, and knowledge items associated with a user. It supports advanced features like scope tagging, multi-store querying, and intelligent result deduplication.
+
+**Key Features:**
+
+- Cross-session memory search
+- Scope tagging (in_session/cross_session)
+- Multi-store support (vector, keyword, graph)
+- Agent filtering
+- Flexible result filtering
+
+For complete documentation including request/response schemas, examples, and error handling, see the dedicated [Memory Query API documentation](memory.md).
+
 ## Error Handling
 
 The Users API uses standard HTTP status codes:
 
-* `200 OK`: Successful operation
-* `201 Created`: User created successfully
-* `400 Bad Request`: Invalid request parameters or duplicate name
-* `401 Unauthorized`: Missing or invalid API key
-* `404 Not Found`: User not found
-* `500 Internal Server Error`: Server error
+- `200 OK`: Successful operation
+- `201 Created`: User created successfully
+- `400 Bad Request`: Invalid request parameters or duplicate name
+- `401 Unauthorized`: Missing or invalid API key
+- `404 Not Found`: User not found
+- `500 Internal Server Error`: Server error
 
 All error responses include detailed error messages in the `errors` field following the standard MemFuse API response format.
-
 
 ### Name Validation
 
 User names must meet these criteria:
 
-* Must be unique across all users
-* Cannot be empty or null
-* Should follow naming conventions (alphanumeric, hyphens, underscores)
+- Must be unique across all users
+- Cannot be empty or null
+- Should follow naming conventions (alphanumeric, hyphens, underscores)

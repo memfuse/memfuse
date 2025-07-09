@@ -203,7 +203,7 @@ async def query_memory(
     if request.session_id:
         session = db.get_session(request.session_id)
         if not session or session["user_id"] != user_id:
-            return ApiResponse.error(
+            error_response = ApiResponse.error(
                 message=f"Session '{request.session_id}' not found for user '{user_id}'",
                 code=404,
                 errors=[
@@ -213,12 +213,13 @@ async def query_memory(
                     )
                 ],
             )
+            raise_api_error(error_response)
 
     # Validate agent if provided
     if request.agent_id:
         agent = db.get_agent(request.agent_id)
         if not agent:
-            return ApiResponse.error(
+            error_response = ApiResponse.error(
                 message=f"Agent '{request.agent_id}' not found",
                 code=404,
                 errors=[
@@ -228,6 +229,7 @@ async def query_memory(
                     )
                 ],
             )
+            raise_api_error(error_response)
 
     # Always query all sessions for the user
     sessions = db.get_sessions(user_id=user_id, agent_id=request.agent_id)
