@@ -13,7 +13,7 @@ from datetime import datetime
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="function")
 def mock_database_service():
     """Mock the database service to avoid threading issues and focus on contract validation."""
     
@@ -189,6 +189,14 @@ def mock_database_service():
             return True
         return False
     
+    def get_messages_by_session(session_id, limit=20, sort_by="timestamp", order="desc"):
+        """Mock method for getting messages by session."""
+        return []
+    
+    def get_message(message_id):
+        """Mock method for getting a single message."""
+        return None
+    
     # Create a mock instance
     mock_instance = MagicMock()
     mock_instance.create_user.side_effect = create_user
@@ -209,10 +217,69 @@ def mock_database_service():
     mock_instance.get_session_by_name.side_effect = get_session_by_name
     mock_instance.update_session.side_effect = update_session
     mock_instance.delete_session.side_effect = delete_session
+    mock_instance.get_messages_by_session.side_effect = get_messages_by_session
+    mock_instance.get_message.side_effect = get_message
+    
+    # Mock additional services for messages API
+    mock_service = MagicMock()
+    
+    # Mock async methods
+    async def mock_add(messages, **kwargs):
+        return {
+            "status": "success",
+            "data": {"message_ids": ["msg-1", "msg-2"]}
+        }
+    
+    async def mock_get_messages_by_session(*args, **kwargs):
+        return []
+    
+    async def mock_read(message_ids):
+        return {
+            "status": "success",
+            "data": {"messages": []}
+        }
+    
+    async def mock_update(message_ids, new_messages):
+        return {
+            "status": "success",
+            "data": {"message_ids": message_ids}
+        }
+    
+    async def mock_delete(message_ids):
+        """Mock delete that returns 404 for non-existent messages."""
+        if message_ids and message_ids[0] == "nonexistent-message-id":
+            return {
+                "status": "error",
+                "code": 404,
+                "message": "Some message IDs were not found",
+                "errors": [{"field": "message_ids", "message": "Message not found"}]
+            }
+        return {
+            "status": "success",
+            "data": {"message_ids": message_ids}
+        }
+    
+    mock_service.add = mock_add
+    mock_service.get_messages_by_session = mock_get_messages_by_session
+    mock_service.read = mock_read
+    mock_service.update = mock_update
+    mock_service.delete = mock_delete
     
     with patch('memfuse_core.services.database_service.DatabaseService') as mock_class:
         mock_class.get_instance.return_value = mock_instance
-        yield mock_instance
+        
+        # Mock service factory - make async methods return awaitable
+        with patch('memfuse_core.services.service_factory.ServiceFactory') as mock_factory:
+            async def mock_get_buffer_service(*args, **kwargs):
+                return mock_service
+            
+            async def mock_get_memory_service(*args, **kwargs):
+                return mock_service
+            
+            mock_factory.get_buffer_service = mock_get_buffer_service
+            mock_factory.get_memory_service = mock_get_memory_service
+            
+            yield mock_instance
 
 # Contract tests focus on validating API behavior, JSON schemas, and HTTP status codes
 # without testing business logic or relying on actual database operations. 
