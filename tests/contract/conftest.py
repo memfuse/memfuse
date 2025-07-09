@@ -189,6 +189,22 @@ def mock_database_service():
             return True
         return False
     
+    def create_session_with_name(user_id, agent_id, name):
+        """Create a session with a specific name."""
+        # Validate user and agent exist
+        if user_id not in mock_users:
+            raise ValueError(f"User with ID '{user_id}' not found")
+        if agent_id not in mock_agents:
+            raise ValueError(f"Agent with ID '{agent_id}' not found")
+        
+        # Check if session with this name already exists for this user
+        for session in mock_sessions.values():
+            if session["name"] == name and session["user_id"] == user_id:
+                raise ValueError(f"Session with name '{name}' already exists for this user")
+        
+        # Create the session
+        return create_session(user_id, agent_id, name)
+    
     def get_messages_by_session(session_id, limit=20, sort_by="timestamp", order="desc"):
         """Mock method for getting messages by session."""
         return []
@@ -197,28 +213,99 @@ def mock_database_service():
         """Mock method for getting a single message."""
         return None
     
+    # Knowledge methods
+    mock_knowledge = {}
+    knowledge_counter = 0
+    
+    def add_knowledge(user_id, content, knowledge_id=None):
+        nonlocal knowledge_counter
+        # Validate user exists
+        if user_id not in mock_users:
+            raise ValueError(f"User with ID '{user_id}' not found")
+        
+        if knowledge_id is None:
+            knowledge_counter += 1
+            knowledge_id = f"knowledge-{knowledge_counter}"
+        
+        mock_knowledge[knowledge_id] = {
+            "id": knowledge_id,
+            "user_id": user_id,
+            "content": content,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        return knowledge_id
+    
+    def get_knowledge(knowledge_id):
+        return mock_knowledge.get(knowledge_id)
+    
+    def get_knowledge_by_user(user_id):
+        return [k for k in mock_knowledge.values() if k["user_id"] == user_id]
+    
+    def update_knowledge(knowledge_id, content):
+        if knowledge_id not in mock_knowledge:
+            return False
+        
+        mock_knowledge[knowledge_id]["content"] = content
+        mock_knowledge[knowledge_id]["updated_at"] = datetime.now().isoformat()
+        return True
+    
+    def delete_knowledge(knowledge_id):
+        if knowledge_id in mock_knowledge:
+            del mock_knowledge[knowledge_id]
+            return True
+        return False
+    
+    def get_or_create_user_by_name(name, description=None):
+        """Get or create a user by name - returns user_id."""
+        # Check if user exists
+        for user in mock_users.values():
+            if user["name"] == name:
+                return user["id"]
+        
+        # Create new user if not found
+        return create_user(name, description)
+    
+    def get_or_create_agent_by_name(name, description=None):
+        """Get or create an agent by name - returns agent_id."""
+        # Check if agent exists
+        for agent in mock_agents.values():
+            if agent["name"] == name:
+                return agent["id"]
+        
+        # Create new agent if not found
+        return create_agent(name, description)
+    
     # Create a mock instance
     mock_instance = MagicMock()
     mock_instance.create_user.side_effect = create_user
     mock_instance.get_user.side_effect = get_user
     mock_instance.get_all_users.side_effect = get_all_users
     mock_instance.get_user_by_name.side_effect = get_user_by_name
+    mock_instance.get_or_create_user_by_name.side_effect = get_or_create_user_by_name
     mock_instance.update_user.side_effect = update_user
     mock_instance.delete_user.side_effect = delete_user
     mock_instance.create_agent.side_effect = create_agent
     mock_instance.get_agent.side_effect = get_agent
     mock_instance.get_all_agents.side_effect = get_all_agents
     mock_instance.get_agent_by_name.side_effect = get_agent_by_name
+    mock_instance.get_or_create_agent_by_name.side_effect = get_or_create_agent_by_name
     mock_instance.update_agent.side_effect = update_agent
     mock_instance.delete_agent.side_effect = delete_agent
     mock_instance.create_session.side_effect = create_session
     mock_instance.get_session.side_effect = get_session
     mock_instance.get_sessions.side_effect = get_sessions
     mock_instance.get_session_by_name.side_effect = get_session_by_name
+    mock_instance.create_session_with_name.side_effect = create_session_with_name
     mock_instance.update_session.side_effect = update_session
     mock_instance.delete_session.side_effect = delete_session
     mock_instance.get_messages_by_session.side_effect = get_messages_by_session
     mock_instance.get_message.side_effect = get_message
+    mock_instance.add_knowledge.side_effect = add_knowledge
+    mock_instance.get_knowledge.side_effect = get_knowledge
+    mock_instance.get_knowledge_by_user.side_effect = get_knowledge_by_user
+    mock_instance.update_knowledge.side_effect = update_knowledge
+    mock_instance.delete_knowledge.side_effect = delete_knowledge
     
     # Mock additional services for messages API
     mock_service = MagicMock()
