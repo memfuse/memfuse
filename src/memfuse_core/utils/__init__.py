@@ -12,6 +12,17 @@ from .validation import (
     validate_user_name_available,
     validate_agent_name_available,
     validate_session_name_available,
+    # New convenience functions that raise exceptions
+    ensure_user_exists,
+    ensure_user_by_name_exists,
+    ensure_user_name_available,
+    ensure_agent_exists,
+    ensure_agent_by_name_exists,
+    ensure_agent_name_available,
+    ensure_session_exists,
+    ensure_session_by_name_exists,
+    ensure_session_name_available,
+    raise_api_error,
 )
 from .error_handling import handle_api_errors
 from .serialization import convert_numpy_types, prepare_response_data
@@ -62,6 +73,17 @@ __all__ = [
     "validate_user_name_available",
     "validate_agent_name_available",
     "validate_session_name_available",
+    # New convenience functions that raise exceptions
+    "ensure_user_exists",
+    "ensure_user_by_name_exists",
+    "ensure_user_name_available",
+    "ensure_agent_exists",
+    "ensure_agent_by_name_exists",
+    "ensure_agent_name_available",
+    "ensure_session_exists",
+    "ensure_session_by_name_exists",
+    "ensure_session_name_available",
+    "raise_api_error",
     # From error_handling
     "handle_api_errors",
     # From serialization

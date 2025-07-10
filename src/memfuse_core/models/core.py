@@ -5,9 +5,9 @@ the MemFuse framework, including base classes for items, nodes, edges, and queri
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 
 
@@ -91,8 +91,10 @@ class RetrievalResult:
 class Message(BaseModel):
     """Message model."""
 
-    role: str
-    content: str
+    role: Literal["user", "assistant", "system"] = Field(
+        ..., description="Message role - must be 'user', 'assistant', or 'system'"
+    )
+    content: str = Field(..., min_length=1, description="Message content - cannot be empty")
 
 
 class ErrorDetail(BaseModel):
@@ -112,7 +114,7 @@ class ApiResponse(BaseModel):
     errors: Optional[List[ErrorDetail]] = None
 
     @classmethod
-    def success(cls, data: Optional[Dict[str, Any]] = None, message: str = "Success") -> "ApiResponse":
+    def success(cls, data: Optional[Dict[str, Any]] = None, message: str = "Success", code: int = 200) -> "ApiResponse":
         """Create a success response."""
         # Process DictConfig objects
         if data is not None:
@@ -132,7 +134,7 @@ class ApiResponse(BaseModel):
 
         return cls(
             status="success",
-            code=200,
+            code=code,
             data=data,
             message=message,
             errors=None,

@@ -11,6 +11,15 @@ from ..models.core import ApiResponse, ErrorDetail
 T = TypeVar('T')
 
 
+class ApiError(Exception):
+    """Custom exception that carries ApiResponse data."""
+    
+    def __init__(self, api_response: ApiResponse):
+        self.api_response = api_response
+        self.status_code = api_response.code
+        super().__init__(api_response.message)
+
+
 def handle_api_errors(operation_name: str) -> Callable[[Callable[..., Awaitable[ApiResponse]]], Callable[..., Awaitable[ApiResponse]]]:
     """Decorator to handle API errors.
 
@@ -27,6 +36,9 @@ def handle_api_errors(operation_name: str) -> Callable[[Callable[..., Awaitable[
         async def wrapper(*args: Any, **kwargs: Any) -> ApiResponse:
             try:
                 return await func(*args, **kwargs)
+            except ApiError:
+                # Re-raise ApiError so it can be handled by the exception handler
+                raise
             except HTTPException as e:
                 # Let FastAPI handle HTTP exceptions
                 raise e

@@ -1,7 +1,7 @@
 """User API endpoints."""
 
 import logging
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 from typing import Optional
 
 from ..models import (
@@ -14,11 +14,12 @@ from ..models import (
 from ..services.database_service import DatabaseService
 from ..utils.auth import validate_api_key
 from ..utils import (
-    validate_user_exists,
-    validate_user_by_name_exists,
-    validate_user_name_available,
+    ensure_user_exists,
+    ensure_user_by_name_exists,
+    ensure_user_name_available,
     handle_api_errors,
     prepare_response_data,
+    raise_api_error,
 )
 
 
@@ -41,10 +42,7 @@ async def list_users(
 
     # If name is provided, get user by name
     if name:
-        is_valid, error_response, user = validate_user_by_name_exists(db, name)
-        if not is_valid:
-            return error_response
-
+        user = ensure_user_by_name_exists(db, name)
         return ApiResponse.success(
             data={"users": [user]},
             message="User retrieved successfully",
@@ -58,9 +56,9 @@ async def list_users(
     )
 
 
-@router.post("/", response_model=ApiResponse)
+@router.post("/", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 # Also handle path without trailing slash
-@router.post("", response_model=ApiResponse)
+@router.post("", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 @handle_api_errors("create user")
 async def create_user(
     request: UserCreate,
@@ -70,9 +68,7 @@ async def create_user(
     db = DatabaseService.get_instance()
 
     # Check if user with the same name already exists
-    is_valid, error_response = validate_user_name_available(db, request.name)
-    if not is_valid:
-        return error_response
+    ensure_user_name_available(db, request.name)
 
     # Create the user
     user_id = db.create_user(
@@ -86,6 +82,7 @@ async def create_user(
     return ApiResponse.success(
         data={"user": user},
         message="User created successfully",
+        code=201,
     )
 
 
@@ -101,9 +98,7 @@ async def get_user(
     db = DatabaseService.get_instance()
 
     # Validate user exists
-    is_valid, error_response, user = validate_user_exists(db, user_id)
-    if not is_valid:
-        return error_response
+    user = ensure_user_exists(db, user_id)
 
     return ApiResponse.success(
         data={"user": user},
@@ -122,9 +117,7 @@ async def update_user(
     db = DatabaseService.get_instance()
 
     # Check if user exists
-    is_valid, error_response, user = validate_user_exists(db, user_id)
-    if not is_valid:
-        return error_response
+    _ = ensure_user_exists(db, user_id)
 
     # Update the user
     success = db.update_user(
@@ -134,11 +127,12 @@ async def update_user(
     )
 
     if not success:
-        return ApiResponse.error(
+        error_response = ApiResponse.error(
             message="Failed to update user",
             errors=[ErrorDetail(
                 field="general", message="Database update failed")],
         )
+        raise_api_error(error_response)
 
     # Get the updated user
     updated_user = db.get_user(user_id)
@@ -159,19 +153,18 @@ async def delete_user(
     db = DatabaseService.get_instance()
 
     # Check if user exists
-    is_valid, error_response, _ = validate_user_exists(db, user_id)
-    if not is_valid:
-        return error_response
+    _ = ensure_user_exists(db, user_id)
 
     # Delete the user
     success = db.delete_user(user_id)
 
     if not success:
-        return ApiResponse.error(
+        error_response = ApiResponse.error(
             message="Failed to delete user",
             errors=[ErrorDetail(
                 field="general", message="Database delete failed")],
         )
+        raise_api_error(error_response)
 
     return ApiResponse.success(
         data={"user_id": user_id},
@@ -201,15 +194,16 @@ async def query_memory(
     logger.info("Using BufferService for query operations")
 
     # Check if user exists
-    is_valid, error_response, user = validate_user_exists(db, user_id)
-    if not is_valid:
-        return error_response
+    # is_valid, error_response, user = validate_user_exists(db, user_id)
+    # if not is_valid:
+    #     return error_response
+    user = ensure_user_exists(db, user_id)
 
     # Validate session if provided
     if request.session_id:
         session = db.get_session(request.session_id)
         if not session or session["user_id"] != user_id:
-            return ApiResponse.error(
+            error_response = ApiResponse.error(
                 message=f"Session '{request.session_id}' not found for user '{user_id}'",
                 code=404,
                 errors=[
@@ -219,12 +213,13 @@ async def query_memory(
                     )
                 ],
             )
+            raise_api_error(error_response)
 
     # Validate agent if provided
     if request.agent_id:
         agent = db.get_agent(request.agent_id)
         if not agent:
-            return ApiResponse.error(
+            error_response = ApiResponse.error(
                 message=f"Agent '{request.agent_id}' not found",
                 code=404,
                 errors=[
@@ -234,6 +229,7 @@ async def query_memory(
                     )
                 ],
             )
+            raise_api_error(error_response)
 
     # Always query all sessions for the user
     sessions = db.get_sessions(user_id=user_id, agent_id=request.agent_id)

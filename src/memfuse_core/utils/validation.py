@@ -2,8 +2,64 @@
 
 from typing import Optional, Dict, Any, Tuple
 
+from fastapi import HTTPException
 from ..models.core import ApiResponse, ErrorDetail
 from ..database import Database
+
+
+def raise_api_error(api_response: ApiResponse) -> None:
+    """Raise HTTPException with ApiResponse format in detail."""
+    raise HTTPException(
+        status_code=api_response.code,
+        detail=api_response.dict()
+    )
+
+
+# Convenience functions that raise exceptions instead of returning tuples
+def ensure_user_exists(db: Database, user_id: str) -> Dict[str, Any]:
+    """Validate that a user exists, raise HTTPException if not."""
+    is_valid, error_response, user = validate_user_exists(db, user_id)
+    if not is_valid:
+        raise_api_error(error_response)
+    return user
+
+
+def ensure_user_by_name_exists(db: Database, name: str) -> Dict[str, Any]:
+    """Validate that a user with the given name exists, raise HTTPException if not."""
+    is_valid, error_response, user = validate_user_by_name_exists(db, name)
+    if not is_valid:
+        raise_api_error(error_response)
+    return user
+
+
+def ensure_user_name_available(db: Database, name: str) -> None:
+    """Validate that a user name is available, raise HTTPException if not."""
+    is_valid, error_response = validate_user_name_available(db, name)
+    if not is_valid:
+        raise_api_error(error_response)
+
+
+def ensure_agent_exists(db: Database, agent_id: str) -> Dict[str, Any]:
+    """Validate that an agent exists, raise HTTPException if not."""
+    is_valid, error_response, agent = validate_agent_exists(db, agent_id)
+    if not is_valid:
+        raise_api_error(error_response)
+    return agent
+
+
+def ensure_agent_by_name_exists(db: Database, name: str) -> Dict[str, Any]:
+    """Validate that an agent with the given name exists, raise HTTPException if not."""
+    is_valid, error_response, agent = validate_agent_by_name_exists(db, name)
+    if not is_valid:
+        raise_api_error(error_response)
+    return agent
+
+
+def ensure_agent_name_available(db: Database, name: str) -> None:
+    """Validate that an agent name is available, raise HTTPException if not."""
+    is_valid, error_response = validate_agent_name_available(db, name)
+    if not is_valid:
+        raise_api_error(error_response)
 
 
 def validate_user_exists(db: Database, user_id: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
@@ -244,3 +300,26 @@ def validate_session_name_available(db: Database, name: str, user_id: Optional[s
             ],
         )
     return True, None
+
+
+def ensure_session_exists(db: Database, session_id: str) -> Dict[str, Any]:
+    """Validate that a session exists, raise HTTPException if not."""
+    is_valid, error_response, session = validate_session_exists(db, session_id)
+    if not is_valid:
+        raise_api_error(error_response)
+    return session
+
+
+def ensure_session_by_name_exists(db: Database, name: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+    """Validate that a session with the given name exists, raise HTTPException if not."""
+    is_valid, error_response, session = validate_session_by_name_exists(db, name, user_id)
+    if not is_valid:
+        raise_api_error(error_response)
+    return session
+
+
+def ensure_session_name_available(db: Database, name: str, user_id: Optional[str] = None) -> None:
+    """Validate that a session name is available, raise HTTPException if not."""
+    is_valid, error_response = validate_session_name_available(db, name, user_id)
+    if not is_valid:
+        raise_api_error(error_response)

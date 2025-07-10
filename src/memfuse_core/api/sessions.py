@@ -1,7 +1,7 @@
 """Session API endpoints."""
 
 import logging
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from typing import Optional
 
 from ..models import (
@@ -13,11 +13,12 @@ from ..models import (
 from ..services.database_service import DatabaseService
 from ..utils.auth import validate_api_key
 from ..utils import (
-    validate_user_exists,
-    validate_agent_exists,
-    validate_session_exists,
-    validate_session_by_name_exists,
+    ensure_user_exists,
+    ensure_agent_exists,
+    ensure_session_exists,
+    ensure_session_by_name_exists,
     handle_api_errors,
+    raise_api_error,
 )
 
 
@@ -47,11 +48,7 @@ async def list_sessions(
         # - GET /api/v1/sessions?name=xxx&user_id=yyy → user-scoped lookup (recommended)
         # - GET /api/v1/sessions?name=xxx → global lookup (returns all sessions with that name)
         # The real data isolation happens at the data storage and query level, not here
-        is_valid, error_response, session = validate_session_by_name_exists(
-            db, name, user_id=user_id)
-        if not is_valid:
-            return error_response
-
+        session = ensure_session_by_name_exists(db, name, user_id=user_id)
         return ApiResponse.success(
             data={"sessions": [session]},
             message="Session retrieved successfully",
@@ -59,15 +56,11 @@ async def list_sessions(
 
     # Validate user_id if provided
     if user_id:
-        is_valid, error_response, _ = validate_user_exists(db, user_id)
-        if not is_valid:
-            return error_response
+        ensure_user_exists(db, user_id)
 
     # Validate agent_id if provided
     if agent_id:
-        is_valid, error_response, _ = validate_agent_exists(db, agent_id)
-        if not is_valid:
-            return error_response
+        ensure_agent_exists(db, agent_id)
 
     # Get sessions with filters
     sessions = db.get_sessions(user_id=user_id, agent_id=agent_id)
@@ -78,9 +71,9 @@ async def list_sessions(
     )
 
 
-@router.post("/", response_model=ApiResponse)
+@router.post("/", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 # Also handle path without trailing slash
-@router.post("", response_model=ApiResponse)
+@router.post("", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 @handle_api_errors("create session")
 async def create_session(
     request: SessionCreate,
@@ -89,16 +82,9 @@ async def create_session(
     """Create a new session."""
     db = DatabaseService.get_instance()
 
-    # Validate user_id
-    is_valid, error_response, user = validate_user_exists(db, request.user_id)
-    if not is_valid:
-        return error_response
-
-    # Validate agent_id
-    is_valid, error_response, agent = validate_agent_exists(
-        db, request.agent_id)
-    if not is_valid:
-        return error_response
+    # Validate user_id and agent_id
+    user = ensure_user_exists(db, request.user_id)
+    agent = ensure_agent_exists(db, request.agent_id)
 
     # Generate a session name if not provided
     session_name = request.name
@@ -111,7 +97,7 @@ async def create_session(
     # Check if a session with this name already exists for this user
     existing_session = db.get_session_by_name(session_name, user_id=request.user_id)
     if existing_session:
-        return ApiResponse.error(
+        error_response = ApiResponse.error(
             message=f"Session with name '{session_name}' already exists for this user",
             code=400,
             errors=[
@@ -121,6 +107,7 @@ async def create_session(
                 )
             ],
         )
+        raise_api_error(error_response)
 
     # Check if there's already a session with null name for this user/agent pair
     # This is to prevent duplicate sessions with null names
@@ -131,10 +118,18 @@ async def create_session(
             # Update the existing session with the new name
             logger.info(
                 f"Found existing session with null name, updating with name: {session_name}")
-            db.update_session(
+            success = db.update_session(
                 session_id=existing_session["id"],
                 name=session_name
             )
+            
+            if not success:
+                error_response = ApiResponse.error(
+                    message="Failed to update existing session",
+                    errors=[ErrorDetail(field="general", message="Database update failed")],
+                )
+                raise_api_error(error_response)
+            
             # Get the updated session
             updated_session = db.get_session(existing_session["id"])
 
@@ -184,6 +179,7 @@ async def create_session(
     return ApiResponse.success(
         data={"session": session},
         message="Session created successfully",
+        code=201,
     )
 
 
@@ -199,9 +195,7 @@ async def get_session(
     db = DatabaseService.get_instance()
 
     # Check if session exists
-    is_valid, error_response, session = validate_session_exists(db, session_id)
-    if not is_valid:
-        return error_response
+    session = ensure_session_exists(db, session_id)
 
     return ApiResponse.success(
         data={"session": session},
@@ -222,9 +216,7 @@ async def update_session(
     db = DatabaseService.get_instance()
 
     # Check if session exists
-    is_valid, error_response, _ = validate_session_exists(db, session_id)
-    if not is_valid:
-        return error_response
+    _ = ensure_session_exists(db, session_id)
 
     # Update the session
     success = db.update_session(
@@ -233,11 +225,11 @@ async def update_session(
     )
 
     if not success:
-        return ApiResponse.error(
+        error_response = ApiResponse.error(
             message="Failed to update session",
-            errors=[ErrorDetail(
-                field="general", message="Database update failed")],
+            errors=[ErrorDetail(field="general", message="Database update failed")],
         )
+        raise_api_error(error_response)
 
     # Get the updated session
     updated_session = db.get_session(session_id)
@@ -260,19 +252,17 @@ async def delete_session(
     db = DatabaseService.get_instance()
 
     # Check if session exists
-    is_valid, error_response, _ = validate_session_exists(db, session_id)
-    if not is_valid:
-        return error_response
+    _ = ensure_session_exists(db, session_id)
 
     # Delete the session
     success = db.delete_session(session_id)
 
     if not success:
-        return ApiResponse.error(
+        error_response = ApiResponse.error(
             message="Failed to delete session",
-            errors=[ErrorDetail(
-                field="general", message="Database delete failed")],
+            errors=[ErrorDetail(field="general", message="Database delete failed")],
         )
+        raise_api_error(error_response)
 
     return ApiResponse.success(
         data={"session_id": session_id},

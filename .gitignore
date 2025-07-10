@@ -144,7 +144,6 @@ profile_default/
 pydevd*.log
 python_files/get-pip.py
 python_files/lib/**
-scripts/**/*
 sdist/
 share/python-wheels/
 target/
