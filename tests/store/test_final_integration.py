@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from memfuse_core.store.pgai_store import (
-    SimplifiedEventDrivenPgaiStore, TriggerManager, RetryProcessor,
+    EventDrivenPgaiStore, TriggerManager, RetryProcessor,
     WorkerPool, ImmediateTriggerCoordinator, EmbeddingMonitor, PgaiStoreFactory
 )
 from unittest.mock import AsyncMock, patch
@@ -280,7 +280,7 @@ async def test_backward_compatibility():
     print("\n🧪 Testing Backward Compatibility")
     print("=" * 60)
     
-    # Test that SimplifiedEventDrivenPgaiStore can be used as EventDrivenPgaiStore
+    # Test that EventDrivenPgaiStore can be used as EventDrivenPgaiStore
     from memfuse_core.store.pgai_store import EventDrivenPgaiStore
     
     config = {
@@ -355,7 +355,7 @@ async def main():
         print("      • RetryProcessor - Intelligent retry logic")
         print("      • WorkerPool - Async worker management")
         print("      • ImmediateTriggerCoordinator - Component coordination")
-        print("   ✅ Created SimplifiedEventDrivenPgaiStore using composition")
+        print("   ✅ Created EventDrivenPgaiStore using composition")
         print("   ✅ Improved error handling and monitoring")
         print("   ✅ Created comprehensive test suite:")
         print("      • 15/15 unit tests passing")

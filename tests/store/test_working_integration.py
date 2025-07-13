@@ -14,7 +14,7 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from memfuse_core.store.simplified_event_driven_store import SimplifiedEventDrivenPgaiStore
+from memfuse_core.store.event_driven_store import EventDrivenPgaiStore
 from memfuse_core.store.store_factory import PgaiStoreFactory
 from memfuse_core.rag.chunk.base import ChunkData
 
@@ -106,7 +106,7 @@ async def test_simplified_store_creation():
     }
     
     # Create store (should not fail even without database)
-    store = SimplifiedEventDrivenPgaiStore(config=config, table_name="test_simplified")
+    store = EventDrivenPgaiStore(config=config, table_name="test_simplified")
     
     print(f"✅ Store created: {type(store).__name__}")
     print(f"✅ Table name: {store.table_name}")
@@ -290,7 +290,7 @@ async def main():
         print("✅ Immediate trigger system components are working correctly")
         
         print("\n📋 Verified Components:")
-        print("   ✅ SimplifiedEventDrivenPgaiStore - Composition-based architecture")
+        print("   ✅ EventDrivenPgaiStore - Composition-based architecture")
         print("   ✅ TriggerManager - PostgreSQL NOTIFY/LISTEN handling")
         print("   ✅ RetryProcessor - Intelligent retry mechanism")
         print("   ✅ WorkerPool - Async worker management")

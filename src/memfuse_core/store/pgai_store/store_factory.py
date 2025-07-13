@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 import logging
 
 from .pgai_store import PgaiStore
-from .simplified_event_driven_store import SimplifiedEventDrivenPgaiStore
+from .event_driven_store import EventDrivenPgaiStore
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,8 @@ class PgaiStoreFactory:
             auto_embedding = pgai_config.get("auto_embedding", False)
             
             if auto_embedding and immediate_trigger:
-                logger.info(f"Creating SimplifiedEventDrivenPgaiStore for table: {table_name}")
-                return SimplifiedEventDrivenPgaiStore(config, table_name)
+                logger.info(f"Creating EventDrivenPgaiStore for table: {table_name}")
+                return EventDrivenPgaiStore(config, table_name)
             else:
                 logger.info(f"Creating traditional PgaiStore for table: {table_name}")
                 return PgaiStore(config, table_name)

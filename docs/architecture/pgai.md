@@ -42,7 +42,7 @@ MemFuse integrates with PostgreSQL and the pgai extension to provide advanced ve
 graph TB
     A[Application Layer] --> B[PgaiStoreFactory]
     B --> C{Configuration}
-    C -->|immediate_trigger=true| D[SimplifiedEventDrivenPgaiStore]
+    C -->|immediate_trigger=true| D[EventDrivenPgaiStore]
     C -->|immediate_trigger=false| E[PgaiStore]
 
     D --> F[ImmediateTriggerCoordinator]
@@ -72,7 +72,7 @@ src/memfuse_core/store/pgai_store/
 ├── store_factory.py                   # Automatic store selection factory
 ├── immediate_trigger_components.py     # Modular trigger system components
 ├── monitoring.py                       # Performance monitoring and metrics
-├── simple_error_handling.py           # Simplified error handling utilities
+├── error_handling.py           # Simplified error handling utilities
 └── pgai_vector_wrapper.py             # Vector operations wrapper
 ```
 
@@ -82,7 +82,7 @@ src/memfuse_core/store/pgai_store/
 # Recommended: Package-level imports
 from memfuse_core.store.pgai_store import (
     PgaiStore,                          # Base store
-    SimplifiedEventDrivenPgaiStore,     # Recommended event-driven store
+    EventDrivenPgaiStore,     # Recommended event-driven store
     EventDrivenPgaiStore,               # Backward compatibility alias
     PgaiStoreFactory,                   # Factory for automatic selection
     TriggerManager,                     # NOTIFY/LISTEN management
@@ -92,7 +92,7 @@ from memfuse_core.store.pgai_store import (
 )
 
 # Alternative: Direct module imports
-from memfuse_core.store.pgai_store.simplified_event_driven_store import SimplifiedEventDrivenPgaiStore
+from memfuse_core.store.pgai_store.simplified_event_driven_store import EventDrivenPgaiStore
 from memfuse_core.store.pgai_store.store_factory import PgaiStoreFactory
 ```
 
@@ -194,7 +194,7 @@ class EmbeddingMonitor:
 ```mermaid
 sequenceDiagram
     participant App as Application
-    participant Store as SimplifiedEventDrivenPgaiStore
+    participant Store as EventDrivenPgaiStore
     participant DB as PostgreSQL
     participant TM as TriggerManager
     participant RP as RetryProcessor
@@ -218,7 +218,7 @@ sequenceDiagram
 
 MemFuse provides two event-driven store implementations with different architectural approaches:
 
-### SimplifiedEventDrivenPgaiStore (Recommended)
+### EventDrivenPgaiStore (Recommended)
 
 **Architecture**: Composition-based design with modular components
 
@@ -231,9 +231,9 @@ MemFuse provides two event-driven store implementations with different architect
 
 **Usage**:
 ```python
-from memfuse_core.store.pgai_store import SimplifiedEventDrivenPgaiStore
+from memfuse_core.store.pgai_store import EventDrivenPgaiStore
 
-store = SimplifiedEventDrivenPgaiStore(
+store = EventDrivenPgaiStore(
     config={
         "pgai": {
             "immediate_trigger": True,
@@ -261,13 +261,13 @@ store = SimplifiedEventDrivenPgaiStore(
 ```python
 from memfuse_core.store.pgai_store import EventDrivenPgaiStore
 
-# Note: This is actually an alias to SimplifiedEventDrivenPgaiStore for backward compatibility
+# Note: This is actually an alias to EventDrivenPgaiStore for backward compatibility
 store = EventDrivenPgaiStore(config=config)
 ```
 
 ### Comparison
 
-| Aspect | SimplifiedEventDrivenPgaiStore | EventDrivenPgaiStore |
+| Aspect | EventDrivenPgaiStore | EventDrivenPgaiStore |
 |--------|-------------------------------|---------------------|
 | **Design Pattern** | Composition | Inheritance |
 | **File Structure** | 280 lines + components | 462 lines monolithic |
@@ -288,7 +288,7 @@ from memfuse_core.store.pgai_store import PgaiStoreFactory
 store = PgaiStoreFactory.create_store(
     config={
         "pgai": {
-            "immediate_trigger": True,  # Will use SimplifiedEventDrivenPgaiStore
+            "immediate_trigger": True,  # Will use EventDrivenPgaiStore
             "auto_embedding": True
         }
     }
@@ -1123,7 +1123,7 @@ See [Optimization Strategies](#optimization-strategies) section for detailed per
 ### 1. Immediate Trigger Store Setup
 
 ```python
-from memfuse_core.store.pgai_store import SimplifiedEventDrivenPgaiStore, PgaiStoreFactory
+from memfuse_core.store.pgai_store import EventDrivenPgaiStore, PgaiStoreFactory
 from memfuse_core.rag.chunk.base import ChunkData
 
 # Option 1: Direct instantiation with immediate trigger
@@ -1139,7 +1139,7 @@ config = {
     }
 }
 
-store = SimplifiedEventDrivenPgaiStore(
+store = EventDrivenPgaiStore(
     config=config,
     table_name="m0_episodic"
 )
@@ -1225,7 +1225,7 @@ for i in range(10):
 ### 5. Backward Compatibility
 
 ```python
-# Using the legacy interface (automatically uses SimplifiedEventDrivenPgaiStore)
+# Using the legacy interface (automatically uses EventDrivenPgaiStore)
 from memfuse_core.store.pgai_store import EventDrivenPgaiStore
 
 # This still works but uses the new implementation under the hood
@@ -2097,7 +2097,7 @@ class ProductionStore(PgaiStore):
 
 ## Migration Guide
 
-### From Legacy EventDrivenPgaiStore to SimplifiedEventDrivenPgaiStore
+### From Legacy EventDrivenPgaiStore to EventDrivenPgaiStore
 
 The migration is **automatic** thanks to backward compatibility aliases. However, for optimal performance and new features, consider updating your code:
 
@@ -2108,7 +2108,7 @@ The migration is **automatic** thanks to backward compatibility aliases. However
 from memfuse_core.store.pgai_store import EventDrivenPgaiStore
 
 # New import (recommended)
-from memfuse_core.store.pgai_store import SimplifiedEventDrivenPgaiStore
+from memfuse_core.store.pgai_store import EventDrivenPgaiStore
 ```
 
 #### 2. Update Configuration
@@ -2164,7 +2164,7 @@ CREATE TRIGGER m0_episodic_embedding_trigger
 store = EventDrivenPgaiStore(config=config, table_name="m0_messages")
 
 # New code (recommended)
-store = SimplifiedEventDrivenPgaiStore(config=config, table_name="m0_episodic")
+store = EventDrivenPgaiStore(config=config, table_name="m0_episodic")
 
 # Or use factory for automatic selection
 store = PgaiStoreFactory.create_store(config=config, table_name="m0_episodic")
@@ -2225,7 +2225,7 @@ The MemFuse PgAI Store architecture provides:
 - **🔧 Backward Compatibility**: Seamless migration from legacy implementations
 - **📈 Production Ready**: Comprehensive monitoring, retry mechanisms, and error handling
 
-For new projects, use `SimplifiedEventDrivenPgaiStore` with immediate triggers enabled. For existing projects, the migration is automatic with optional performance optimizations available.
+For new projects, use `EventDrivenPgaiStore` with immediate triggers enabled. For existing projects, the migration is automatic with optional performance optimizations available.
 
             except Exception as e:
                 logger.error(f"Production processor error: {e}")

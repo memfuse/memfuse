@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple reorganization validation test without external module dependencies.
+Reorganization validation test without external module dependencies.
 """
 
 import sys
@@ -16,13 +16,12 @@ def test_file_structure():
     
     expected_files = [
         "__init__.py",
-        "pgai_store.py", 
-        "simplified_event_driven_store.py",
-        "event_driven_pgai_store.py",
+        "pgai_store.py",
+        "event_driven_store.py",
         "store_factory.py",
         "immediate_trigger_components.py",
         "monitoring.py",
-        "simple_error_handling.py",
+        "error_handling.py",
         "pgai_vector_wrapper.py"
     ]
     
@@ -56,9 +55,9 @@ def test_file_contents():
     
     # Test key files have expected content
     tests = [
-        ("__init__.py", ["PgaiStore", "SimplifiedEventDrivenPgaiStore", "EventDrivenPgaiStore"]),
+        ("__init__.py", ["PgaiStore", "EventDrivenPgaiStore", "EventDrivenPgaiStore"]),
         ("pgai_store.py", ["class PgaiStore", "m0_episodic"]),
-        ("simplified_event_driven_store.py", ["class SimplifiedEventDrivenPgaiStore", "EventDrivenPgaiStore = SimplifiedEventDrivenPgaiStore"]),
+        ("event_driven_store.py", ["class EventDrivenPgaiStore", "EventDrivenPgaiStore = EventDrivenPgaiStore"]),
         ("store_factory.py", ["class PgaiStoreFactory", "m0_episodic"]),
     ]
     
@@ -150,11 +149,11 @@ def test_old_files_removed():
     old_files = [
         "src/memfuse_core/store/pgai_store.py",
         "src/memfuse_core/store/event_driven_pgai_store.py", 
-        "src/memfuse_core/store/simplified_event_driven_store.py",
+        "src/memfuse_core/store/event_driven_store.py",
         "src/memfuse_core/store/store_factory.py",
         "src/memfuse_core/store/monitoring.py",
         "src/memfuse_core/store/immediate_trigger_components.py",
-        "src/memfuse_core/store/simple_error_handling.py",
+        "src/memfuse_core/store/error_handling.py",
         "src/memfuse_core/store/error_handling.py",
         "src/memfuse_core/store/schema_migration.py",
     ]

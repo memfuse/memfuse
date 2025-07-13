@@ -12,7 +12,7 @@ from typing import Dict, Any
 
 # Import the simplified components
 from memfuse_core.store.pgai_store import (
-    SimplifiedEventDrivenPgaiStore, TriggerManager, RetryProcessor,
+    EventDrivenPgaiStore, TriggerManager, RetryProcessor,
     WorkerPool, ImmediateTriggerCoordinator, EmbeddingMonitor, PgaiStoreFactory
 )
 from memfuse_core.rag.chunk.base import ChunkData
@@ -329,7 +329,7 @@ class TestIntegrationSimplified:
             mock_instance.initialize.return_value = True
             mock_pgai.return_value = mock_instance
             
-            store = SimplifiedEventDrivenPgaiStore(
+            store = EventDrivenPgaiStore(
                 config=pgai_test_config,
                 table_name="test_simplified"
             )

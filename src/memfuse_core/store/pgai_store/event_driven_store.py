@@ -1,8 +1,8 @@
 """
-Simplified event-driven pgai store implementation.
+Event-driven pgai store implementation with immediate triggers.
 
-This is a refactored version that uses composition instead of inheritance
-and separates concerns properly.
+This implementation uses composition instead of inheritance and provides
+real-time embedding generation through PostgreSQL NOTIFY/LISTEN mechanism.
 """
 
 import asyncio
@@ -11,20 +11,20 @@ from typing import List, Dict, Any, Optional
 
 from .pgai_store import PgaiStore
 from .immediate_trigger_components import ImmediateTriggerCoordinator
-from .simple_error_handling import (
-    initialize_simple_error_handling, cleanup_simple_error_handling,
-    simple_task_manager, simple_health_checker
+from .error_handling import (
+    initialize_error_handling, cleanup_error_handling,
+    task_manager, health_checker
 )
 from ..rag.chunk.base import ChunkData
 
 logger = logging.getLogger(__name__)
 
 
-class SimplifiedEventDrivenPgaiStore:
-    """Simplified event-driven pgai store using composition."""
+class EventDrivenPgaiStore:
+    """Event-driven pgai store using composition and immediate triggers."""
     
     def __init__(self, config: Optional[Dict[str, Any]] = None, table_name: str = "m0_episodic"):
-        """Initialize simplified event-driven store."""
+        """Initialize event-driven store with immediate triggers."""
         self.config = config or {}
         self.table_name = table_name
         
@@ -52,7 +52,7 @@ class SimplifiedEventDrivenPgaiStore:
                 return False
             
             # Initialize error handling system
-            initialize_simple_error_handling()
+            initialize_error_handling()
 
             # Check if immediate trigger is enabled
             if self.pgai_config.get("immediate_trigger", False):
@@ -141,7 +141,7 @@ class SimplifiedEventDrivenPgaiStore:
                 pass
 
             # Cleanup error handling system
-            await cleanup_simple_error_handling()
+            await cleanup_error_handling()
 
             self.initialized = False
             logger.info("Simplified event-driven store cleaned up successfully")
@@ -275,5 +275,3 @@ class SimplifiedEventDrivenPgaiStore:
             self.core_store.encoder = value
 
 
-# Backward compatibility alias
-EventDrivenPgaiStore = SimplifiedEventDrivenPgaiStore

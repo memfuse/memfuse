@@ -25,13 +25,12 @@ def test_file_structure():
     
     expected_files = [
         "__init__.py",
-        "pgai_store.py", 
-        "simplified_event_driven_store.py",
-        "event_driven_pgai_store.py",
+        "pgai_store.py",
+        "event_driven_store.py",
         "store_factory.py",
         "immediate_trigger_components.py",
         "monitoring.py",
-        "simple_error_handling.py",
+        "error_handling.py",
         "pgai_vector_wrapper.py"
     ]
     
@@ -61,7 +60,7 @@ def test_imports():
     try:
         # Test direct imports from pgai_store package
         from memfuse_core.store.pgai_store.pgai_store import PgaiStore
-        from memfuse_core.store.pgai_store.simplified_event_driven_store import SimplifiedEventDrivenPgaiStore
+        from memfuse_core.store.pgai_store.event_driven_store import EventDrivenPgaiStore
         from memfuse_core.store.pgai_store.store_factory import PgaiStoreFactory
         from memfuse_core.store.pgai_store.immediate_trigger_components import TriggerManager
         from memfuse_core.store.pgai_store.monitoring import EmbeddingMonitor
@@ -71,20 +70,19 @@ def test_imports():
         # Test package-level imports
         from memfuse_core.store.pgai_store import (
             PgaiStore as PackagePgaiStore,
-            SimplifiedEventDrivenPgaiStore as PackageSimplified,
+            EventDrivenPgaiStore as PackageSimplified,
             PgaiStoreFactory as PackageFactory
         )
         
         print("✅ Package-level imports successful")
         
-        # Test backward compatibility
-        from memfuse_core.store.pgai_store import EventDrivenPgaiStore
-        
-        if EventDrivenPgaiStore is SimplifiedEventDrivenPgaiStore:
-            print("✅ Backward compatibility alias working")
-        else:
-            print("❌ Backward compatibility alias not working")
+        # Test that old EventDrivenPgaiStore is no longer available
+        try:
+            from memfuse_core.store.pgai_store import EventDrivenPgaiStore
+            print("❌ EventDrivenPgaiStore should not be available (old version removed)")
             return False
+        except ImportError:
+            print("✅ EventDrivenPgaiStore correctly removed (no backward compatibility)")
             
         return True
         
@@ -102,7 +100,7 @@ def test_class_instantiation():
     
     try:
         from memfuse_core.store.pgai_store import (
-            PgaiStore, SimplifiedEventDrivenPgaiStore, 
+            PgaiStore, EventDrivenPgaiStore, 
             PgaiStoreFactory, TriggerManager, EmbeddingMonitor
         )
         
@@ -119,9 +117,9 @@ def test_class_instantiation():
         store = PgaiStore(config, "test_table")
         print(f"✅ PgaiStore instantiated: {type(store).__name__}")
         
-        # Test SimplifiedEventDrivenPgaiStore instantiation
-        event_store = SimplifiedEventDrivenPgaiStore(config, "test_table")
-        print(f"✅ SimplifiedEventDrivenPgaiStore instantiated: {type(event_store).__name__}")
+        # Test EventDrivenPgaiStore instantiation
+        event_store = EventDrivenPgaiStore(config, "test_table")
+        print(f"✅ EventDrivenPgaiStore instantiated: {type(event_store).__name__}")
         
         # Test factory
         factory_store = PgaiStoreFactory.create_store(config, "test_table")
@@ -146,7 +144,7 @@ def test_table_name_update():
     print("=" * 50)
     
     try:
-        from memfuse_core.store.pgai_store import PgaiStore, SimplifiedEventDrivenPgaiStore
+        from memfuse_core.store.pgai_store import PgaiStore, EventDrivenPgaiStore
         
         # Test default table name
         store1 = PgaiStore()
@@ -156,11 +154,11 @@ def test_table_name_update():
             print(f"❌ PgaiStore table name is {store1.table_name}, expected m0_episodic")
             return False
         
-        store2 = SimplifiedEventDrivenPgaiStore()
+        store2 = EventDrivenPgaiStore()
         if store2.table_name == "m0_episodic":
-            print("✅ SimplifiedEventDrivenPgaiStore default table name updated to m0_episodic")
+            print("✅ EventDrivenPgaiStore default table name updated to m0_episodic")
         else:
-            print(f"❌ SimplifiedEventDrivenPgaiStore table name is {store2.table_name}, expected m0_episodic")
+            print(f"❌ EventDrivenPgaiStore table name is {store2.table_name}, expected m0_episodic")
             return False
             
         return True

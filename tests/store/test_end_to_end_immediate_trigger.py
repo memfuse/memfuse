@@ -11,7 +11,7 @@ import time
 from unittest.mock import AsyncMock, patch
 from typing import Dict, Any
 
-from memfuse_core.store.simplified_event_driven_store import SimplifiedEventDrivenPgaiStore
+from memfuse_core.store.event_driven_store import EventDrivenPgaiStore
 from memfuse_core.store.immediate_trigger_components import ImmediateTriggerCoordinator
 from memfuse_core.rag.chunk.base import ChunkData
 
@@ -92,7 +92,7 @@ class TestEndToEndImmediateTrigger:
             mock_pgai_store.return_value = mock_store_instance
             
             # Create simplified event-driven store
-            store = SimplifiedEventDrivenPgaiStore(
+            store = EventDrivenPgaiStore(
                 config=integration_config["database"],
                 table_name="test_immediate_trigger"
             )
@@ -207,7 +207,7 @@ class TestEndToEndImmediateTrigger:
             mock_pgai_store.return_value = mock_store_instance
             
             # Create store
-            store = SimplifiedEventDrivenPgaiStore(
+            store = EventDrivenPgaiStore(
                 config=integration_config["database"],
                 table_name="test_retry"
             )
@@ -286,7 +286,7 @@ class TestEndToEndImmediateTrigger:
             config["pgai"]["worker_count"] = 4
             config["pgai"]["queue_size"] = 1000
             
-            store = SimplifiedEventDrivenPgaiStore(config=config, table_name="test_performance")
+            store = EventDrivenPgaiStore(config=config, table_name="test_performance")
             await store.initialize()
             
             coordinator = store.coordinator
@@ -361,7 +361,7 @@ class TestEndToEndImmediateTrigger:
             
             mock_pgai_store.return_value = mock_store_instance
             
-            store = SimplifiedEventDrivenPgaiStore(
+            store = EventDrivenPgaiStore(
                 config=integration_config["database"],
                 table_name="test_error_recovery"
             )

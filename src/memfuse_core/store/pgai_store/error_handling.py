@@ -1,7 +1,7 @@
 """
-Simplified error handling for immediate trigger system.
+Error handling for immediate trigger system.
 
-This module provides essential error handling without over-engineering.
+This module provides production-grade error handling and recovery mechanisms.
 """
 
 import asyncio
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def with_retry(max_retries: int = 3, base_delay: float = 1.0):
-    """Simple retry decorator with exponential backoff."""
+    """Retry decorator with exponential backoff."""
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
@@ -34,8 +34,8 @@ def with_retry(max_retries: int = 3, base_delay: float = 1.0):
     return decorator
 
 
-class SimpleHealthChecker:
-    """Simple health monitoring."""
+class HealthChecker:
+    """Production health monitoring and diagnostics."""
     
     def __init__(self):
         self.components = {}
@@ -81,8 +81,8 @@ class SimpleHealthChecker:
         return health_status
 
 
-class SimpleTaskManager:
-    """Simple async task management."""
+class TaskManager:
+    """Production async task management and lifecycle control."""
     
     def __init__(self):
         self.tasks = []
@@ -114,16 +114,16 @@ class SimpleTaskManager:
 
 
 # Global instances
-simple_health_checker = SimpleHealthChecker()
-simple_task_manager = SimpleTaskManager()
+health_checker = HealthChecker()
+task_manager = TaskManager()
 
 
-def initialize_simple_error_handling():
-    """Initialize simple error handling."""
-    logger.info("Simple error handling initialized")
+def initialize_error_handling():
+    """Initialize error handling system."""
+    logger.info("Error handling system initialized")
 
 
-async def cleanup_simple_error_handling():
-    """Cleanup simple error handling."""
-    await simple_task_manager.cleanup_all()
-    logger.info("Simple error handling cleaned up")
+async def cleanup_error_handling():
+    """Cleanup error handling system."""
+    await task_manager.cleanup_all()
+    logger.info("Error handling system cleaned up")

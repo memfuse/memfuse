@@ -11,7 +11,7 @@ import os
 import time
 from unittest.mock import patch
 
-from memfuse_core.store.simplified_event_driven_store import SimplifiedEventDrivenPgaiStore
+from memfuse_core.store.event_driven_store import EventDrivenPgaiStore
 from memfuse_core.rag.chunk.base import ChunkData
 
 
@@ -60,7 +60,7 @@ class TestRealDatabaseIntegration:
             mock_store.initialize.return_value = True
             mock_store.pool = None  # Would be real pool
             
-            store = SimplifiedEventDrivenPgaiStore(
+            store = EventDrivenPgaiStore(
                 config=real_config["database"],
                 table_name="test_real_trigger"
             )

@@ -320,14 +320,14 @@ class ImmediateTriggerTestSuite:
         
         try:
             # Try to import MemFuse components
-            from memfuse_core.store.pgai_store import SimplifiedEventDrivenPgaiStore
-            print("✅ SimplifiedEventDrivenPgaiStore imported successfully")
+            from memfuse_core.store.pgai_store import EventDrivenPgaiStore
+            print("✅ EventDrivenPgaiStore imported successfully")
             
             # Check if class has expected methods
             expected_methods = ['initialize', 'insert_data', 'search']
             missing_methods = [
                 method for method in expected_methods 
-                if not hasattr(SimplifiedEventDrivenPgaiStore, method)
+                if not hasattr(EventDrivenPgaiStore, method)
             ]
             
             if missing_methods:
@@ -354,7 +354,7 @@ class ImmediateTriggerTestSuite:
             
             # Try to instantiate (may fail due to dependencies)
             try:
-                store = SimplifiedEventDrivenPgaiStore(
+                store = EventDrivenPgaiStore(
                     config=config,
                     table_name="m0_episodic"
                 )
@@ -411,7 +411,7 @@ class ImmediateTriggerTestSuite:
         
         # Application readiness evidence
         try:
-            from memfuse_core.store.pgai_store import SimplifiedEventDrivenPgaiStore
+            from memfuse_core.store.pgai_store import EventDrivenPgaiStore
             evidence['application_ready'] = True
         except ImportError:
             evidence['application_ready'] = False
