@@ -78,7 +78,7 @@ class TestPgaiStore:
             mock_config_manager.get_config.return_value = mock_config
 
             with patch('src.memfuse_core.store.pgai_store.PGAI_AVAILABLE', True):
-                store = PgaiStore(table_name="test_m0_messages")
+                store = PgaiStore(table_name="test_m0_episodic")
 
                 # Create proper async context manager mocks
                 mock_cursor = AsyncMock()
@@ -215,7 +215,7 @@ class TestPgaiStore:
         
         # Verify result
         assert result == 42
-        mock_cursor.execute.assert_called_once_with("SELECT COUNT(*) FROM test_m0_messages")
+        mock_cursor.execute.assert_called_once_with("SELECT COUNT(*) FROM test_m0_episodic")
     
     @pytest.mark.asyncio
     async def test_get_chunks_by_session(self, pgai_store):
@@ -273,7 +273,7 @@ class TestPgaiStore:
         
         # Verify result
         assert result is True
-        mock_cursor.execute.assert_called_once_with("DELETE FROM test_m0_messages")
+        mock_cursor.execute.assert_called_once_with("DELETE FROM test_m0_episodic")
         mock_connection.commit.assert_called_once()
     
     def test_database_url_construction(self, mock_config):

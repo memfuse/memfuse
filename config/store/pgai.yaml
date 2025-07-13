@@ -37,6 +37,9 @@ pgai:
   vectorizer_worker_enabled: true
   auto_embedding: true
   auto_initialize: true
+
+  # Event-driven configuration (启用实时触发模式)
+  immediate_trigger: true
   
   # Embedding configuration
   embedding:
@@ -55,6 +58,13 @@ pgai:
     retry_delay: 5.0
     timeout: 30.0
     enable_transactions: true
+
+  # Event-driven specific settings
+  event_driven:
+    worker_count: 2              # 并发处理worker数量
+    queue_size: 100              # 事件队列大小
+    enable_metrics: true         # 启用性能指标
+    notification_timeout: 10.0   # 通知超时时间
 
 # =============================================================================
 # TABLE AND VIEW NAMING CONVENTIONS

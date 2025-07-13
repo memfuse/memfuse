@@ -7,11 +7,9 @@ separated by concern for better maintainability.
 
 import asyncio
 import time
-import logging
+from loguru import logger
 from typing import Dict, Any, Optional, List
 from datetime import datetime
-
-logger = logging.getLogger(__name__)
 
 
 class TriggerManager:
@@ -26,44 +24,37 @@ class TriggerManager:
         
     async def setup_triggers(self):
         """Setup database triggers for immediate notification."""
-        conn = await self.pool.connection()
-        try:
-            cur = await conn.cursor()
-            
-            # Create notification function
-            await cur.execute(f"""
-                CREATE OR REPLACE FUNCTION notify_embedding_needed_{self.table_name}()
-                RETURNS TRIGGER AS $$
-                BEGIN
-                    PERFORM pg_notify('{self.channel_name}', NEW.id);
-                    RETURN NEW;
-                END;
-                $$ LANGUAGE plpgsql;
-            """)
-            
-            # Create trigger
-            await cur.execute(f"""
-                DROP TRIGGER IF EXISTS trigger_immediate_embedding_{self.table_name} ON {self.table_name};
-                CREATE TRIGGER trigger_immediate_embedding_{self.table_name}
-                    AFTER INSERT ON {self.table_name}
-                    FOR EACH ROW
-                    WHEN (NEW.needs_embedding = TRUE AND NEW.content IS NOT NULL)
-                    EXECUTE FUNCTION notify_embedding_needed_{self.table_name}();
-            """)
-            
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                # Create notification function
+                await cur.execute(f"""
+                    CREATE OR REPLACE FUNCTION notify_embedding_needed_{self.table_name}()
+                    RETURNS TRIGGER AS $$
+                    BEGIN
+                        PERFORM pg_notify('{self.channel_name}', NEW.id);
+                        RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql;
+                """)
+
+                # Create trigger
+                await cur.execute(f"""
+                    DROP TRIGGER IF EXISTS trigger_immediate_embedding_{self.table_name} ON {self.table_name};
+                    CREATE TRIGGER trigger_immediate_embedding_{self.table_name}
+                        AFTER INSERT ON {self.table_name}
+                        FOR EACH ROW
+                        WHEN (NEW.needs_embedding = TRUE AND NEW.content IS NOT NULL)
+                        EXECUTE FUNCTION notify_embedding_needed_{self.table_name}();
+                """)
+
             await conn.commit()
             logger.info(f"Setup immediate triggers for {self.table_name}")
-            
-        except Exception as e:
-            logger.error(f"Failed to setup triggers: {e}")
-            raise
-        finally:
-            # Close connection properly
-            pass
             
     async def start_listening(self):
         """Start listening for notifications."""
         self.listener_task = asyncio.create_task(self._notification_listener())
+        # Give the listener a moment to start up, but don't wait indefinitely
+        await asyncio.sleep(0.1)
         
     async def stop_listening(self):
         """Stop listening for notifications."""
@@ -81,30 +72,45 @@ class TriggerManager:
         base_delay = 1.0
 
         while retry_count < max_retries and not self.listener_task.cancelled():
+            conn = None
             try:
-                conn = await self.pool.connection()
-                await conn.execute(f"LISTEN {self.channel_name}")
-                logger.info(f"Started listening on channel: {self.channel_name}")
+                # Use connection context manager for proper cleanup
+                async with self.pool.connection() as conn:
+                    await conn.execute(f"LISTEN {self.channel_name}")
+                    logger.info(f"Started listening on channel: {self.channel_name}")
 
-                # Reset retry count on successful connection
-                retry_count = 0
+                    # Reset retry count on successful connection
+                    retry_count = 0
 
-                # Mock async iteration for testing
-                if hasattr(conn, 'notifies') and callable(conn.notifies):
-                    try:
-                        async for notify in conn.notifies():
-                            record_id = notify.payload
-                            try:
-                                await self.queue.put(record_id)
-                                logger.debug(f"Queued embedding for record {record_id}")
-                            except asyncio.QueueFull:
-                                logger.warning(f"Queue full, dropping record {record_id}")
-                    except Exception as notify_error:
-                        logger.warning(f"Notification iteration error: {notify_error}")
-                        break
-                else:
-                    # For testing with mocks, just wait
-                    await asyncio.sleep(0.1)
+                    # Mock async iteration for testing
+                    if hasattr(conn, 'notifies') and callable(conn.notifies):
+                        try:
+                            async for notify in conn.notifies():
+                                if self.listener_task.cancelled():
+                                    break
+
+                                record_id = notify.payload
+                                try:
+                                    await self.queue.put(record_id)
+                                    logger.debug(f"Queued embedding for record {record_id}")
+                                except asyncio.QueueFull:
+                                    logger.warning(f"Queue full, dropping record {record_id}")
+                        except Exception as notify_error:
+                            logger.warning(f"Notification iteration error: {notify_error}")
+                            break
+                    else:
+                        # For testing with mocks or when notifies() is not available,
+                        # just wait briefly and check cancellation
+                        timeout_count = 0
+                        max_timeout = 100  # 10 seconds total (100 * 0.1s)
+
+                        while not self.listener_task.cancelled() and timeout_count < max_timeout:
+                            await asyncio.sleep(0.1)
+                            timeout_count += 1
+
+                        if timeout_count >= max_timeout:
+                            logger.debug("Notification listener timeout reached, continuing...")
+                            break
 
             except asyncio.CancelledError:
                 logger.info("Notification listener cancelled")
@@ -135,86 +141,74 @@ class RetryProcessor:
         
     async def should_retry(self, record_id: str) -> bool:
         """Check if record should be retried."""
-        conn = await self.pool.connection()
-        try:
-            cur = await conn.cursor()
-            await cur.execute(f"""
-                SELECT retry_count, last_retry_at, retry_status
-                FROM {self.table_name}
-                WHERE id = %s
-            """, (record_id,))
-            
-            result = await cur.fetchone()
-            if not result:
-                return False
-                
-            retry_count, last_retry_at, retry_status = result
-            
-            # Check if already failed permanently
-            if retry_status == 'failed':
-                return False
-                
-            # Check if exceeded max retries
-            if retry_count >= self.max_retries:
-                await self.mark_failed(record_id)
-                return False
-                
-            # Check if enough time has passed since last retry
-            if last_retry_at:
-                time_since_retry = datetime.now() - last_retry_at
-                if time_since_retry.total_seconds() < self.retry_interval:
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(f"""
+                    SELECT retry_count, last_retry_at, retry_status
+                    FROM {self.table_name}
+                    WHERE id = %s
+                """, (record_id,))
+
+                result = await cur.fetchone()
+                if not result:
                     return False
-                    
-            return True
-        finally:
-            pass
+
+                retry_count, last_retry_at, retry_status = result
+
+                # Check if already failed permanently
+                if retry_status == 'failed':
+                    return False
+
+                # Check if exceeded max retries
+                if retry_count >= self.max_retries:
+                    await self.mark_failed(record_id)
+                    return False
+
+                # Check if enough time has passed since last retry
+                if last_retry_at:
+                    time_since_retry = datetime.now() - last_retry_at
+                    if time_since_retry.total_seconds() < self.retry_interval:
+                        return False
+
+                return True
             
     async def mark_retry(self, record_id: str):
         """Mark a retry attempt."""
-        conn = await self.pool.connection()
-        try:
-            cur = await conn.cursor()
-            await cur.execute(f"""
-                UPDATE {self.table_name}
-                SET retry_count = retry_count + 1,
-                    last_retry_at = CURRENT_TIMESTAMP,
-                    retry_status = 'processing'
-                WHERE id = %s
-            """, (record_id,))
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(f"""
+                    UPDATE {self.table_name}
+                    SET retry_count = retry_count + 1,
+                        last_retry_at = CURRENT_TIMESTAMP,
+                        retry_status = 'processing'
+                    WHERE id = %s
+                """, (record_id,))
             await conn.commit()
-        finally:
-            pass
-            
+
     async def mark_success(self, record_id: str):
         """Mark successful processing."""
-        conn = await self.pool.connection()
-        try:
-            cur = await conn.cursor()
-            await cur.execute(f"""
-                UPDATE {self.table_name}
-                SET needs_embedding = FALSE,
-                    retry_count = 0,
-                    retry_status = 'completed',
-                    last_retry_at = NULL
-                WHERE id = %s
-            """, (record_id,))
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(f"""
+                    UPDATE {self.table_name}
+                    SET needs_embedding = FALSE,
+                        retry_count = 0,
+                        retry_status = 'completed',
+                        last_retry_at = NULL
+                    WHERE id = %s
+                """, (record_id,))
             await conn.commit()
-        finally:
-            pass
-            
+
     async def mark_failed(self, record_id: str):
         """Mark final failure."""
-        conn = await self.pool.connection()
-        try:
-            cur = await conn.cursor()
-            await cur.execute(f"""
-                UPDATE {self.table_name}
-                SET retry_status = 'failed'
-                WHERE id = %s
-            """, (record_id,))
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(f"""
+                    UPDATE {self.table_name}
+                    SET retry_status = 'failed'
+                    WHERE id = %s
+                """, (record_id,))
             await conn.commit()
-        finally:
-            pass
 
 
 class WorkerPool:
@@ -378,17 +372,14 @@ class ImmediateTriggerCoordinator:
                 
     async def _get_retry_count(self, record_id: str) -> int:
         """Get current retry count for a record."""
-        conn = await self.pool.connection()
-        try:
-            cur = await conn.cursor()
-            await cur.execute(f"""
-                SELECT retry_count FROM {self.table_name} WHERE id = %s
-            """, (record_id,))
-            
-            result = await cur.fetchone()
-            return result[0] if result else 0
-        finally:
-            pass
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(f"""
+                    SELECT retry_count FROM {self.table_name} WHERE id = %s
+                """, (record_id,))
+
+                result = await cur.fetchone()
+                return result[0] if result else 0
             
     async def get_stats(self) -> Dict[str, Any]:
         """Get processing statistics."""

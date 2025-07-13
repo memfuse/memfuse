@@ -28,10 +28,10 @@ except ImportError:
 
     logger.warning("pgai dependencies not available. Install with: pip install pgai psycopg pgvector")
 
-from ..interfaces.chunk_store import ChunkStoreInterface
-from ..rag.chunk.base import ChunkData
-from ..models import Query
-from ..utils.config import config_manager
+from ...interfaces.chunk_store import ChunkStoreInterface
+from ...rag.chunk.base import ChunkData
+from ...models.core import Query
+from ...utils.config import config_manager
 
 
 class GlobalEmbeddingModelWrapper:
@@ -157,28 +157,45 @@ class PgaiStore(ChunkStoreInterface):
             
             # Create connection pool
             logger.debug("Creating connection pool...")
+            postgres_config = self.db_config.get("postgres", {})
+            pool_size = postgres_config.get("pool_size", 5)
+            max_overflow = postgres_config.get("max_overflow", 10)
+
             self.pool = AsyncConnectionPool(
                 self.db_url,
-                min_size=self.db_config.get("postgres", {}).get("pool_size", 5),
-                max_size=self.db_config.get("postgres", {}).get("pool_size", 10),
+                min_size=min(pool_size, 3),  # Ensure min_size is reasonable
+                max_size=pool_size + max_overflow,  # max_size should be larger than min_size
                 open=False,
                 configure=self._setup_pgvector_connection
             )
+            logger.debug(f"Opening connection pool (min_size={min(pool_size, 3)}, max_size={pool_size + max_overflow})")
             await self.pool.open()
+            logger.debug("Connection pool opened successfully")
             
             # Create tables and setup vectorizer
+            logger.debug("Setting up database schema...")
             await self._setup_schema()
+            logger.debug("Database schema setup completed")
 
             # Create vectorizer if enabled and not exists
-            if self.pgai_config.get("auto_embedding", False):
+            auto_embedding = self.pgai_config.get("auto_embedding", False)
+            logger.debug(f"Auto embedding enabled: {auto_embedding}")
+
+            if auto_embedding:
+                logger.debug("Creating vectorizer...")
                 await self._create_vectorizer()
+                logger.debug("Vectorizer creation completed")
 
                 # Choose processing mode based on configuration
-                if self.pgai_config.get("immediate_trigger", False):
+                immediate_trigger = self.pgai_config.get("immediate_trigger", False)
+                logger.debug(f"Immediate trigger enabled: {immediate_trigger}")
+
+                if immediate_trigger:
                     # Event-driven mode will be handled by EventDrivenPgaiStore
                     logger.info("pgai auto-embedding configured for immediate trigger mode")
                 else:
                     # Start traditional background embedding processor
+                    logger.debug("Starting background embedding processor...")
                     asyncio.create_task(self._process_pending_embeddings())
                     logger.info("pgai auto-embedding enabled with background processor")
             else:
@@ -209,9 +226,18 @@ class PgaiStore(ChunkStoreInterface):
 
     async def _setup_schema(self):
         """Create the messages table schema compatible with existing MemFuse schema."""
+        logger.debug(f"Setting up schema for table: {self.table_name}")
+
+        # First check if schema is already properly set up
+        if await self._is_schema_ready():
+            logger.debug(f"Schema for {self.table_name} is already properly configured")
+            return
+
+        logger.debug(f"Schema needs setup for {self.table_name}, proceeding with creation...")
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 # Create table compatible with existing m0_episodic schema
+                logger.debug(f"Creating table {self.table_name} if not exists...")
                 await cur.execute(f"""
                     CREATE TABLE IF NOT EXISTS {self.table_name} (
                         id TEXT PRIMARY KEY,
@@ -226,8 +252,10 @@ class PgaiStore(ChunkStoreInterface):
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                logger.debug(f"Table {self.table_name} creation completed")
 
                 # Add columns if they don't exist (for existing tables)
+                logger.debug("Checking and adding missing columns...")
                 await cur.execute(f"""
                     DO $$
                     BEGIN
@@ -267,6 +295,7 @@ class PgaiStore(ChunkStoreInterface):
                         END IF;
                     END $$;
                 """)
+                logger.debug("Column checks completed")
 
                 # Create indexes for performance
                 await cur.execute(f"""
@@ -311,6 +340,76 @@ class PgaiStore(ChunkStoreInterface):
             await conn.commit()
             logger.debug(f"Schema setup completed for table: {self.table_name}")
 
+    async def _is_schema_ready(self) -> bool:
+        """Check if the schema is already properly set up to avoid unnecessary operations."""
+        try:
+            async with self.pool.connection() as conn:
+                async with conn.cursor() as cur:
+                    # Check if table exists with required columns
+                    await cur.execute(f"""
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_name = '{self.table_name}'
+                        AND table_schema = 'public'
+                        ORDER BY column_name
+                    """)
+                    columns = await cur.fetchall()
+
+                    if not columns:
+                        logger.debug(f"Table {self.table_name} does not exist")
+                        return False
+
+                    # Check for required columns
+                    column_names = {col[0] for col in columns}
+                    required_columns = {
+                        'id', 'content', 'metadata', 'embedding', 'needs_embedding',
+                        'retry_count', 'last_retry_at', 'retry_status', 'created_at', 'updated_at'
+                    }
+
+                    missing_columns = required_columns - column_names
+                    if missing_columns:
+                        logger.debug(f"Table {self.table_name} missing columns: {missing_columns}")
+                        return False
+
+                    # Check if required indexes exist
+                    await cur.execute(f"""
+                        SELECT indexname
+                        FROM pg_indexes
+                        WHERE tablename = '{self.table_name}'
+                        AND schemaname = 'public'
+                    """)
+                    indexes = await cur.fetchall()
+                    index_names = {idx[0] for idx in indexes}
+
+                    required_indexes = {
+                        f'idx_{self.table_name}_created',
+                        f'idx_{self.table_name}_needs_embedding'
+                    }
+
+                    missing_indexes = required_indexes - index_names
+                    if missing_indexes:
+                        logger.debug(f"Table {self.table_name} missing indexes: {missing_indexes}")
+                        return False
+
+                    # Check if required functions exist
+                    await cur.execute(f"""
+                        SELECT proname
+                        FROM pg_proc
+                        WHERE proname IN ('update_{self.table_name}_updated_at')
+                    """)
+                    functions = await cur.fetchall()
+
+                    if not functions:
+                        logger.debug(f"Table {self.table_name} missing required functions")
+                        return False
+
+                    logger.debug(f"Schema for {self.table_name} is complete and ready")
+                    return True
+
+        except Exception as e:
+            logger.warning(f"Error checking schema readiness for {self.table_name}: {e}")
+            return False
+
     async def _create_vectorizer(self):
         """Setup embedding automation using our custom background processor.
 
@@ -332,9 +431,12 @@ class PgaiStore(ChunkStoreInterface):
 
     async def _setup_immediate_trigger(self):
         """Setup immediate trigger mechanism using PostgreSQL NOTIFY/LISTEN."""
+        logger.debug(f"Starting immediate trigger setup for {self.table_name}")
+
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 # Create notification function for immediate embedding trigger
+                logger.debug(f"Creating notification function for {self.table_name}")
                 await cur.execute(f"""
                     CREATE OR REPLACE FUNCTION notify_embedding_needed_{self.table_name}()
                     RETURNS TRIGGER AS $$
@@ -345,8 +447,10 @@ class PgaiStore(ChunkStoreInterface):
                     END;
                     $$ LANGUAGE plpgsql;
                 """)
+                logger.debug(f"Notification function created for {self.table_name}")
 
                 # Create trigger for immediate notification on INSERT
+                logger.debug(f"Creating immediate trigger for {self.table_name}")
                 await cur.execute(f"""
                     DROP TRIGGER IF EXISTS trigger_immediate_embedding_{self.table_name} ON {self.table_name};
                     CREATE TRIGGER trigger_immediate_embedding_{self.table_name}
@@ -355,7 +459,9 @@ class PgaiStore(ChunkStoreInterface):
                         WHEN (NEW.needs_embedding = TRUE AND NEW.content IS NOT NULL)
                         EXECUTE FUNCTION notify_embedding_needed_{self.table_name}();
                 """)
+                logger.debug(f"Immediate trigger created for {self.table_name}")
 
+            logger.debug(f"Committing immediate trigger transaction for {self.table_name}")
             await conn.commit()
             logger.debug(f"Immediate trigger mechanism setup completed for {self.table_name}")
 
@@ -573,7 +679,7 @@ class PgaiStore(ChunkStoreInterface):
 
         # Priority 2: Get encoder from ModelRegistry (global model provider)
         try:
-            from ..interfaces.model_provider import ModelRegistry
+            from ...interfaces.model_provider import ModelRegistry
             model_provider = ModelRegistry.get_provider()
             if model_provider and hasattr(model_provider, 'get_encoder'):
                 encoder = model_provider.get_encoder()
@@ -606,7 +712,7 @@ class PgaiStore(ChunkStoreInterface):
             from ..rag.encode.MiniLM import MiniLMEncoder
             # Use the configured model name
             try:
-                from ..utils.config import config_manager
+                from ...utils.config import config_manager
                 config = config_manager.get_config()
                 model_name = config.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
             except:
@@ -1175,6 +1281,6 @@ class PgaiStore(ChunkStoreInterface):
 
     def __del__(self):
         """Cleanup when object is destroyed."""
-        if self.initialized:
+        if hasattr(self, 'initialized') and self.initialized:
             # Note: Can't use async in __del__, so we just log
             logger.debug("PgaiStore being destroyed, resources may not be properly cleaned up")

@@ -3,11 +3,11 @@
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
-from ..interfaces.chunk_store import ChunkStoreInterface
+from ...interfaces.chunk_store import ChunkStoreInterface
 from .pgai_store import PgaiStore
-from ..rag.encode.base import EncoderBase
-from ..rag.chunk.base import ChunkData
-from ..models import Query
+from ...rag.encode.base import EncoderBase
+from ...rag.chunk.base import ChunkData
+from ...models.core import Query
 
 
 class PgaiVectorWrapper(ChunkStoreInterface):

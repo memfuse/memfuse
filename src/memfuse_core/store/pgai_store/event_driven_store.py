@@ -13,9 +13,9 @@ from .pgai_store import PgaiStore
 from .immediate_trigger_components import ImmediateTriggerCoordinator
 from .error_handling import (
     initialize_error_handling, cleanup_error_handling,
-    task_manager, health_checker
+    health_checker
 )
-from ..rag.chunk.base import ChunkData
+from ...rag.chunk.base import ChunkData
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,22 @@ class EventDrivenPgaiStore:
         self.config = config or {}
         self.table_name = table_name
         
-        # Get pgai configuration
+        # Get pgai configuration from multiple sources
         self.pgai_config = self.config.get("pgai", {})
+
+        # If no pgai config in direct config, try to get from global config
+        if not self.pgai_config:
+            try:
+                from ...utils.config import config_manager
+                full_config = config_manager.get_config()
+                if full_config:
+                    # Try store.pgai first, then database.pgai for backward compatibility
+                    self.pgai_config = full_config.get("store", {}).get("pgai", {})
+                    if not self.pgai_config:
+                        self.pgai_config = full_config.get("database", {}).get("pgai", {})
+            except Exception as e:
+                logger.warning(f"Failed to load global pgai config: {e}")
+                self.pgai_config = {}
         
         # Core store for basic operations
         self.core_store = None
@@ -73,23 +87,37 @@ class EventDrivenPgaiStore:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to initialize simplified event-driven store: {e}")
+            logger.error(f"Failed to initialize EventDrivenPgaiStore: {e}")
             return False
     
+    async def _ensure_initialized(self, operation: str) -> bool:
+        """Ensure store is initialized, return True if successful."""
+        if not self.initialized:
+            success = await self.initialize()
+            if not success:
+                logger.error(f"EventDrivenPgaiStore: Failed to initialize for {operation}")
+                return False
+
+        if self.core_store is None:
+            logger.error(f"EventDrivenPgaiStore: core_store is None for {operation}")
+            return False
+
+        return True
+
     async def add(self, chunks: List[ChunkData]) -> List[str]:
         """Add chunks to the store."""
-        if not self.initialized:
-            await self.initialize()
-        
+        if not await self._ensure_initialized("add"):
+            return []
+
         # Use core store for actual insertion
         return await self.core_store.add(chunks)
-    
-    async def search(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
-        """Search for similar chunks."""
-        if not self.initialized:
-            await self.initialize()
-        
-        return await self.core_store.search(query, top_k, **kwargs)
+
+    async def query(self, query, top_k: int = 5) -> List[ChunkData]:
+        """Query: Semantic search for relevant chunks based on query text."""
+        if not await self._ensure_initialized("query"):
+            return []
+
+        return await self.core_store.query(query, top_k)
     
     async def get_processing_stats(self) -> Dict[str, Any]:
         """Get comprehensive processing statistics."""
@@ -144,7 +172,7 @@ class EventDrivenPgaiStore:
             await cleanup_error_handling()
 
             self.initialized = False
-            logger.info("Simplified event-driven store cleaned up successfully")
+            logger.info("EventDrivenPgaiStore cleaned up successfully")
 
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
@@ -229,32 +257,32 @@ class EventDrivenPgaiStore:
     # Delegate other methods to core store
     async def get(self, chunk_id: str) -> Optional[ChunkData]:
         """Get a chunk by ID."""
-        if not self.initialized:
-            await self.initialize()
+        if not await self._ensure_initialized("get"):
+            return None
         return await self.core_store.get(chunk_id)
-    
+
     async def delete(self, chunk_ids: List[str]) -> bool:
         """Delete chunks by IDs."""
-        if not self.initialized:
-            await self.initialize()
+        if not await self._ensure_initialized("delete"):
+            return False
         return await self.core_store.delete(chunk_ids)
-    
+
     async def update(self, chunks: List[ChunkData]) -> bool:
         """Update existing chunks."""
-        if not self.initialized:
-            await self.initialize()
+        if not await self._ensure_initialized("update"):
+            return False
         return await self.core_store.update(chunks)
-    
+
     async def list_chunks(self, limit: int = 100, offset: int = 0) -> List[ChunkData]:
         """List chunks with pagination."""
-        if not self.initialized:
-            await self.initialize()
+        if not await self._ensure_initialized("list_chunks"):
+            return []
         return await self.core_store.list_chunks(limit, offset)
-    
+
     async def count(self) -> int:
         """Get total number of chunks."""
-        if not self.initialized:
-            await self.initialize()
+        if not await self._ensure_initialized("count"):
+            return 0
         return await self.core_store.count()
     
     # Properties for compatibility

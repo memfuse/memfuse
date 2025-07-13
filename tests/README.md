@@ -307,3 +307,27 @@ pytest tests/integration/ -m "chunking and not slow" --benchmark-only
 # Run with memory profiling
 pytest tests/unit/ --memray
 ```
+
+## 📋 Recent Cleanup (2025-07-13)
+
+The test directory has been reorganized to improve maintainability:
+
+### Removed Files
+- **Build artifacts**: Removed 17 test files from `build/scripts/` directory
+- **Documentation artifacts**: Removed test files from `docs/_build/`
+- **Root directory cleanup**: Moved `test_e2e.py` to `tests/e2e/test_complete_workflow.py`
+- **Duplicate store tests**: Removed 8 redundant test files from `tests/store/`
+- **Duplicate integration tests**: Removed 6 redundant test files from `tests/integration/`
+- **Standalone test files**: Removed `tests/simple_query_test.py` and `tests/test_auto_embedding_final.py`
+
+### Consolidated Tests
+- **Query method tests**: Consolidated in `tests/store/pgai_store/test_event_driven_store_query_method.py`
+- **E2E tests**: Organized in `tests/e2e/` directory with clear naming
+- **Performance tests**: Separated into dedicated `tests/performance/` directory
+- **Integration tests**: Removed duplicates, kept most comprehensive versions
+
+### Benefits
+- **Reduced complexity**: From 80+ test files to ~50 focused test files
+- **Eliminated duplication**: Removed redundant test coverage
+- **Improved organization**: Clear separation by test type and component
+- **Better maintainability**: Easier to find and update relevant tests

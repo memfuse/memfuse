@@ -3,7 +3,7 @@
 from typing import Dict, Optional, Any
 from loguru import logger
 
-from ..models import StoreBackend
+from ..models.core import StoreBackend
 from ..utils.config import config_manager
 from ..utils.path_manager import PathManager
 from ..rag.encode.base import EncoderBase
@@ -216,12 +216,12 @@ class StoreFactory:
             )
         elif backend == StoreBackend.PGAI:
             # Use the new PgaiStoreFactory for automatic store selection
-            from .store_factory import PgaiStoreFactory
-            from .pgai_vector_wrapper import PgaiVectorWrapper
+            from .pgai_store.store_factory import PgaiStoreFactory
+            from .pgai_store.pgai_vector_wrapper import PgaiVectorWrapper
 
             # Create appropriate pgai store (traditional or event-driven)
             pgai_store = PgaiStoreFactory.create_store(
-                table_name=kwargs.get('table_name', 'm0_messages')
+                table_name=kwargs.get('table_name', 'm0_episodic')
             )
             # Set encoder on pgai_store for direct access to embedding generation
             pgai_store.encoder = encoder

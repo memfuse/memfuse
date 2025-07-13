@@ -5,12 +5,10 @@ This module provides production-grade error handling and recovery mechanisms.
 """
 
 import asyncio
-import logging
+from loguru import logger
 import time
 from typing import Dict, Any, Optional
 from functools import wraps
-
-logger = logging.getLogger(__name__)
 
 
 def with_retry(max_retries: int = 3, base_delay: float = 1.0):

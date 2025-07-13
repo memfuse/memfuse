@@ -7,7 +7,7 @@ data consistency and error handling.
 """
 
 import asyncio
-import logging
+from loguru import logger
 import time
 from typing import Any, Dict, List, Optional, Tuple, Callable
 from dataclasses import dataclass, field
@@ -19,17 +19,15 @@ from .manager import MemoryHierarchyManager
 from .types import WriteStrategy, RetryConfig, LayerWriteResult, ParallelWriteResult
 from ..utils.config import ConfigManager
 
-logger = logging.getLogger(__name__)
-
 
 class ParallelMemoryLayerManager:
     """
     Unified manager for parallel memory layer operations.
-    
+
     This manager coordinates writes across M0/M1/M2 layers with different
     strategies to optimize performance while maintaining consistency.
     """
-    
+
     def __init__(
         self,
         hierarchy_manager: Optional[MemoryHierarchyManager] = None,
@@ -73,23 +71,25 @@ class ParallelMemoryLayerManager:
         self.total_retries = 0
 
         logger.info(f"ParallelMemoryLayerManager: Initialized with strategy={self.default_strategy.value}, "
-                   f"max_retries={self.retry_config.max_retries}")
-    
+                    f"max_retries={self.retry_config.max_retries}")
+
     async def initialize(self) -> bool:
         """Initialize the parallel manager."""
         try:
             # Initialize underlying hierarchy manager
             if self.hierarchy_manager and not await self.hierarchy_manager.initialize():
-                logger.error("ParallelMemoryLayerManager: Failed to initialize hierarchy manager")
+                logger.error(
+                    "ParallelMemoryLayerManager: Failed to initialize hierarchy manager")
                 return False
-            
+
             logger.info("ParallelMemoryLayerManager: Initialized successfully")
             return True
-            
+
         except Exception as e:
-            logger.error(f"ParallelMemoryLayerManager: Initialization failed: {e}")
+            logger.error(
+                f"ParallelMemoryLayerManager: Initialization failed: {e}")
             return False
-    
+
     async def write_data(
         self,
         data: Any,
@@ -98,12 +98,12 @@ class ParallelMemoryLayerManager:
     ) -> ParallelWriteResult:
         """
         Write data to memory layers using specified strategy.
-        
+
         Args:
             data: Data to write to memory layers
             metadata: Optional metadata for the operation
             strategy: Write strategy to use (defaults to configured strategy)
-            
+
         Returns:
             ParallelWriteResult with aggregated results from all layers
         """
@@ -119,8 +119,9 @@ class ParallelMemoryLayerManager:
 
         try:
             self.total_operations += 1
-            logger.info(f"ParallelMemoryLayerManager: Writing data using {strategy.value} strategy")
-            
+            logger.info(
+                f"ParallelMemoryLayerManager: Writing data using {strategy.value} strategy")
+
             # Execute write based on strategy
             if strategy == WriteStrategy.PARALLEL:
                 result = await self._write_parallel(data, metadata)
@@ -130,32 +131,32 @@ class ParallelMemoryLayerManager:
                 result = await self._write_hybrid(data, metadata)
             else:
                 raise ValueError(f"Unknown write strategy: {strategy}")
-            
+
             # Update statistics
             processing_time = time.time() - start_time
             self.total_processing_time += processing_time
-            
+
             if result.success:
                 self.successful_operations += 1
             else:
                 self.failed_operations += 1
-            
+
             # Update result with actual processing time
             result.total_processing_time = processing_time
             result.strategy_used = strategy
-            
+
             logger.info(f"ParallelMemoryLayerManager: Write completed in {processing_time:.3f}s, "
-                       f"success={result.success}")
-            
+                        f"success={result.success}")
+
             return result
-            
+
         except Exception as e:
             processing_time = time.time() - start_time
             self.failed_operations += 1
             self.total_processing_time += processing_time
-            
+
             logger.error(f"ParallelMemoryLayerManager: Write failed: {e}")
-            
+
             return ParallelWriteResult(
                 success=False,
                 layer_results={},
@@ -163,15 +164,16 @@ class ParallelMemoryLayerManager:
                 strategy_used=strategy,
                 error_message=str(e)
             )
-    
+
     async def _write_parallel(
         self,
         data: Any,
         metadata: Optional[Dict[str, Any]] = None
     ) -> ParallelWriteResult:
         """Write to all layers in parallel."""
-        logger.debug("ParallelMemoryLayerManager: Executing parallel write strategy")
-        
+        logger.debug(
+            "ParallelMemoryLayerManager: Executing parallel write strategy")
+
         if not self.hierarchy_manager:
             return ParallelWriteResult(
                 success=False,
@@ -180,11 +182,11 @@ class ParallelMemoryLayerManager:
                 strategy_used=WriteStrategy.PARALLEL,
                 error_message="No hierarchy manager available"
             )
-        
+
         # Create tasks for all available layers
         tasks = []
         layer_types = []
-        
+
         for layer_type, layer in self.hierarchy_manager.layers.items():
             if layer and layer.initialized:
                 task = asyncio.create_task(
@@ -192,9 +194,10 @@ class ParallelMemoryLayerManager:
                 )
                 tasks.append(task)
                 layer_types.append(layer_type)
-        
+
         if not tasks:
-            logger.warning("ParallelMemoryLayerManager: No initialized layers available")
+            logger.warning(
+                "ParallelMemoryLayerManager: No initialized layers available")
             return ParallelWriteResult(
                 success=False,
                 layer_results={},
@@ -202,20 +205,21 @@ class ParallelMemoryLayerManager:
                 strategy_used=WriteStrategy.PARALLEL,
                 error_message="No initialized layers available"
             )
-        
+
         # Execute all tasks concurrently
         try:
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             # Process results
             layer_results = {}
             overall_success = True
-            
+
             for i, result in enumerate(results):
                 layer_type = layer_types[i]
 
                 if isinstance(result, Exception):
-                    logger.error(f"ParallelMemoryLayerManager: Layer {layer_type.value} failed: {result}")
+                    logger.error(
+                        f"ParallelMemoryLayerManager: Layer {layer_type.value} failed: {result}")
                     layer_results[layer_type] = LayerWriteResult(
                         success=False,
                         result=None,
@@ -237,11 +241,13 @@ class ParallelMemoryLayerManager:
                             error_msg = result.error_message
                         else:
                             error_msg = "Processing failed"
-                        logger.error(f"ParallelMemoryLayerManager: Layer {layer_type.value} processing failed: {error_msg}")
+                        logger.error(
+                            f"ParallelMemoryLayerManager: Layer {layer_type.value} processing failed: {error_msg}")
                         overall_success = False
                     else:
-                        logger.info(f"ParallelMemoryLayerManager: Layer {layer_type.value} processing succeeded: {len(result.processed_items)} items")
-            
+                        logger.info(
+                            f"ParallelMemoryLayerManager: Layer {layer_type.value} processing succeeded: {len(result.processed_items)} items")
+
             return ParallelWriteResult(
                 success=overall_success,
                 layer_results=layer_results,
@@ -249,19 +255,21 @@ class ParallelMemoryLayerManager:
                 strategy_used=WriteStrategy.PARALLEL,
                 error_message=None if overall_success else "Some layers failed"
             )
-            
+
         except Exception as e:
-            logger.error(f"ParallelMemoryLayerManager: Parallel write failed: {e}")
+            logger.error(
+                f"ParallelMemoryLayerManager: Parallel write failed: {e}")
             raise
-    
+
     async def _write_sequential(
         self,
         data: Any,
         metadata: Optional[Dict[str, Any]] = None
     ) -> ParallelWriteResult:
         """Write to layers sequentially (M0 -> M1 -> M2)."""
-        logger.debug("ParallelMemoryLayerManager: Executing sequential write strategy")
-        
+        logger.debug(
+            "ParallelMemoryLayerManager: Executing sequential write strategy")
+
         if not self.hierarchy_manager:
             return ParallelWriteResult(
                 success=False,
@@ -270,10 +278,10 @@ class ParallelMemoryLayerManager:
                 strategy_used=WriteStrategy.SEQUENTIAL,
                 error_message="No hierarchy manager available"
             )
-        
+
         layer_results = {}
         overall_success = True
-        
+
         # Process layers in order: M0, M1, M2
         for layer_type in [LayerType.M0, LayerType.M1, LayerType.M2]:
             layer = self.hierarchy_manager.layers.get(layer_type)
@@ -281,14 +289,15 @@ class ParallelMemoryLayerManager:
                 try:
                     result = await self._write_to_layer(layer_type, layer, data, metadata)
                     layer_results[layer_type] = result
-                    
+
                     if not result.success:
                         overall_success = False
                         logger.warning(f"ParallelMemoryLayerManager: Layer {layer_type.value} failed, "
-                                     f"continuing with remaining layers")
-                    
+                                       f"continuing with remaining layers")
+
                 except Exception as e:
-                    logger.error(f"ParallelMemoryLayerManager: Layer {layer_type.value} failed: {e}")
+                    logger.error(
+                        f"ParallelMemoryLayerManager: Layer {layer_type.value} failed: {e}")
                     layer_results[layer_type] = LayerWriteResult(
                         success=False,
                         result=None,
@@ -298,7 +307,7 @@ class ParallelMemoryLayerManager:
                         error_message=str(e)
                     )
                     overall_success = False
-        
+
         return ParallelWriteResult(
             success=overall_success,
             layer_results=layer_results,
@@ -306,15 +315,16 @@ class ParallelMemoryLayerManager:
             strategy_used=WriteStrategy.SEQUENTIAL,
             error_message=None if overall_success else "Some layers failed"
         )
-    
+
     async def _write_hybrid(
         self,
         data: Any,
         metadata: Optional[Dict[str, Any]] = None
     ) -> ParallelWriteResult:
         """Write M0 first, then M1/M2 in parallel."""
-        logger.debug("ParallelMemoryLayerManager: Executing hybrid write strategy")
-        
+        logger.debug(
+            "ParallelMemoryLayerManager: Executing hybrid write strategy")
+
         if not self.hierarchy_manager:
             return ParallelWriteResult(
                 success=False,
@@ -323,10 +333,10 @@ class ParallelMemoryLayerManager:
                 strategy_used=WriteStrategy.HYBRID,
                 error_message="No hierarchy manager available"
             )
-        
+
         layer_results = {}
         overall_success = True
-        
+
         # Step 1: Write to M0 first
         m0_layer = self.hierarchy_manager.layers.get(LayerType.M0)
         if m0_layer and m0_layer.initialized:
@@ -336,10 +346,12 @@ class ParallelMemoryLayerManager:
 
                 if not m0_result.success:
                     overall_success = False
-                    logger.warning("ParallelMemoryLayerManager: M0 write failed in hybrid strategy")
-                
+                    logger.warning(
+                        "ParallelMemoryLayerManager: M0 write failed in hybrid strategy")
+
             except Exception as e:
-                logger.error(f"ParallelMemoryLayerManager: M0 write failed: {e}")
+                logger.error(
+                    f"ParallelMemoryLayerManager: M0 write failed: {e}")
                 layer_results[LayerType.M0] = LayerWriteResult(
                     success=False,
                     result=None,
@@ -349,7 +361,7 @@ class ParallelMemoryLayerManager:
                     error_message=str(e)
                 )
                 overall_success = False
-        
+
         # Step 2: Write to M1 and M2 in parallel
         m1_m2_tasks = []
         m1_m2_types = []
@@ -369,9 +381,10 @@ class ParallelMemoryLayerManager:
 
                 for i, result in enumerate(m1_m2_results):
                     layer_type = m1_m2_types[i]
-                    
+
                     if isinstance(result, Exception):
-                        logger.error(f"ParallelMemoryLayerManager: Layer {layer_type.value} failed: {result}")
+                        logger.error(
+                            f"ParallelMemoryLayerManager: Layer {layer_type.value} failed: {result}")
                         layer_results[layer_type] = LayerWriteResult(
                             success=False,
                             result=None,
@@ -385,11 +398,12 @@ class ParallelMemoryLayerManager:
                         layer_results[layer_type] = result
                         if not result.success:
                             overall_success = False
-                
+
             except Exception as e:
-                logger.error(f"ParallelMemoryLayerManager: M1/M2 parallel write failed: {e}")
+                logger.error(
+                    f"ParallelMemoryLayerManager: M1/M2 parallel write failed: {e}")
                 overall_success = False
-        
+
         return ParallelWriteResult(
             success=overall_success,
             layer_results=layer_results,
@@ -414,7 +428,7 @@ class ParallelMemoryLayerManager:
             while retry_count <= self.retry_config.max_retries:
                 try:
                     logger.debug(f"ParallelMemoryLayerManager: Writing to {layer_type.value} layer "
-                               f"(attempt {retry_count + 1}/{self.retry_config.max_retries + 1})")
+                                 f"(attempt {retry_count + 1}/{self.retry_config.max_retries + 1})")
 
                     # Execute layer processing with timeout
                     result = await asyncio.wait_for(
@@ -429,8 +443,10 @@ class ParallelMemoryLayerManager:
                         # It's a ProcessingResult object
                         return LayerWriteResult(
                             success=result.success,
-                            result=str(result.result) if hasattr(result, 'result') else None,
-                            processed_items=result.processed_items if hasattr(result, 'processed_items') else [],
+                            result=str(result.result) if hasattr(
+                                result, 'result') else None,
+                            processed_items=result.processed_items if hasattr(
+                                result, 'processed_items') else [],
                             processing_time=processing_time,
                             retry_count=retry_count,
                             error_message=None
@@ -452,7 +468,7 @@ class ParallelMemoryLayerManager:
                         break
 
                     logger.warning(f"ParallelMemoryLayerManager: Layer {layer_type.value} timed out, "
-                                 f"retrying in {self._calculate_retry_delay(retry_count)}s")
+                                   f"retrying in {self._calculate_retry_delay(retry_count)}s")
 
                 except Exception as e:
                     last_error = e
@@ -460,7 +476,7 @@ class ParallelMemoryLayerManager:
                         break
 
                     logger.warning(f"ParallelMemoryLayerManager: Layer {layer_type.value} failed: {e}, "
-                                 f"retrying in {self._calculate_retry_delay(retry_count)}s")
+                                   f"retrying in {self._calculate_retry_delay(retry_count)}s")
 
                 # Wait before retry
                 if retry_count < self.retry_config.max_retries:
