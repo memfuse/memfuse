@@ -1229,7 +1229,33 @@ The system validates the following components:
 
 ## Usage Examples
 
-### 1. Immediate Trigger Store Setup
+### 1. Server Startup (Recommended)
+
+**Use the unified development launcher for production:**
+
+```bash
+# Start with database and optimizations (recommended)
+python scripts/memfuse_launcher.py --start-db --optimize-db
+
+# Force recreate database if needed
+python scripts/memfuse_launcher.py --recreate-db --optimize-db
+
+# Run in background
+python scripts/memfuse_launcher.py --start-db --background
+
+# Development mode with logs
+python scripts/memfuse_launcher.py --start-db --show-logs
+```
+
+**Script Features:**
+- ✅ **Automatic database startup** with Docker
+- ✅ **Connection pool optimization** to prevent hanging
+- ✅ **Database optimization** for pgai operations
+- ✅ **Health checks** and connectivity validation
+- ✅ **Graceful shutdown** with signal handling
+- ✅ **Background mode** for production deployment
+
+### 2. Immediate Trigger Store Setup
 
 ```python
 from memfuse_core.store.pgai_store import EventDrivenPgaiStore, PgaiStoreFactory
@@ -1766,7 +1792,66 @@ def analyze_embedding_logs(log_file):
 
 ### Common Issues and Solutions
 
-#### 1. Auto-Embedding Not Working
+#### 1. Connection Pool Initialization Issues
+
+**Symptoms**: Server hangs during startup with "Initializing PgaiStore" message
+
+**Root Cause**: AsyncConnectionPool.open() hangs when multiple connections try to register pgvector simultaneously, causing database lock conflicts.
+
+**Diagnosis**:
+```bash
+# Check if server is hanging during initialization
+docker logs memfuse-pgai-postgres | grep -i lock
+
+# Check for connection pool workers
+docker exec memfuse-pgai-postgres psql -U postgres -d memfuse -c "
+SELECT pid, state, query_start, query
+FROM pg_stat_activity
+WHERE state = 'active' AND query LIKE '%vector%';"
+```
+
+**Solutions**:
+
+1. **Use Optimized Connection Pool Settings** (Already implemented):
+```python
+# The fix uses minimal connection pool size to avoid lock conflicts
+self.pool = AsyncConnectionPool(
+    self.db_url,
+    min_size=1,  # Start with single connection
+    max_size=2,  # Maximum 2 connections to avoid deadlocks
+    open=False,
+    configure=None  # Configure pgvector after pool opens
+)
+```
+
+2. **Apply Database Optimizations**:
+```bash
+# Use the built-in optimization script
+python scripts/memfuse_launcher.py --start-db --optimize-db
+```
+
+3. **Manual Database Optimization**:
+```sql
+-- Reduce lock timeout to prevent hanging
+ALTER SYSTEM SET lock_timeout = '30s';
+ALTER SYSTEM SET max_connections = 50;
+ALTER SYSTEM SET deadlock_timeout = '1s';
+ALTER SYSTEM SET max_locks_per_transaction = 256;
+SELECT pg_reload_conf();
+```
+
+4. **Fallback Single Connection Mode**:
+```python
+# If pool initialization fails, the system automatically falls back
+# to single connection mode with error tolerance
+```
+
+**Prevention**:
+- Use the unified launcher script: `python scripts/memfuse_launcher.py`
+- Always apply database optimizations in production
+- Monitor connection pool metrics
+
+#### 2. Auto-Embedding Not Working
 
 **Symptoms**: Records remain with `needs_embedding=TRUE`
 

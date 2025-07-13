@@ -1,0 +1,136 @@
+name: memfuse-pgai
+services:
+  # PostgreSQL with TimescaleDB + pgvectorscale
+  postgres-pgai:
+    image: timescale/timescaledb:latest-pg17
+    container_name: memfuse-pgai-postgres
+    environment:
+      POSTGRES_DB: memfuse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      # TimescaleDB configuration
+      TIMESCALEDB_TELEMETRY: 'off'
+      # PostgreSQL optimizations for vector operations
+      POSTGRES_SHARED_BUFFERS: '256MB'
+      POSTGRES_EFFECTIVE_CACHE_SIZE: '1GB'
+      POSTGRES_WORK_MEM: '64MB'
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_pgai_data:/var/lib/postgresql/data
+      - ./docker/pgvectorscale/init-scripts:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d memfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # MemFuse application with pgai support
+  memfuse-pgai:
+    build:
+      context: ../..
+      dockerfile: docker/app/Dockerfile
+    container_name: memfuse-pgai-app
+    ports:
+      - "8000:8000"
+    environment:
+      # Database connection
+      - POSTGRES_HOST=postgres-pgai
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=memfuse
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+
+      # MemFuse configuration
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+
+      # Model configuration
+      - EMBEDDING_MODEL=all-MiniLM-L6-v2
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+      # pgai specific settings
+      - PGAI_IMMEDIATE_TRIGGER=true
+      - PGAI_AUTO_EMBEDDING=true
+
+      # Store configuration
+      - STORE_TYPE=pgai
+      - STORE_CONFIG_PATH=/app/config/store_pgai.json
+    volumes:
+      - memfuse_pgai_data:/app/data
+      - memfuse_pgai_logs:/app/logs
+    depends_on:
+      postgres-pgai:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: pgAdmin for database management
+  pgadmin-pgai:
+    image: dpage/pgadmin4:latest
+    container_name: memfuse-pgai-admin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@memfuse.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_pgai_data:/var/lib/pgadmin
+    depends_on:
+      - postgres-pgai
+    profiles:
+      - admin
+    restart: unless-stopped
+
+  # Optional: Redis for caching (if needed for future features)
+  redis-pgai:
+    image: redis:7-alpine
+    container_name: memfuse-pgai-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_pgai_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - cache
+    restart: unless-stopped
+
+volumes:
+  postgres_pgai_data:
+    driver: local
+  memfuse_pgai_data:
+    driver: local
+  memfuse_pgai_logs:
+    driver: local
+  pgadmin_pgai_data:
+    driver: local
+  redis_pgai_data:
+    driver: local
+
+networks:
+  default:
+    name: memfuse-pgai-network
+    driver: bridge

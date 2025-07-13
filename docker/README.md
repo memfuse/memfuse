@@ -13,9 +13,17 @@ docker/
 │   ├── docker-compose.dev.yml    # Development environment
 │   ├── docker-compose.prod.yml   # Production environment
 │   ├── docker-compose.test.yml   # Testing environment
-│   └── docker-compose.local.yml  # Local development
+│   ├── docker-compose.local.yml  # Local development
+│   └── docker-compose.pgai.yml   # PostgreSQL + pgai + pgvector
+├── pgai/
+│   ├── Dockerfile               # PostgreSQL 17 + pgai + pgvector
+│   ├── postgresql.conf          # Optimized PostgreSQL configuration
+│   ├── pg_hba.conf             # Authentication configuration
+│   ├── init-scripts/           # Database initialization scripts
+│   └── README.md               # PgAI documentation
 ├── scripts/
 │   ├── build.sh             # Build management script
+│   ├── build-pgai.sh        # PgAI environment management script
 │   ├── deploy.sh            # Deployment management script
 │   └── health-check.sh      # Health monitoring script
 └── README.md                # This documentation
@@ -30,6 +38,20 @@ make docker-dev
 
 # Or manually
 docker-compose -f docker/compose/docker-compose.dev.yml up -d
+```
+
+### PgAI Environment (PostgreSQL + pgai + pgvector)
+```bash
+# Build and start pgai environment
+./docker/scripts/build-pgai.sh build
+./docker/scripts/build-pgai.sh up
+
+# Test the environment
+./docker/scripts/build-pgai.sh test
+
+# View status and logs
+./docker/scripts/build-pgai.sh status
+./docker/scripts/build-pgai.sh logs
 ```
 
 ### Production Environment
@@ -146,6 +168,16 @@ Monitor service health:
   - Optional Redis for caching experiments
   - Different ports to avoid conflicts
 
+### PgAI (`docker-compose.pgai.yml`)
+- **Purpose**: PostgreSQL with pgai + pgvector extensions
+- **Features**:
+  - PostgreSQL 17 with pgai and pgvector extensions
+  - Real-time embedding generation with immediate triggers
+  - Optimized for vector operations and AI workflows
+  - Optional pgAdmin and Redis services
+  - Comprehensive initialization scripts
+- **Documentation**: See [docker/pgai/README.md](pgai/README.md)
+
 ## 📊 Service Ports
 
 | Environment | PostgreSQL | MemFuse | Additional |
@@ -154,6 +186,7 @@ Monitor service health:
 | Production  | 5432       | 8000    | 80, 443 (Nginx) |
 | Testing     | 5433       | 8000    | -          |
 | Local       | 5434       | 8001    | 8080 (pgAdmin) |
+| PgAI        | 5432       | 8000    | 8080 (pgAdmin), 6379 (Redis) |
 
 ## 🔐 Environment Variables
 

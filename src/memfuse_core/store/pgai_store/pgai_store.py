@@ -155,22 +155,38 @@ class PgaiStore(ChunkStoreInterface):
             # Skip pgai.install() as extensions are already installed in Docker
             logger.debug("Skipping pgai.install() - extensions already available")
             
-            # Create connection pool
+            # Create connection pool with conservative settings
             logger.debug("Creating connection pool...")
             postgres_config = self.db_config.get("postgres", {})
-            pool_size = postgres_config.get("pool_size", 5)
-            max_overflow = postgres_config.get("max_overflow", 10)
 
+            # Use minimal pool size to avoid lock conflicts
+            safe_min_size = 1  # Always start with 1 connection
+            safe_max_size = 2   # Maximum 2 connections to avoid deadlocks
+
+            # First try: Create pool without pgvector configuration
             self.pool = AsyncConnectionPool(
                 self.db_url,
-                min_size=min(pool_size, 3),  # Ensure min_size is reasonable
-                max_size=pool_size + max_overflow,  # max_size should be larger than min_size
+                min_size=safe_min_size,
+                max_size=safe_max_size,
                 open=False,
-                configure=self._setup_pgvector_connection
+                configure=None  # No configuration initially
             )
-            logger.debug(f"Opening connection pool (min_size={min(pool_size, 3)}, max_size={pool_size + max_overflow})")
-            await self.pool.open()
-            logger.debug("Connection pool opened successfully")
+            logger.debug(f"Opening basic connection pool (min_size={safe_min_size}, max_size={safe_max_size})")
+
+            # Open basic pool first
+            try:
+                await asyncio.wait_for(self.pool.open(), timeout=15.0)
+                logger.debug("Basic connection pool opened successfully")
+
+                # Now configure pgvector on existing connections
+                await self._configure_pgvector_on_pool()
+
+            except asyncio.TimeoutError:
+                logger.error("Basic connection pool opening timed out, trying single connection fallback")
+                await self._fallback_single_connection()
+            except Exception as e:
+                logger.error(f"Connection pool creation failed: {e}")
+                await self._fallback_single_connection()
             
             # Create tables and setup vectorizer
             logger.debug("Setting up database schema...")
@@ -209,9 +225,86 @@ class PgaiStore(ChunkStoreInterface):
             logger.error(f"Failed to initialize PgaiStore: {e}")
             return False
     
+    async def _configure_pgvector_on_pool(self):
+        """Configure pgvector on existing pool connections."""
+        logger.debug("Configuring pgvector on existing connections...")
+
+        try:
+            # Test a connection and configure pgvector
+            async with self.pool.connection() as conn:
+                await self._setup_pgvector_connection_safe(conn)
+            logger.debug("pgvector configured successfully on pool")
+        except Exception as e:
+            logger.warning(f"Failed to configure pgvector on pool: {e}")
+            # Continue anyway - basic operations should still work
+
+    async def _fallback_single_connection(self):
+        """Fallback to single connection when pool fails."""
+        logger.info("Using single connection fallback")
+
+        # Close any existing pool
+        if self.pool:
+            try:
+                await self.pool.close()
+            except:
+                pass
+
+        # Create minimal pool with single connection and no initial configuration
+        self.pool = AsyncConnectionPool(
+            self.db_url,
+            min_size=1,
+            max_size=1,
+            open=False,
+            configure=None  # Configure manually after opening
+        )
+
+        try:
+            # Open with minimal timeout
+            await asyncio.wait_for(self.pool.open(), timeout=10.0)
+            logger.info("Single connection pool opened successfully")
+
+            # Configure pgvector manually
+            await self._configure_pgvector_on_pool()
+
+        except Exception as e:
+            logger.error(f"Single connection fallback failed: {e}")
+            raise
+    
+    async def _setup_pgvector_connection_safe(self, conn: psycopg.AsyncConnection):
+        """Safe pgvector setup with error handling."""
+        try:
+            await register_vector_async(conn)
+            logger.debug("pgvector registered successfully for connection")
+        except Exception as e:
+            logger.warning(f"pgvector registration failed, continuing anyway: {e}")
+            # Don't fail the entire initialization for pgvector registration issues
+    
     async def _setup_pgvector_connection(self, conn: psycopg.AsyncConnection):
-        """Setup pgvector for connection."""
-        await register_vector_async(conn)
+        """Setup pgvector for connection with timeout and retry."""
+        max_retries = 2  # Reduce retries to fail faster
+        base_timeout = 5.0  # Shorter timeout
+
+        for attempt in range(max_retries):
+            try:
+                # Progressive timeout: shorter on retries
+                timeout = base_timeout / (attempt + 1)
+                await asyncio.wait_for(register_vector_async(conn), timeout=timeout)
+                logger.debug(f"pgvector registered successfully (attempt {attempt + 1})")
+                return
+            except asyncio.TimeoutError:
+                logger.warning(f"pgvector registration timed out in {timeout}s (attempt {attempt + 1})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5)  # Shorter delay
+                else:
+                    logger.error("pgvector registration failed after all retries - continuing without vector support")
+                    # Don't raise exception - allow connection to work without vector support
+            except Exception as e:
+                logger.warning(f"pgvector registration error (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5)
+                else:
+                    logger.error(f"pgvector registration failed permanently: {e}")
+                    # Don't raise exception - allow basic PostgreSQL operations
     
     async def _run_vectorizer_worker(self):
         """Run vectorizer worker in background."""
@@ -235,10 +328,10 @@ class PgaiStore(ChunkStoreInterface):
 
         logger.debug(f"Schema needs setup for {self.table_name}, proceeding with creation...")
         async with self.pool.connection() as conn:
-            async with conn.cursor() as cur:
+            try:
                 # Create table compatible with existing m0_episodic schema
                 logger.debug(f"Creating table {self.table_name} if not exists...")
-                await cur.execute(f"""
+                await conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {self.table_name} (
                         id TEXT PRIMARY KEY,
                         content TEXT NOT NULL,
@@ -256,7 +349,7 @@ class PgaiStore(ChunkStoreInterface):
 
                 # Add columns if they don't exist (for existing tables)
                 logger.debug("Checking and adding missing columns...")
-                await cur.execute(f"""
+                await conn.execute(f"""
                     DO $$
                     BEGIN
                         IF NOT EXISTS (
@@ -298,20 +391,20 @@ class PgaiStore(ChunkStoreInterface):
                 logger.debug("Column checks completed")
 
                 # Create indexes for performance
-                await cur.execute(f"""
+                await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_{self.table_name}_created
                     ON {self.table_name}(created_at)
                 """)
 
                 # Create index for retry mechanism
-                await cur.execute(f"""
+                await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_{self.table_name}_needs_embedding
                     ON {self.table_name}(needs_embedding, retry_status)
                     WHERE needs_embedding = TRUE
                 """)
 
                 # Create trigger to update updated_at timestamp
-                await cur.execute(f"""
+                await conn.execute(f"""
                     CREATE OR REPLACE FUNCTION update_{self.table_name}_updated_at()
                     RETURNS TRIGGER AS $$
                     BEGIN
@@ -321,12 +414,12 @@ class PgaiStore(ChunkStoreInterface):
                     $$ LANGUAGE plpgsql;
                 """)
 
-                await cur.execute(f"""
+                await conn.execute(f"""
                     DROP TRIGGER IF EXISTS trigger_update_{self.table_name}_updated_at
                     ON {self.table_name};
                 """)
 
-                await cur.execute(f"""
+                await conn.execute(f"""
                     CREATE TRIGGER trigger_update_{self.table_name}_updated_at
                         BEFORE UPDATE ON {self.table_name}
                         FOR EACH ROW
@@ -335,10 +428,16 @@ class PgaiStore(ChunkStoreInterface):
 
                 # Setup immediate trigger mechanism if enabled
                 if self.pgai_config.get("immediate_trigger", False):
-                    await self._setup_immediate_trigger()
+                    await self._setup_immediate_trigger_in_transaction(conn)
 
-            await conn.commit()
-            logger.debug(f"Schema setup completed for table: {self.table_name}")
+                # Commit all schema changes
+                await conn.commit()
+                logger.debug(f"Schema setup completed for table: {self.table_name}")
+
+            except Exception as e:
+                await conn.rollback()
+                logger.error(f"Schema setup failed for {self.table_name}: {e}")
+                raise
 
     async def _is_schema_ready(self) -> bool:
         """Check if the schema is already properly set up to avoid unnecessary operations."""
@@ -429,41 +528,49 @@ class PgaiStore(ChunkStoreInterface):
             logger.error(f"Failed to setup embedding automation: {e}")
             logger.info("Falling back to manual embedding generation")
 
+    async def _setup_immediate_trigger_in_transaction(self, conn):
+        """Setup immediate trigger mechanism within existing transaction."""
+        logger.debug(f"Starting immediate trigger setup for {self.table_name}")
+
+        # Create notification function for immediate embedding trigger
+        logger.debug(f"Creating notification function for {self.table_name}")
+        await conn.execute(f"""
+            CREATE OR REPLACE FUNCTION notify_embedding_needed_{self.table_name}()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                -- Send notification with record ID for immediate processing
+                PERFORM pg_notify('embedding_needed_{self.table_name}', NEW.id);
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
+        logger.debug(f"Notification function created for {self.table_name}")
+
+        # Create trigger for immediate notification on INSERT
+        logger.debug(f"Creating immediate trigger for {self.table_name}")
+        await conn.execute(f"""
+            DROP TRIGGER IF EXISTS trigger_immediate_embedding_{self.table_name} ON {self.table_name};
+            CREATE TRIGGER trigger_immediate_embedding_{self.table_name}
+                AFTER INSERT ON {self.table_name}
+                FOR EACH ROW
+                WHEN (NEW.needs_embedding = TRUE AND NEW.content IS NOT NULL)
+                EXECUTE FUNCTION notify_embedding_needed_{self.table_name}();
+        """)
+        logger.debug(f"Immediate trigger created for {self.table_name}")
+
     async def _setup_immediate_trigger(self):
         """Setup immediate trigger mechanism using PostgreSQL NOTIFY/LISTEN."""
         logger.debug(f"Starting immediate trigger setup for {self.table_name}")
 
         async with self.pool.connection() as conn:
-            async with conn.cursor() as cur:
-                # Create notification function for immediate embedding trigger
-                logger.debug(f"Creating notification function for {self.table_name}")
-                await cur.execute(f"""
-                    CREATE OR REPLACE FUNCTION notify_embedding_needed_{self.table_name}()
-                    RETURNS TRIGGER AS $$
-                    BEGIN
-                        -- Send notification with record ID for immediate processing
-                        PERFORM pg_notify('embedding_needed_{self.table_name}', NEW.id);
-                        RETURN NEW;
-                    END;
-                    $$ LANGUAGE plpgsql;
-                """)
-                logger.debug(f"Notification function created for {self.table_name}")
-
-                # Create trigger for immediate notification on INSERT
-                logger.debug(f"Creating immediate trigger for {self.table_name}")
-                await cur.execute(f"""
-                    DROP TRIGGER IF EXISTS trigger_immediate_embedding_{self.table_name} ON {self.table_name};
-                    CREATE TRIGGER trigger_immediate_embedding_{self.table_name}
-                        AFTER INSERT ON {self.table_name}
-                        FOR EACH ROW
-                        WHEN (NEW.needs_embedding = TRUE AND NEW.content IS NOT NULL)
-                        EXECUTE FUNCTION notify_embedding_needed_{self.table_name}();
-                """)
-                logger.debug(f"Immediate trigger created for {self.table_name}")
-
-            logger.debug(f"Committing immediate trigger transaction for {self.table_name}")
-            await conn.commit()
-            logger.debug(f"Immediate trigger mechanism setup completed for {self.table_name}")
+            try:
+                await self._setup_immediate_trigger_in_transaction(conn)
+                await conn.commit()
+                logger.debug(f"Immediate trigger mechanism setup completed for {self.table_name}")
+            except Exception as e:
+                await conn.rollback()
+                logger.error(f"Failed to setup immediate trigger for {self.table_name}: {e}")
+                raise
 
     async def _create_embedding_trigger(self):
         """Create database trigger for automatic embedding generation."""

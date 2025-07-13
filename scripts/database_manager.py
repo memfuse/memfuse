@@ -23,7 +23,7 @@ class DatabaseManager:
     """Unified database management for MemFuse."""
     
     def __init__(self):
-        self.container_name = 'memfuse-pgai-postgres-1'
+        self.container_name = 'memfuse-pgai-postgres'
         self.db_name = 'memfuse'
         self.db_user = 'postgres'
     
@@ -89,9 +89,18 @@ class DatabaseManager:
         """, "tuples")
         
         if tables_result:
-            tables = [line.strip().split('|')[0] for line in tables_result.split('\n') if line.strip()]
+            tables = []
+            for line in tables_result.split('\n'):
+                if line.strip():
+                    # Handle both pipe-separated and space-separated formats
+                    if '|' in line:
+                        table_name = line.strip().split('|')[0].strip()
+                    else:
+                        table_name = line.strip().split()[0].strip()
+                    if table_name:
+                        tables.append(table_name)
             status['tables'] = {table: True for table in tables}
-            print(f"Tables found: {', '.join(tables)}")
+            print(f"Tables found: {', '.join(f'{table:<18}' for table in tables)}")
         
         # Check m0_episodic specifically
         if 'm0_episodic' in status['tables']:

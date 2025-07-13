@@ -1,6 +1,6 @@
 """User API endpoints."""
 
-import logging
+from loguru import logger
 from fastapi import APIRouter, Depends, status
 from typing import Optional
 
@@ -24,10 +24,6 @@ from ..utils import (
 
 
 router = APIRouter()
-
-# Configure logging
-logger = logging.getLogger(__name__)
-
 
 @router.get("/", response_model=ApiResponse)
 # Also handle path without trailing slash
