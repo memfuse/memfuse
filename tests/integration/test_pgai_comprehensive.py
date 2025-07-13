@@ -13,7 +13,7 @@ from typing import List
 from unittest.mock import patch, AsyncMock
 
 from src.memfuse_core.store.pgai_store import PgaiStore
-from src.memfuse_core.store.pgai_vector_wrapper import PgaiVectorWrapper
+from src.memfuse_core.store.pgai_store.pgai_vector_wrapper import PgaiVectorWrapper
 from src.memfuse_core.rag.chunk.base import ChunkData
 from src.memfuse_core.rag.encode.MiniLM import MiniLMEncoder
 from src.memfuse_core.models import Query
@@ -270,7 +270,7 @@ class TestPgaiComprehensive:
         """Test that all required imports are available."""
         # Test that we can import all necessary components
         from src.memfuse_core.store.pgai_store import PgaiStore
-        from src.memfuse_core.store.pgai_vector_wrapper import PgaiVectorWrapper
+        from src.memfuse_core.store.pgai_store.pgai_vector_wrapper import PgaiVectorWrapper
         from src.memfuse_core.rag.chunk.base import ChunkData
         from src.memfuse_core.models import Query
         

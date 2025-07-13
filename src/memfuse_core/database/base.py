@@ -821,9 +821,9 @@ class Database:
         Returns:
             List of message data
         """
-        # Get messages from both traditional messages table and m0_messages table
+        # Get messages from both traditional messages table and m0_episodic table
         messages = []
-        
+
         # First, get messages from traditional messages table (rounds-based)
         rounds = self.backend.select('rounds', {'session_id': session_id})
         if rounds:
@@ -831,9 +831,9 @@ class Database:
                 round_messages = self.get_messages_by_round(round_data['id'])
                 messages.extend(round_messages)
 
-        # Second, get messages from m0_messages table (memory hierarchy)
-        m0_messages = self.get_m0_messages_by_session(session_id)
-        messages.extend(m0_messages)
+        # Second, get messages from m0_episodic table (memory hierarchy)
+        m0_episodic = self.get_m0_episodic_by_session(session_id)
+        messages.extend(m0_episodic)
 
         # Sort messages based on the specified field and order
         if sort_by == 'timestamp':
@@ -849,51 +849,51 @@ class Database:
 
         return messages
 
-    def get_m0_messages_by_session(self, session_id: str) -> List[Dict[str, Any]]:
-        """Get messages from m0_messages table for a specific session.
+    def get_m0_episodic_by_session(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get messages from m0_episodic table for a specific session.
 
         Args:
             session_id: Session ID to filter by
 
         Returns:
-            List of message data from m0_messages table
+            List of message data from m0_episodic table
         """
         import json
         from datetime import datetime
         
         try:
-            # Get all messages from m0_messages table
-            all_m0_messages = self.backend.select('m0_messages')
+            # Get all messages from m0_episodic table
+            all_m0_episodic = self.backend.select('m0_episodic')
             
             session_messages = []
-            for message in all_m0_messages:
+            for message in all_m0_episodic:
                 try:
                     # Parse metadata JSON to check for session_id
                     metadata_str = message.get('metadata', '{}')
                     if metadata_str:
                         metadata = json.loads(metadata_str) if isinstance(metadata_str, str) else metadata_str
                         if metadata.get('session_id') == session_id:
-                            # Convert m0_message format to standard message format
+                            # Convert m0_episodic format to standard message format
                             formatted_message = {
                                 'id': message['id'],
                                 'role': metadata.get('role', 'user'),  # Default to 'user' if no role
                                 'content': message['content'],
                                 'created_at': self._convert_timestamp(message.get('created_at')),
                                 'updated_at': self._convert_timestamp(message.get('updated_at')),
-                                'round_id': None,  # m0_messages don't have round_id
+                                'round_id': None,  # m0_episodic don't have round_id
                                 'metadata': metadata
                             }
                             session_messages.append(formatted_message)
                 except (json.JSONDecodeError, TypeError) as e:
                     # Skip messages with invalid metadata
-                    logger.warning(f"Invalid metadata in m0_message {message.get('id')}: {e}")
+                    logger.warning(f"Invalid metadata in m0_episodic {message.get('id')}: {e}")
                     continue
-            
-            logger.info(f"Retrieved {len(session_messages)} messages from m0_messages for session {session_id}")
+
+            logger.info(f"Retrieved {len(session_messages)} messages from m0_episodic for session {session_id}")
             return session_messages
-            
+
         except Exception as e:
-            logger.error(f"Error getting m0_messages by session: {e}")
+            logger.error(f"Error getting m0_episodic by session: {e}")
             return []
 
     def _convert_timestamp(self, timestamp) -> Optional[str]:

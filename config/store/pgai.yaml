@@ -64,10 +64,10 @@ pgai:
 tables:
   # M0 layer tables
   m0:
-    messages: "m0_messages"
+    messages: "m0_episodic"
     metadata: "m0_metadata"
-    embedding_view: "m0_messages_embedding"
-    vectorizer_name: "m0_messages_vectorizer"
+    embedding_view: "m0_episodic_embedding"
+    vectorizer_name: "m0_episodic_vectorizer"
     
   # M1 layer tables (for future implementation)
   m1:

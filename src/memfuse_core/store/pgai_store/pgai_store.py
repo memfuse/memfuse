@@ -88,7 +88,7 @@ class PgaiStore(ChunkStoreInterface):
     while maintaining compatibility with existing MemFuse schema.
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None, table_name: str = "m0_messages"):
+    def __init__(self, config: Optional[Dict[str, Any]] = None, table_name: str = "m0_episodic"):
         """Initialize pgai store.
 
         Args:
@@ -172,9 +172,15 @@ class PgaiStore(ChunkStoreInterface):
             # Create vectorizer if enabled and not exists
             if self.pgai_config.get("auto_embedding", False):
                 await self._create_vectorizer()
-                # Start background embedding processor
-                asyncio.create_task(self._process_pending_embeddings())
-                logger.info("pgai auto-embedding enabled with background processor")
+
+                # Choose processing mode based on configuration
+                if self.pgai_config.get("immediate_trigger", False):
+                    # Event-driven mode will be handled by EventDrivenPgaiStore
+                    logger.info("pgai auto-embedding configured for immediate trigger mode")
+                else:
+                    # Start traditional background embedding processor
+                    asyncio.create_task(self._process_pending_embeddings())
+                    logger.info("pgai auto-embedding enabled with background processor")
             else:
                 logger.debug("pgai auto_embedding disabled, using manual embedding approach")
             
@@ -205,7 +211,7 @@ class PgaiStore(ChunkStoreInterface):
         """Create the messages table schema compatible with existing MemFuse schema."""
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                # Create table compatible with existing m0_messages schema
+                # Create table compatible with existing m0_episodic schema
                 await cur.execute(f"""
                     CREATE TABLE IF NOT EXISTS {self.table_name} (
                         id TEXT PRIMARY KEY,
@@ -213,6 +219,9 @@ class PgaiStore(ChunkStoreInterface):
                         metadata JSONB DEFAULT '{{}}',
                         embedding VECTOR(384),
                         needs_embedding BOOLEAN DEFAULT TRUE,
+                        retry_count INTEGER DEFAULT 0,
+                        last_retry_at TIMESTAMP,
+                        retry_status TEXT DEFAULT 'pending',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
@@ -235,6 +244,27 @@ class PgaiStore(ChunkStoreInterface):
                         ) THEN
                             ALTER TABLE {self.table_name} ADD COLUMN needs_embedding BOOLEAN DEFAULT TRUE;
                         END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = '{self.table_name}' AND column_name = 'retry_count'
+                        ) THEN
+                            ALTER TABLE {self.table_name} ADD COLUMN retry_count INTEGER DEFAULT 0;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = '{self.table_name}' AND column_name = 'last_retry_at'
+                        ) THEN
+                            ALTER TABLE {self.table_name} ADD COLUMN last_retry_at TIMESTAMP;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = '{self.table_name}' AND column_name = 'retry_status'
+                        ) THEN
+                            ALTER TABLE {self.table_name} ADD COLUMN retry_status TEXT DEFAULT 'pending';
+                        END IF;
                     END $$;
                 """)
 
@@ -242,6 +272,13 @@ class PgaiStore(ChunkStoreInterface):
                 await cur.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_{self.table_name}_created
                     ON {self.table_name}(created_at)
+                """)
+
+                # Create index for retry mechanism
+                await cur.execute(f"""
+                    CREATE INDEX IF NOT EXISTS idx_{self.table_name}_needs_embedding
+                    ON {self.table_name}(needs_embedding, retry_status)
+                    WHERE needs_embedding = TRUE
                 """)
 
                 # Create trigger to update updated_at timestamp
@@ -267,6 +304,10 @@ class PgaiStore(ChunkStoreInterface):
                         EXECUTE FUNCTION update_{self.table_name}_updated_at();
                 """)
 
+                # Setup immediate trigger mechanism if enabled
+                if self.pgai_config.get("immediate_trigger", False):
+                    await self._setup_immediate_trigger()
+
             await conn.commit()
             logger.debug(f"Schema setup completed for table: {self.table_name}")
 
@@ -289,6 +330,35 @@ class PgaiStore(ChunkStoreInterface):
             logger.error(f"Failed to setup embedding automation: {e}")
             logger.info("Falling back to manual embedding generation")
 
+    async def _setup_immediate_trigger(self):
+        """Setup immediate trigger mechanism using PostgreSQL NOTIFY/LISTEN."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                # Create notification function for immediate embedding trigger
+                await cur.execute(f"""
+                    CREATE OR REPLACE FUNCTION notify_embedding_needed_{self.table_name}()
+                    RETURNS TRIGGER AS $$
+                    BEGIN
+                        -- Send notification with record ID for immediate processing
+                        PERFORM pg_notify('embedding_needed_{self.table_name}', NEW.id);
+                        RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql;
+                """)
+
+                # Create trigger for immediate notification on INSERT
+                await cur.execute(f"""
+                    DROP TRIGGER IF EXISTS trigger_immediate_embedding_{self.table_name} ON {self.table_name};
+                    CREATE TRIGGER trigger_immediate_embedding_{self.table_name}
+                        AFTER INSERT ON {self.table_name}
+                        FOR EACH ROW
+                        WHEN (NEW.needs_embedding = TRUE AND NEW.content IS NOT NULL)
+                        EXECUTE FUNCTION notify_embedding_needed_{self.table_name}();
+                """)
+
+            await conn.commit()
+            logger.debug(f"Immediate trigger mechanism setup completed for {self.table_name}")
+
     async def _create_embedding_trigger(self):
         """Create database trigger for automatic embedding generation."""
         async with self.pool.connection() as conn:
@@ -302,6 +372,8 @@ class PgaiStore(ChunkStoreInterface):
                         -- The embedding will be generated by the application
                         NEW.embedding = NULL;
                         NEW.needs_embedding = TRUE;
+                        NEW.retry_count = 0;
+                        NEW.retry_status = 'pending';
                         RETURN NEW;
                     END;
                     $$ LANGUAGE plpgsql;
@@ -321,22 +393,36 @@ class PgaiStore(ChunkStoreInterface):
             logger.debug(f"Embedding trigger created for {self.table_name}")
 
     async def _process_pending_embeddings(self):
-        """Background task to process records that need embeddings."""
+        """Background task to process records that need embeddings with retry support."""
+        max_retries = self.pgai_config.get("max_retries", 3)
+        retry_interval = self.pgai_config.get("retry_interval", 5.0)
+
         while True:
             try:
-                await asyncio.sleep(5)  # Check every 5 seconds
+                await asyncio.sleep(retry_interval)  # Use configurable interval
 
                 if not self.initialized:
                     continue
 
-                # Get records that need embeddings
+                # Get records that need embeddings, excluding permanently failed ones
                 async with self.pool.connection() as conn:
                     async with conn.cursor() as cur:
                         await cur.execute(f"""
-                            SELECT id, content FROM {self.table_name}
-                            WHERE needs_embedding = TRUE AND content IS NOT NULL
+                            SELECT id, content, retry_count, last_retry_at
+                            FROM {self.table_name}
+                            WHERE needs_embedding = TRUE
+                            AND content IS NOT NULL
+                            AND (retry_status != 'failed' OR retry_status IS NULL)
+                            AND (retry_count < %s OR retry_count IS NULL)
+                            AND (
+                                last_retry_at IS NULL
+                                OR last_retry_at < NOW() - INTERVAL '%s seconds'
+                            )
+                            ORDER BY
+                                CASE WHEN retry_count IS NULL THEN 0 ELSE retry_count END,
+                                created_at ASC
                             LIMIT 10
-                        """)
+                        """, (max_retries, retry_interval))
 
                         pending_records = await cur.fetchall()
 
@@ -346,28 +432,56 @@ class PgaiStore(ChunkStoreInterface):
                         logger.info(f"Processing {len(pending_records)} pending embeddings")
 
                         # Process each record
-                        for record_id, content in pending_records:
+                        for record_id, content, retry_count, last_retry_at in pending_records:
+                            current_retry_count = retry_count or 0
+                            is_retry = current_retry_count > 0
+
                             try:
+                                # Mark as processing and increment retry count
+                                await cur.execute(f"""
+                                    UPDATE {self.table_name}
+                                    SET retry_count = %s,
+                                        last_retry_at = CURRENT_TIMESTAMP,
+                                        retry_status = 'processing'
+                                    WHERE id = %s
+                                """, (current_retry_count + 1, record_id))
+
                                 # Generate embedding
                                 embedding = await self._generate_embedding(content)
 
-                                # Update record with embedding
+                                # Update record with embedding and mark as completed
                                 await cur.execute(f"""
                                     UPDATE {self.table_name}
-                                    SET embedding = %s, needs_embedding = FALSE
+                                    SET embedding = %s,
+                                        needs_embedding = FALSE,
+                                        retry_count = 0,
+                                        retry_status = 'completed',
+                                        last_retry_at = NULL
                                     WHERE id = %s
                                 """, (embedding, record_id))
 
-                                logger.debug(f"Generated embedding for record {record_id}")
+                                logger.debug(f"Generated embedding for record {record_id} (retry: {is_retry})")
 
                             except Exception as e:
                                 logger.error(f"Failed to generate embedding for record {record_id}: {e}")
-                                # Mark as failed but don't retry immediately
-                                await cur.execute(f"""
-                                    UPDATE {self.table_name}
-                                    SET needs_embedding = FALSE
-                                    WHERE id = %s
-                                """, (record_id,))
+
+                                # Check if we should retry or mark as failed
+                                if current_retry_count + 1 >= max_retries:
+                                    # Mark as permanently failed
+                                    await cur.execute(f"""
+                                        UPDATE {self.table_name}
+                                        SET retry_status = 'failed'
+                                        WHERE id = %s
+                                    """, (record_id,))
+                                    logger.warning(f"Record {record_id} marked as failed after {max_retries} retries")
+                                else:
+                                    # Mark as pending for retry
+                                    await cur.execute(f"""
+                                        UPDATE {self.table_name}
+                                        SET retry_status = 'pending'
+                                        WHERE id = %s
+                                    """, (record_id,))
+                                    logger.info(f"Record {record_id} will be retried (attempt {current_retry_count + 1}/{max_retries})")
 
                     await conn.commit()
 

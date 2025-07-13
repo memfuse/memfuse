@@ -78,9 +78,9 @@ class TestPgaiIntegration:
             mock_config_manager.get_config.return_value = mock_config
             
             # Mock pgai availability and components for integration testing
-            with patch('src.memfuse_core.store.pgai_store.PGAI_AVAILABLE', True):
-                with patch('src.memfuse_core.store.pgai_store.pgai') as mock_pgai:
-                    with patch('src.memfuse_core.store.pgai_store.AsyncConnectionPool') as mock_pool:
+            with patch('src.memfuse_core.store.pgai_store.pgai_store.PGAI_AVAILABLE', True):
+                with patch('src.memfuse_core.store.pgai_store.pgai_store.pgai') as mock_pgai:
+                    with patch('src.memfuse_core.store.pgai_store.pgai_store.AsyncConnectionPool') as mock_pool:
                         store = PgaiStore(table_name="integration_test_messages")
                         
                         # Mock successful initialization

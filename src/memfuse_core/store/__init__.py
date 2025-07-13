@@ -9,6 +9,9 @@ from .vector_store.base import VectorStore
 from .graph_store.base import GraphStore
 from .keyword_store.base import KeywordStore
 
+# Export pgai store implementations
+from .pgai_store import PgaiStore, PgaiStoreFactory, create_pgai_store
+
 # Export retrieval implementations
 from ..rag.base import BaseRetrieval
 
@@ -51,4 +54,9 @@ __all__ = [
 
     # Keyword store implementations
     'SQLiteKeywordStore',
+
+    # PgAI store implementations
+    'PgaiStore',
+    'PgaiStoreFactory',
+    'create_pgai_store',
 ]

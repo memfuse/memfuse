@@ -160,6 +160,40 @@ async def mock_buffer_service(mock_memory_service, mock_config):
     return service
 
 
+@pytest.fixture
+def pgai_test_config():
+    """Test configuration for pgai store."""
+    return {
+        "database": {
+            "postgres": {
+                "host": "localhost",
+                "port": 5432,
+                "database": "memfuse_test",
+                "user": "postgres",
+                "password": "postgres"
+            },
+            "pgai": {
+                "enabled": True,
+                "auto_embedding": True,
+                "immediate_trigger": True,
+                "max_retries": 2,
+                "retry_interval": 1.0,
+                "worker_count": 2,
+                "queue_size": 100,
+                "enable_metrics": True
+            }
+        }
+    }
+
+
+@pytest.fixture
+def mock_embedding_model():
+    """Mock embedding model for testing."""
+    model = AsyncMock()
+    model.encode.return_value = [0.1] * 384
+    return model
+
+
 # Test markers
 pytest_plugins = []
 
@@ -182,9 +216,25 @@ def pytest_configure(config):
     )
 
 
+def pytest_addoption(parser):
+    """Add command line options for pytest."""
+    parser.addoption(
+        "--integration",
+        action="store_true",
+        default=False,
+        help="run integration tests"
+    )
+
+
 # Test collection configuration
 def pytest_collection_modifyitems(config, items):
     """Modify test collection to add markers based on file paths."""
+    # Handle integration test environment variable
+    if config.getoption("--integration"):
+        os.environ["SKIP_INTEGRATION"] = "false"
+    else:
+        os.environ["SKIP_INTEGRATION"] = "true"
+
     for item in items:
         # Add markers based on file path
         if "unit" in str(item.fspath):
@@ -193,7 +243,7 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.integration)
         elif "e2e" in str(item.fspath):
             item.add_marker(pytest.mark.e2e)
-        
+
         # Add chunking marker for chunk-related tests
         if "chunk" in str(item.fspath) or "chunking" in item.name:
             item.add_marker(pytest.mark.chunking)

@@ -215,11 +215,12 @@ class StoreFactory:
                 **kwargs
             )
         elif backend == StoreBackend.PGAI:
-            from .pgai_store import PgaiStore
-            # For pgai, we create a wrapper that implements VectorStore interface
+            # Use the new PgaiStoreFactory for automatic store selection
+            from .store_factory import PgaiStoreFactory
             from .pgai_vector_wrapper import PgaiVectorWrapper
 
-            pgai_store = PgaiStore(
+            # Create appropriate pgai store (traditional or event-driven)
+            pgai_store = PgaiStoreFactory.create_store(
                 table_name=kwargs.get('table_name', 'm0_messages')
             )
             # Set encoder on pgai_store for direct access to embedding generation

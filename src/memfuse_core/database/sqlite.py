@@ -147,9 +147,9 @@ class SQLiteDB(DBBase):
         )
         ''')
 
-        # Create M0 messages table for memory hierarchy storage
+        # Create M0 episodic table for memory hierarchy storage
         self.execute('''
-        CREATE TABLE IF NOT EXISTS m0_messages (
+        CREATE TABLE IF NOT EXISTS m0_episodic (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             metadata TEXT,

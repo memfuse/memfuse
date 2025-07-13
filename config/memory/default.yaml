@@ -40,7 +40,7 @@ layers:
 
     # M0 storage tables
     storage:
-      message_table: "m0_messages"
+      message_table: "m0_episodic"
       metadata_table: "m0_metadata"
 
   # M1: Semantic Memory - Fact extraction and processing

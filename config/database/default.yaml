@@ -28,5 +28,24 @@ pgai:
   chunk_size: 1000
   chunk_overlap: 200
   batch_size: 100
-  max_retries: 3
-  retry_delay: 5.0
+
+  # Immediate trigger configuration
+  immediate_trigger: true          # Enable immediate trigger mechanism
+  use_polling_fallback: false      # Whether to keep polling as backup
+
+  # Retry mechanism configuration
+  max_retries: 3                   # Maximum retry attempts
+  retry_interval: 5.0              # Retry interval in seconds
+  retry_timeout: 300               # Retry timeout in seconds
+
+  # Worker pool configuration
+  worker_count: 3                  # Number of concurrent worker threads
+  queue_size: 1000                 # Maximum queue capacity
+  batch_processing: false          # Whether to use batch processing
+
+  # Legacy polling configuration (for fallback)
+  retry_delay: 5.0                 # Legacy polling interval
+
+  # Monitoring configuration
+  enable_metrics: true             # Enable performance monitoring
+  log_level: "INFO"               # Log level for embedding operations
