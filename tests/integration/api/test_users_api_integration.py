@@ -1,0 +1,253 @@
+"""
+Integration tests for Users API.
+
+These tests validate that Users API operations actually persist data 
+to the database and work correctly with real database operations.
+"""
+
+import pytest
+from typing import Dict, Any
+from fastapi.testclient import TestClient
+
+
+class TestUsersAPIIntegration:
+    """Integration tests for Users API endpoints."""
+
+    def test_create_user_persistence(self, client: TestClient, headers: Dict[str, str],
+                                   test_user_data: Dict[str, Any], database_connection,
+                                   integration_helper, mock_embedding_service):
+        """Test that creating a user actually persists to database."""
+        # Create user via API
+        response = client.post("/api/v1/users", json=test_user_data, headers=headers)
+        
+        # Verify API response
+        assert response.status_code == 201
+        response_data = response.json()
+        assert response_data["status"] == "success"
+        assert "user" in response_data["data"]
+        
+        user_data = response_data["data"]["user"]
+        user_id = user_data["id"]
+        
+        # Verify user data in response
+        assert user_data["name"] == test_user_data["name"]
+        assert user_data["description"] == test_user_data["description"]
+        assert "created_at" in user_data
+        assert "updated_at" in user_data
+        
+        # Verify user actually exists in database
+        assert integration_helper.verify_database_record_exists(
+            database_connection, "users", user_id
+        )
+        
+        # Verify database record details
+        cursor = database_connection.conn.cursor()
+        cursor.execute(
+            "SELECT id, name, description, created_at, updated_at FROM users WHERE id = %s",
+            (user_id,)
+        )
+        db_record = cursor.fetchone()
+        cursor.close()
+        
+        assert db_record is not None
+        assert db_record[0] == user_id
+        assert db_record[1] == test_user_data["name"]
+        assert db_record[2] == test_user_data["description"]
+        assert db_record[3] is not None  # created_at
+        assert db_record[4] is not None  # updated_at
+
+    def test_get_user_from_database(self, client: TestClient, headers: Dict[str, str],
+                                   test_user_data: Dict[str, Any], integration_helper,
+                                   mock_embedding_service):
+        """Test that getting a user retrieves actual database data."""
+        # Create user first
+        user = integration_helper.create_user_via_api(client, headers, test_user_data)
+        user_id = user["id"]
+        
+        # Get user via API
+        response = client.get(f"/api/v1/users/{user_id}", headers=headers)
+        
+        # Verify response
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["status"] == "success"
+        
+        retrieved_user = response_data["data"]["user"]
+        assert retrieved_user["id"] == user_id
+        assert retrieved_user["name"] == test_user_data["name"]
+        assert retrieved_user["description"] == test_user_data["description"]
+
+    def test_update_user_persistence(self, client: TestClient, headers: Dict[str, str],
+                                    test_user_data: Dict[str, Any], database_connection,
+                                    integration_helper, mock_embedding_service):
+        """Test that updating a user actually modifies database record."""
+        # Create user first
+        user = integration_helper.create_user_via_api(client, headers, test_user_data)
+        user_id = user["id"]
+        
+        # Update user data
+        updated_data = {
+            "name": "updated_integration_test_user",
+            "description": "Updated description for integration testing"
+        }
+        
+        # Update via API
+        response = client.put(f"/api/v1/users/{user_id}", json=updated_data, headers=headers)
+        
+        # Verify API response
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["status"] == "success"
+        
+        updated_user = response_data["data"]["user"]
+        assert updated_user["name"] == updated_data["name"]
+        assert updated_user["description"] == updated_data["description"]
+        
+        # Verify database record was actually updated
+        cursor = database_connection.conn.cursor()
+        cursor.execute(
+            "SELECT name, description, updated_at FROM users WHERE id = %s",
+            (user_id,)
+        )
+        db_record = cursor.fetchone()
+        cursor.close()
+        
+        assert db_record is not None
+        assert db_record[0] == updated_data["name"]
+        assert db_record[1] == updated_data["description"]
+        assert db_record[2] is not None  # updated_at should be set
+
+    def test_delete_user_persistence(self, client: TestClient, headers: Dict[str, str],
+                                    test_user_data: Dict[str, Any], database_connection,
+                                    integration_helper, mock_embedding_service):
+        """Test that deleting a user actually removes it from database."""
+        # Create user first
+        user = integration_helper.create_user_via_api(client, headers, test_user_data)
+        user_id = user["id"]
+        
+        # Verify user exists in database
+        assert integration_helper.verify_database_record_exists(
+            database_connection, "users", user_id
+        )
+        
+        # Delete via API
+        response = client.delete(f"/api/v1/users/{user_id}", headers=headers)
+        
+        # Verify API response
+        assert response.status_code == 204
+        
+        # Verify user no longer exists in database
+        assert not integration_helper.verify_database_record_exists(
+            database_connection, "users", user_id
+        )
+
+    def test_list_users_from_database(self, client: TestClient, headers: Dict[str, str],
+                                     test_user_data: Dict[str, Any], database_connection,
+                                     integration_helper, mock_embedding_service):
+        """Test that listing users returns actual database records."""
+        # Create multiple users
+        user1_data = {**test_user_data, "name": "integration_test_user_1"}
+        user2_data = {**test_user_data, "name": "integration_test_user_2"}
+        
+        user1 = integration_helper.create_user_via_api(client, headers, user1_data)
+        user2 = integration_helper.create_user_via_api(client, headers, user2_data)
+        
+        # Get users list via API
+        response = client.get("/api/v1/users", headers=headers)
+        
+        # Verify response
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["status"] == "success"
+        
+        users_list = response_data["data"]["users"]
+        assert len(users_list) >= 2  # At least our two test users
+        
+        # Verify our test users are in the list
+        user_ids = {user["id"] for user in users_list}
+        assert user1["id"] in user_ids
+        assert user2["id"] in user_ids
+
+    def test_user_name_uniqueness_database_constraint(self, client: TestClient,
+                                                     headers: Dict[str, str],
+                                                     test_user_data: Dict[str, Any],
+                                                     integration_helper,
+                                                     mock_embedding_service):
+        """Test that duplicate user names are handled by database constraints."""
+        # Create first user
+        user1 = integration_helper.create_user_via_api(client, headers, test_user_data)
+        
+        # Try to create second user with same name
+        response = client.post("/api/v1/users", json=test_user_data, headers=headers)
+        
+        # Verify duplicate name is rejected
+        assert response.status_code == 409
+        response_data = response.json()
+        assert response_data["status"] == "error"
+        assert "already exists" in response_data["message"].lower()
+
+    def test_user_cascade_deletion_with_sessions(self, client: TestClient,
+                                                headers: Dict[str, str],
+                                                test_user_data: Dict[str, Any],
+                                                test_agent_data: Dict[str, Any],
+                                                test_session_data,
+                                                database_connection,
+                                                integration_helper,
+                                                mock_embedding_service):
+        """Test that deleting a user properly cascades to related sessions."""
+        # Create user and agent
+        user = integration_helper.create_user_via_api(client, headers, test_user_data)
+        agent = integration_helper.create_agent_via_api(client, headers, test_agent_data)
+        
+        # Create session with user
+        session_data = test_session_data(user["id"], agent["id"])
+        session = integration_helper.create_session_via_api(client, headers, session_data)
+        
+        # Verify session exists
+        assert integration_helper.verify_database_record_exists(
+            database_connection, "sessions", session["id"]
+        )
+        
+        # Delete user
+        response = client.delete(f"/api/v1/users/{user['id']}", headers=headers)
+        assert response.status_code == 204
+        
+        # Verify user is deleted
+        assert not integration_helper.verify_database_record_exists(
+            database_connection, "users", user["id"]
+        )
+        
+        # Verify session is also deleted (cascade)
+        assert not integration_helper.verify_database_record_exists(
+            database_connection, "sessions", session["id"]
+        )
+
+    def test_database_transaction_rollback_on_error(self, client: TestClient,
+                                                   headers: Dict[str, str],
+                                                   database_connection,
+                                                   integration_helper,
+                                                   mock_embedding_service):
+        """Test that database transactions are properly rolled back on errors."""
+        # Get initial user count
+        initial_count = integration_helper.verify_database_record_count(
+            database_connection, "users", 0
+        )
+        
+        # Try to create user with invalid data that should cause rollback
+        invalid_user_data = {
+            "name": "",  # Invalid empty name
+            "description": "This should not be created"
+        }
+        
+        response = client.post("/api/v1/users", json=invalid_user_data, headers=headers)
+        
+        # Verify request failed
+        assert response.status_code == 400
+        
+        # Verify no partial data was committed to database
+        final_count = integration_helper.verify_database_record_count(
+            database_connection, "users", 0
+        )
+        
+        # Count should be the same (no partial commits)
+        assert final_count == initial_count 

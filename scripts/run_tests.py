@@ -44,6 +44,29 @@ def run_layer(marker: str) -> int:
         print(f"\033[1;33m⚠  Test directory {test_dir} does not exist, skipping {marker} layer\033[0m")
         return 0
     
+    # Special handling for integration tests - ensure database is started
+    if marker == "integration":
+        print("\n\033[1;36m🔧  Starting database for integration tests...\033[0m")
+        
+        # Start database using memfuse_launcher.py
+        db_cmd = [
+            sys.executable, "scripts/memfuse_launcher.py", 
+            "--start-db", "--optimize-db", "--background"
+        ]
+        
+        print(f"Running: {' '.join(db_cmd)}")
+        result = subprocess.run(db_cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
+        
+        if result.returncode != 0:
+            print(f"\033[1;31m✖  Failed to start database: {result.stderr}\033[0m")
+            return result.returncode
+        
+        print("\033[1;32m✓  Database started successfully\033[0m")
+        
+        # Wait a moment for database to be fully ready
+        import time
+        time.sleep(3)
+    
     # For layers with specific directories, we can run without markers
     # For layers that might be everywhere, use markers
     if marker == "slow":
@@ -51,6 +74,13 @@ def run_layer(marker: str) -> int:
         cmd = PYTEST_CMD + [
             "-m", marker,
             "--tb=short",
+            str(test_path)
+        ]
+    elif marker == "integration":
+        # integration layer - exclude legacy tests
+        cmd = PYTEST_CMD + [
+            "--tb=short",
+            "--ignore=" + str(test_path / "legacy"),
             str(test_path)
         ]
     else:
