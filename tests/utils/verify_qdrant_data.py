@@ -5,13 +5,16 @@ Check if contextual chunks are generated correctly
 """
 
 import os
+from pathlib import Path
 from qdrant_client import QdrantClient
 
 
 def verify_qdrant_data():
     """Verify chunks data in Qdrant database"""
 
-    data_dir = "/Users/mxue/GitRepos/MemFuse/memfuse/data"
+    # Use relative path from script location
+    script_dir = Path(__file__).parent
+    data_dir = script_dir.parent.parent / "data"
     print(f"🔍 Checking data directory: {data_dir}")
 
     # Find all user directories
@@ -122,7 +125,9 @@ def verify_contextual_chunking_effectiveness():
     """Verify the effectiveness of contextual chunking"""
     print("\n🎯 Verifying contextual chunking effectiveness...\n")
 
-    data_dir = "/Users/mxue/GitRepos/MemFuse/memfuse/data"
+    # Use relative path from script location
+    script_dir = Path(__file__).parent
+    data_dir = script_dir.parent.parent / "data"
     user_dirs = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d)) and d != "__pycache__"]
 
     total_chunks = 0

@@ -12,24 +12,27 @@ This directory contains utility scripts for MemFuse development, deployment, and
 
 ## 🚀 Quick Start Guide
 
-### 1. First Time Setup
+### 1. First Time Setup & Daily Development
 
 ```bash
-# Start MemFuse with database setup and optimization
-poetry run python scripts/memfuse_launcher.py --start-db --optimize-db
-```
-
-### 2. Daily Development
-
-```bash
-# Start development server with logs
-poetry run python scripts/memfuse_launcher.py --start-db --show-logs
+# Start MemFuse (database startup and logs enabled by default)
+poetry run python scripts/memfuse_launcher.py
 
 # Reset database data (keep schema)
 poetry run python scripts/database_manager.py reset
 
 # Check database status
 poetry run python scripts/database_manager.py status
+```
+
+### 2. Alternative Usage
+
+```bash
+# Skip database startup (if already running)
+poetry run python scripts/memfuse_launcher.py --no-start-db
+
+# Run in background mode (no logs)
+poetry run python scripts/memfuse_launcher.py --background
 ```
 
 ### 3. Troubleshooting
@@ -39,7 +42,7 @@ poetry run python scripts/database_manager.py status
 poetry run python scripts/database_manager.py validate
 
 # Force recreate database container
-poetry run python scripts/memfuse_launcher.py --recreate-db --optimize-db
+poetry run python scripts/memfuse_launcher.py --recreate-db
 
 # Completely rebuild database schema
 poetry run python scripts/database_manager.py recreate
@@ -58,36 +61,74 @@ poetry run python scripts/database_manager.py recreate
 - ✅ Health checks and connectivity validation
 - ✅ Graceful shutdown with signal handling
 - ✅ Background mode for production deployment
+- ✅ Environment variable configuration support
+- ✅ Robust error handling and detailed status messages
+- ✅ Configurable timeouts and retry mechanisms
+- ✅ Smart defaults with override options
 
 **Usage**:
 ```bash
 # Basic startup (recommended for development)
-poetry run python scripts/memfuse_launcher.py --start-db --optimize-db
+poetry run python scripts/memfuse_launcher.py
 
 # Force recreate database if needed
-poetry run python scripts/memfuse_launcher.py --recreate-db --optimize-db
+poetry run python scripts/memfuse_launcher.py --recreate-db
 
 # Production mode (background)
-poetry run python scripts/memfuse_launcher.py --start-db --background
+poetry run python scripts/memfuse_launcher.py --background
 
-# Development with full logs
-poetry run python scripts/memfuse_launcher.py --start-db --show-logs
+# Skip database startup
+poetry run python scripts/memfuse_launcher.py --no-start-db
 
 # Skip database optimizations
-poetry run python scripts/memfuse_launcher.py --start-db --no-optimize-db
+poetry run python scripts/memfuse_launcher.py --no-optimize-db
 ```
 
 **Options**:
-- `--start-db`: Start database container
+- `--start-db`: Start database container (default: True)
+- `--no-start-db`: Skip starting database container
 - `--recreate-db`: Force recreate database container
 - `--optimize-db`: Apply database optimizations (default: True)
+- `--no-optimize-db`: Skip database optimizations
 - `--show-logs`: Show server logs (default: True)
-- `--background`: Run server in background
+- `--background`: Run server in background (disables logs)
 - `--timeout TIMEOUT`: Startup timeout in seconds
+- `--version`: Show launcher version
+
+**Environment Variables**:
+- `MEMFUSE_START_DB`: Start database container (default: true)
+- `MEMFUSE_RECREATE_DB`: Force recreate database container (default: false)
+- `MEMFUSE_OPTIMIZE_DB`: Apply database optimizations (default: true)
+- `MEMFUSE_SHOW_LOGS`: Show server logs (default: true)
+- `MEMFUSE_BACKGROUND`: Run in background mode (default: false)
+- `MEMFUSE_TIMEOUT`: Startup timeout in seconds
+
+**Advanced Features**:
+- **Smart Configuration**: Environment variables provide defaults, command-line arguments override
+- **Health Monitoring**: Automatic health checks for MemFuse server in background mode
+- **Robust Error Handling**: Detailed error messages and graceful failure handling
+- **Process Management**: Proper signal handling and graceful shutdown
+- **Timeout Management**: Configurable timeouts for all operations
+- **Status Reporting**: Color-coded status messages with icons for better visibility
 
 ### database_manager.py - Database Management
 
 **Purpose**: Comprehensive database operations for MemFuse.
+
+**Architecture Note**: MemFuse implements its own **pgai-like functionality** and does not require TimescaleDB's official pgai extension. Our custom implementation provides event-driven embedding generation through PostgreSQL triggers and NOTIFY/LISTEN mechanisms.
+
+**Features**:
+- ✅ Database reset (clear data, keep schema)
+- ✅ Schema recreation with complete rebuild
+- ✅ Schema validation and health checks
+- ✅ Database status reporting
+- ✅ Custom pgai-like trigger system setup
+- ✅ Vector extension management (pgvector)
+- ✅ TimescaleDB integration (optional)
+- ✅ Environment variable configuration support
+- ✅ Robust error handling and retry mechanisms
+- ✅ Configurable timeouts and connection settings
+- ✅ Color-coded status messages and detailed reporting
 
 **Commands**:
 
@@ -124,7 +165,35 @@ poetry run python scripts/database_manager.py recreate
 - ⚠️ **DANGER: Drops ALL existing tables**
 - ✅ **Recreates complete database schema**
 - ✅ **Rebuilds triggers and functions**
+- ✅ **Handles optional extensions gracefully**
 - **Requires confirmation prompt**
+
+**Options**:
+- `--container CONTAINER`: Database container name (overrides MEMFUSE_DB_CONTAINER)
+- `--timeout TIMEOUT`: Command timeout in seconds (overrides MEMFUSE_DB_TIMEOUT)
+- `--retry-count COUNT`: Number of retries (overrides MEMFUSE_DB_RETRY_COUNT)
+- `--version`: Show database manager version
+
+**Environment Variables**:
+- `MEMFUSE_DB_CONTAINER`: Database container name (default: memfuse-pgai-postgres)
+- `MEMFUSE_DB_NAME`: Database name (default: memfuse)
+- `MEMFUSE_DB_USER`: Database user (default: postgres)
+- `MEMFUSE_DB_TIMEOUT`: Command timeout in seconds (default: 60)
+- `MEMFUSE_DB_RETRY_COUNT`: Number of retries for failed operations (default: 3)
+- `MEMFUSE_DB_RETRY_DELAY`: Delay between retries in seconds (default: 2)
+
+**Advanced Usage**:
+```bash
+# Use custom timeout
+export MEMFUSE_DB_TIMEOUT=120
+poetry run python scripts/database_manager.py recreate
+
+# Use different container
+poetry run python scripts/database_manager.py --container my-postgres status
+
+# Increase retry count for unreliable connections
+poetry run python scripts/database_manager.py --retry-count 5 validate
+```
 
 ### run_tests.py - Test Execution
 
@@ -147,7 +216,7 @@ poetry run python scripts/run_tests.py slow         # Slow/comprehensive tests
 
 1. **Start Development Session**:
    ```bash
-   poetry run python scripts/memfuse_launcher.py --start-db --show-logs
+   poetry run python scripts/memfuse_launcher.py
    ```
 
 2. **Reset Data Between Tests**:
@@ -184,14 +253,14 @@ poetry run python scripts/run_tests.py slow         # Slow/comprehensive tests
 
 4. **Restart MemFuse**:
    ```bash
-   poetry run python scripts/memfuse_launcher.py --recreate-db --optimize-db
+   poetry run python scripts/memfuse_launcher.py --recreate-db
    ```
 
 ### Production Deployment
 
 1. **Start in Background**:
    ```bash
-   poetry run python scripts/memfuse_launcher.py --start-db --background --optimize-db
+   poetry run python scripts/memfuse_launcher.py --background
    ```
 
 2. **Validate Deployment**:
@@ -232,13 +301,31 @@ poetry run python scripts/run_tests.py slow         # Slow/comprehensive tests
 - Reset data with `reset` command
 - Check MemFuse server is running on port 8000
 
+**Launcher Issues**:
+- Check environment variables with `--help` to see current defaults
+- Use `--version` to verify launcher version
+- For debugging, run with explicit flags: `--start-db --show-logs`
+- If health checks fail, verify MemFuse server is accessible on port 8000
+- Use `--timeout` to adjust startup timeouts if needed
+
+**Database Manager Issues**:
+- Use `--version` to verify database manager version
+- Check container status first: `poetry run python scripts/database_manager.py status`
+- **Extension Notes**:
+  - ✅ **pgvector**: Required for vector operations (should always be available)
+  - ✅ **timescaledb**: Optional, provides additional time-series features
+  - ❌ **pgai**: Not needed - MemFuse has its own pgai-like implementation
+- Use `--timeout` to adjust timeouts for slow database operations
+- Use `--retry-count` to increase retries for unreliable connections
+- Check environment variables with `--help` to see current configuration
+
 ## 📋 Quick Reference
 
 ### Most Common Commands
 
 ```bash
 # 🚀 Start development environment
-poetry run python scripts/memfuse_launcher.py --start-db --show-logs
+poetry run python scripts/memfuse_launcher.py
 
 # 📊 Check database status
 poetry run python scripts/database_manager.py status
@@ -258,10 +345,10 @@ poetry run python scripts/run_tests.py smoke
 ```bash
 # 🆘 Complete system reset
 poetry run python scripts/database_manager.py recreate
-poetry run python scripts/memfuse_launcher.py --recreate-db --optimize-db
+poetry run python scripts/memfuse_launcher.py --recreate-db
 
 # 🔍 Troubleshoot connection issues
-poetry run python scripts/memfuse_launcher.py --start-db --optimize-db
+poetry run python scripts/memfuse_launcher.py --no-start-db
 ```
 
 ## 🔗 Related Documentation

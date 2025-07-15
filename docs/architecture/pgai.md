@@ -2,7 +2,17 @@
 
 ## Overview
 
-MemFuse integrates with PostgreSQL and the pgai extension to provide advanced vector operations and **automatic embedding generation** capabilities. This document provides a comprehensive guide to the pgai store architecture, immediate trigger system, and M0 episodic memory layer implementation.
+MemFuse implements its own **custom pgai-like system** that provides advanced vector operations and **automatic embedding generation** capabilities without requiring TimescaleDB's official pgai extension. This document provides a comprehensive guide to our self-implemented pgai store architecture, immediate trigger system, and M0 episodic memory layer implementation.
+
+## 🎯 Important Architecture Note
+
+**MemFuse uses a custom pgai implementation** - we do not depend on TimescaleDB's official pgai extension. Our implementation provides:
+
+- ✅ **Complete event-driven embedding system**
+- ✅ **Custom PostgreSQL triggers and NOTIFY/LISTEN**
+- ✅ **Modular component architecture**
+- ✅ **Only requires pgvector extension**
+- ✅ **More lightweight and flexible than official pgai**
 
 **Key Features:**
 - **Immediate trigger system**: Event-driven embedding generation with <100ms latency
@@ -15,28 +25,38 @@ MemFuse integrates with PostgreSQL and the pgai extension to provide advanced ve
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
-2. [PgAI Store Package Structure](#pgai-store-package-structure)
-3. [M0 Episodic Memory Layer](#m0-episodic-memory-layer)
-4. [Immediate Trigger System](#immediate-trigger-system)
-5. [Event-Driven Store Implementations](#event-driven-store-implementations)
-6. [Database Schema Design](#database-schema-design)
-7. [Configuration Guide](#configuration-guide)
-8. [Schema Management](#schema-management)
-9. [Usage Examples](#usage-examples)
-10. [Performance Analysis](#performance-analysis)
-11. [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
-12. [Migration Guide](#migration-guide)
+2. [Custom pgai Implementation](#custom-pgai-implementation)
+3. [PgAI Store Package Structure](#pgai-store-package-structure)
+4. [M0 Episodic Memory Layer](#m0-episodic-memory-layer)
+5. [Immediate Trigger System](#immediate-trigger-system)
+6. [Event-Driven Store Implementations](#event-driven-store-implementations)
+7. [Database Schema Design](#database-schema-design)
+8. [Configuration Guide](#configuration-guide)
+9. [Schema Management](#schema-management)
+10. [Usage Examples](#usage-examples)
+11. [Performance Analysis](#performance-analysis)
+12. [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
+13. [Migration Guide](#migration-guide)
 
 ## Architecture Overview
 
 ### Technology Stack
 
 - **PostgreSQL 17**: Primary database with vector support
-- **pgvector Extension**: Provides VECTOR data type and similarity search
-- **pgai Extension**: AI workflow helpers and vectorizer support
+- **pgvector Extension**: Provides VECTOR data type and similarity search ✅ **Required**
+- **TimescaleDB**: Time-series database features (optional)
+- **Custom pgai Implementation**: Our own event-driven embedding system ✅ **No external pgai needed**
 - **all-MiniLM-L6-v2**: Local embedding model (384 dimensions)
 - **Immediate Trigger System**: PostgreSQL NOTIFY/LISTEN for real-time processing
 - **Modular Components**: Organized pgai_store package with clear separation
+
+### Extension Requirements
+
+| Extension | Status | Purpose | Notes |
+|-----------|--------|---------|-------|
+| **pgvector** | ✅ **Required** | Vector storage and similarity search | Core functionality |
+| **timescaledb** | ⚠️ **Optional** | Time-series database features | Enhanced capabilities |
+| **pgai** | ❌ **Not needed** | Official TimescaleDB pgai | We have our own implementation |
 
 ### PgAI Store Architecture
 
@@ -59,6 +79,112 @@ graph TB
     H --> M[MiniLM Encoder]
     I --> M
     K --> M
+```
+
+## Custom pgai Implementation
+
+### Why We Built Our Own pgai System
+
+MemFuse implements its own **pgai-like functionality** instead of using TimescaleDB's official pgai extension for several strategic reasons:
+
+#### 🎯 **Advantages of Our Custom Implementation**
+
+| Aspect | Our Implementation | Official pgai | Advantage |
+|--------|-------------------|---------------|-----------|
+| **Dependencies** | Only requires pgvector | Requires full pgai extension | ✅ **Lighter weight** |
+| **Control** | Complete autonomy | Dependent on official updates | ✅ **More flexible** |
+| **Customization** | Fully customizable | Limited to official features | ✅ **Better fit for needs** |
+| **Maintenance** | Self-maintained | Dependent on TimescaleDB | ✅ **More controllable** |
+| **Performance** | Optimized for MemFuse | General-purpose implementation | ✅ **Higher efficiency** |
+| **Local Models** | Full support (MiniLM, etc.) | Limited local model support | ✅ **Cost effective** |
+
+#### 🏗️ **Our Custom Architecture Components**
+
+```mermaid
+graph TB
+    subgraph "MemFuse Custom pgai System"
+        A[Application Layer] --> B[EventDrivenPgaiStore]
+        B --> C[ImmediateTriggerCoordinator]
+
+        C --> D[TriggerManager<br/>PostgreSQL NOTIFY/LISTEN]
+        C --> E[RetryProcessor<br/>Smart retry logic]
+        C --> F[WorkerPool<br/>Async processing]
+        C --> G[EmbeddingMonitor<br/>Performance tracking]
+
+        D --> H[Custom PostgreSQL Triggers]
+        E --> I[MiniLM Local Model]
+        F --> I
+
+        H --> J[m0_episodic Table]
+        I --> J
+    end
+
+    subgraph "Required Extensions"
+        K[pgvector] --> J
+        L[timescaledb<br/>(optional)] --> J
+    end
+
+    subgraph "Not Required"
+        M[❌ pgai extension<br/>Not needed]
+    end
+```
+
+#### 🔄 **Data Flow in Our System**
+
+```mermaid
+sequenceDiagram
+    participant App as MemFuse App
+    participant Store as EventDrivenPgaiStore
+    participant DB as PostgreSQL
+    participant TM as TriggerManager
+    participant WP as WorkerPool
+    participant Model as Local MiniLM
+
+    Note over App,Model: Our Custom pgai Implementation
+
+    App->>Store: insert_data(content)
+    Store->>DB: INSERT INTO m0_episodic
+    DB->>DB: Custom trigger fires
+    DB->>TM: NOTIFY embedding_needed
+    TM->>WP: Queue processing task
+    WP->>Model: Generate embedding
+    Model->>WP: Return vector[384]
+    WP->>DB: UPDATE embedding
+
+    Note over DB: No official pgai extension needed!
+```
+
+#### 🚀 **Key Benefits Achieved**
+
+1. **Minimal Dependencies**: Only pgvector required, no complex pgai setup
+2. **Local Model Support**: Full support for all-MiniLM-L6-v2 and other local models
+3. **Cost Efficiency**: No API costs, runs completely offline
+4. **Performance Optimization**: Tailored specifically for MemFuse use cases
+5. **Maintenance Control**: No dependency on external extension updates
+6. **Deployment Simplicity**: Works with standard TimescaleDB Docker images
+
+#### 📦 **Docker Configuration**
+
+Our implementation works perfectly with the standard TimescaleDB image:
+
+```yaml
+# docker-compose.pgai.yml
+services:
+  postgres-pgai:
+    image: timescale/timescaledb:latest-pg17  # ✅ Perfect for our needs
+    # Includes: PostgreSQL + TimescaleDB + pgvector
+    # Does NOT include: pgai extension (we don't need it!)
+```
+
+#### 🔧 **Extension Setup**
+
+```sql
+-- Required extensions (automatically handled by our scripts)
+CREATE EXTENSION IF NOT EXISTS vector;      -- ✅ Required for embeddings
+CREATE EXTENSION IF NOT EXISTS timescaledb; -- ⚠️ Optional for time-series features
+
+-- NOT required (we have our own implementation)
+-- CREATE EXTENSION IF NOT EXISTS pgai;     -- ❌ Not needed!
 ```
 
 ## PgAI Store Package Structure
@@ -2544,3 +2670,110 @@ If pgai vectorizer becomes viable for local models:
 **Future**: Re-evaluate when pgai vectorizer adds robust local model support, using the benchmarking framework above to make data-driven decisions.
 
 This system enables organizations to deploy vector embedding capabilities at scale while maintaining flexibility for different use cases and performance requirements.
+
+## Deployment Guide
+
+### Recommended Deployment Architecture
+
+MemFuse's custom pgai implementation is designed for easy deployment with minimal dependencies:
+
+#### 🐳 **Docker Setup (Recommended)**
+
+```yaml
+# docker-compose.pgai.yml
+version: '3.8'
+services:
+  postgres-pgai:
+    image: timescale/timescaledb:latest-pg17
+    environment:
+      POSTGRES_DB: memfuse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # No additional pgai extension setup needed!
+
+volumes:
+  postgres_data:
+```
+
+#### 🚀 **Quick Start Commands**
+
+```bash
+# 1. Start database with our optimized launcher
+poetry run python scripts/memfuse_launcher.py
+
+# 2. The launcher automatically:
+#    ✅ Starts TimescaleDB container
+#    ✅ Creates required extensions (pgvector)
+#    ✅ Sets up our custom pgai triggers
+#    ✅ Optimizes database settings
+#    ✅ Starts MemFuse server
+
+# 3. Verify deployment
+poetry run python scripts/database_manager.py status
+```
+
+#### 📋 **Deployment Checklist**
+
+- [ ] **TimescaleDB container running** (`timescale/timescaledb:latest-pg17`)
+- [ ] **pgvector extension installed** (automatic with TimescaleDB image)
+- [ ] **Custom triggers created** (automatic with our scripts)
+- [ ] **Database optimizations applied** (automatic with launcher)
+- [ ] **MemFuse server healthy** (check with status command)
+- [ ] **No pgai extension needed** (we have our own implementation!)
+
+#### 🔧 **Production Considerations**
+
+1. **Resource Requirements**:
+   - **Memory**: 2GB+ for local embedding model
+   - **CPU**: 2+ cores for parallel processing
+   - **Storage**: SSD recommended for vector operations
+
+2. **Scaling Options**:
+   - **Horizontal**: Multiple MemFuse instances with shared database
+   - **Vertical**: Increase worker count and memory allocation
+   - **Database**: TimescaleDB clustering for large deployments
+
+3. **Monitoring**:
+   - Use built-in performance metrics
+   - Monitor embedding generation latency
+   - Track database connection pool usage
+
+#### 🛡️ **Security Best Practices**
+
+```bash
+# Use environment variables for sensitive data
+export POSTGRES_PASSWORD=your_secure_password
+export MEMFUSE_DB_PASSWORD=your_secure_password
+
+# Restrict database access
+export MEMFUSE_DB_HOST=localhost  # Only local connections
+```
+
+#### 🔄 **Backup and Recovery**
+
+```bash
+# Database backup
+docker exec memfuse-pgai-postgres pg_dump -U postgres memfuse > backup.sql
+
+# Restore database
+docker exec -i memfuse-pgai-postgres psql -U postgres memfuse < backup.sql
+
+# Reset to clean state
+poetry run python scripts/database_manager.py recreate
+```
+
+### Summary
+
+MemFuse's custom pgai implementation provides a **production-ready, lightweight alternative** to TimescaleDB's official pgai extension. Our approach offers:
+
+- ✅ **Simpler deployment** (only pgvector required)
+- ✅ **Better performance** (optimized for MemFuse)
+- ✅ **Lower costs** (local models, no API fees)
+- ✅ **More control** (custom implementation)
+- ✅ **Easier maintenance** (no external dependencies)
+
+This architecture enables organizations to deploy advanced vector embedding capabilities with minimal complexity while maintaining full control over their data and processing pipeline.

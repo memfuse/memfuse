@@ -214,7 +214,7 @@ mock_config = {
 ### Debug Mode
 ```bash
 # Run tests with debug logging
-PYTHONPATH=/Users/mxue/GitRepos/MemFuse/memfuse/src pytest tests/store/test_event_driven_pgai_store.py -v -s --log-cli-level=DEBUG
+PYTHONPATH=./src pytest tests/store/test_event_driven_pgai_store.py -v -s --log-cli-level=DEBUG
 ```
 
 ## Contributing
