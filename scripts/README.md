@@ -4,11 +4,11 @@ This directory contains utility scripts for MemFuse development, deployment, and
 
 ## 📁 Scripts Overview
 
-| Script | Purpose | Usage |
-|--------|---------|-------|
-| `memfuse_launcher.py` | **Main development launcher** | Start MemFuse with database |
-| `database_manager.py` | **Database management** | Reset, recreate, validate DB |
-| `run_tests.py` | **Test execution** | Run different test layers |
+| Script                | Purpose                       | Usage                        |
+| --------------------- | ----------------------------- | ---------------------------- |
+| `memfuse_launcher.py` | **Main development launcher** | Start MemFuse with database  |
+| `database_manager.py` | **Database management**       | Reset, recreate, validate DB |
+| `run_tests.py`        | **Test execution**            | Run different test layers    |
 
 ## 🚀 Quick Start Guide
 
@@ -55,6 +55,7 @@ poetry run python scripts/database_manager.py recreate
 **Purpose**: Unified launcher for MemFuse development and deployment.
 
 **Features**:
+
 - ✅ Automatic database startup with Docker
 - ✅ Connection pool optimization to prevent hanging
 - ✅ Database optimization for pgai operations
@@ -67,6 +68,7 @@ poetry run python scripts/database_manager.py recreate
 - ✅ Smart defaults with override options
 
 **Usage**:
+
 ```bash
 # Basic startup (recommended for development)
 poetry run python scripts/memfuse_launcher.py
@@ -85,6 +87,7 @@ poetry run python scripts/memfuse_launcher.py --no-optimize-db
 ```
 
 **Options**:
+
 - `--start-db`: Start database container (default: True)
 - `--no-start-db`: Skip starting database container
 - `--recreate-db`: Force recreate database container
@@ -96,6 +99,7 @@ poetry run python scripts/memfuse_launcher.py --no-optimize-db
 - `--version`: Show launcher version
 
 **Environment Variables**:
+
 - `MEMFUSE_START_DB`: Start database container (default: true)
 - `MEMFUSE_RECREATE_DB`: Force recreate database container (default: false)
 - `MEMFUSE_OPTIMIZE_DB`: Apply database optimizations (default: true)
@@ -104,6 +108,7 @@ poetry run python scripts/memfuse_launcher.py --no-optimize-db
 - `MEMFUSE_TIMEOUT`: Startup timeout in seconds
 
 **Advanced Features**:
+
 - **Smart Configuration**: Environment variables provide defaults, command-line arguments override
 - **Health Monitoring**: Automatic health checks for MemFuse server in background mode
 - **Robust Error Handling**: Detailed error messages and graceful failure handling
@@ -118,6 +123,7 @@ poetry run python scripts/memfuse_launcher.py --no-optimize-db
 **Architecture Note**: MemFuse implements its own **pgai-like functionality** and does not require TimescaleDB's official pgai extension. Our custom implementation provides event-driven embedding generation through PostgreSQL triggers and NOTIFY/LISTEN mechanisms.
 
 **Features**:
+
 - ✅ Database reset (clear data, keep schema)
 - ✅ Schema recreation with complete rebuild
 - ✅ Schema validation and health checks
@@ -133,35 +139,43 @@ poetry run python scripts/memfuse_launcher.py --no-optimize-db
 **Commands**:
 
 #### `status` - Database Status
+
 ```bash
 poetry run python scripts/database_manager.py status
 ```
+
 - Shows container status
 - Lists all tables
 - Shows record counts
 - Displays installed extensions
 
 #### `validate` - Schema Validation
+
 ```bash
 poetry run python scripts/database_manager.py validate
 ```
+
 - Validates m0_episodic table structure
 - Checks immediate trigger configuration
 - Verifies notification functions
 - Confirms vector extension installation
 
 #### `reset` - Clear Data (Keep Schema)
+
 ```bash
 poetry run python scripts/database_manager.py reset
 ```
+
 - ⚠️ **Clears all data from m0_episodic table**
 - ✅ **Preserves table structure and triggers**
 - ✅ **Safe for development data reset**
 
 #### `recreate` - Rebuild Complete Schema
+
 ```bash
 poetry run python scripts/database_manager.py recreate
 ```
+
 - ⚠️ **DANGER: Drops ALL existing tables**
 - ✅ **Recreates complete database schema**
 - ✅ **Rebuilds triggers and functions**
@@ -169,12 +183,14 @@ poetry run python scripts/database_manager.py recreate
 - **Requires confirmation prompt**
 
 **Options**:
+
 - `--container CONTAINER`: Database container name (overrides MEMFUSE_DB_CONTAINER)
 - `--timeout TIMEOUT`: Command timeout in seconds (overrides MEMFUSE_DB_TIMEOUT)
 - `--retry-count COUNT`: Number of retries (overrides MEMFUSE_DB_RETRY_COUNT)
 - `--version`: Show database manager version
 
 **Environment Variables**:
+
 - `MEMFUSE_DB_CONTAINER`: Database container name (default: memfuse-pgai-postgres)
 - `MEMFUSE_DB_NAME`: Database name (default: memfuse)
 - `MEMFUSE_DB_USER`: Database user (default: postgres)
@@ -183,6 +199,7 @@ poetry run python scripts/database_manager.py recreate
 - `MEMFUSE_DB_RETRY_DELAY`: Delay between retries in seconds (default: 2)
 
 **Advanced Usage**:
+
 ```bash
 # Use custom timeout
 export MEMFUSE_DB_TIMEOUT=120
@@ -197,9 +214,19 @@ poetry run python scripts/database_manager.py --retry-count 5 validate
 
 ### run_tests.py - Test Execution
 
-**Purpose**: Execute different layers of tests.
+**Purpose**: Execute different layers of tests with configurable client and server management.
+
+**Features**:
+
+- ✅ Configurable client types (server vs testclient)
+- ✅ Optional server restart control for database resets
+- ✅ Automatic database reset for clean test state
+- ✅ Health checks and service readiness validation
+- ✅ Support for specific test files and pytest selections
+- ✅ Full pytest argument pass-through support
 
 **Available Test Layers**:
+
 ```bash
 poetry run python scripts/run_tests.py smoke        # Quick smoke tests
 poetry run python scripts/run_tests.py contract     # Contract tests
@@ -210,43 +237,90 @@ poetry run python scripts/run_tests.py perf         # Performance tests
 poetry run python scripts/run_tests.py slow         # Slow/comprehensive tests
 ```
 
+**Client Configuration**:
+
+```bash
+# Use actual HTTP server (default) - shows requests in server logs
+poetry run python scripts/run_tests.py --client-type=server integration
+
+# Use in-process TestClient - faster, isolated, no server logs
+poetry run python scripts/run_tests.py --client-type=testclient integration
+```
+
+**Server Management**:
+
+```bash
+# Default: Restart server after database reset (clean connections)
+poetry run python scripts/run_tests.py integration
+
+# Keep development server running (for monitoring logs)
+poetry run python scripts/run_tests.py --no-restart-server integration
+
+# Combined: Test against running server without restart
+poetry run python scripts/run_tests.py --client-type=server --no-restart-server integration -v -s
+```
+
+**Advanced Usage**:
+
+```bash
+# Run specific test file with verbose output
+poetry run python scripts/run_tests.py tests/integration/api/test_users_api_integration.py -v -s
+
+# Run specific test method
+poetry run python scripts/run_tests.py tests/integration/api/test_users_api_integration.py::TestUsersAPIIntegration::test_create_user_persistence -v -s
+
+# Keep server running and test with custom pytest flags
+poetry run python scripts/run_tests.py --no-restart-server --client-type=server integration -v -s -k "user"
+```
+
 ## 🔄 Common Workflows
 
 ### Development Workflow
 
 1. **Start Development Session**:
+
    ```bash
    poetry run python scripts/memfuse_launcher.py
    ```
 
 2. **Reset Data Between Tests**:
+
    ```bash
    poetry run python scripts/database_manager.py reset
    ```
 
 3. **Validate Setup**:
+
    ```bash
    poetry run python scripts/database_manager.py validate
    ```
 
 4. **Run Tests**:
+
    ```bash
+   # Default: Restart server for clean database connections
    poetry run python scripts/run_tests.py smoke
+
+   # Keep development server running for monitoring
+   poetry run python scripts/run_tests.py --no-restart-server smoke
    ```
 
 ### Troubleshooting Workflow
 
 1. **Check Database Status**:
+
    ```bash
    poetry run python scripts/database_manager.py status
    ```
 
 2. **Validate Schema**:
+
    ```bash
    poetry run python scripts/database_manager.py validate
    ```
 
 3. **If Issues Found, Recreate Schema**:
+
    ```bash
    poetry run python scripts/database_manager.py recreate
    ```
@@ -259,6 +333,7 @@ poetry run python scripts/run_tests.py slow         # Slow/comprehensive tests
 ### Production Deployment
 
 1. **Start in Background**:
+
    ```bash
    poetry run python scripts/memfuse_launcher.py --background
    ```
@@ -287,21 +362,25 @@ poetry run python scripts/run_tests.py slow         # Slow/comprehensive tests
 ### Troubleshooting
 
 **Connection Pool Issues**:
+
 - Use `--optimize-db` flag (enabled by default)
 - Check Docker container status
 - Restart with `--recreate-db` if needed
 
 **Database Schema Issues**:
+
 - Run `validate` command first
 - Use `recreate` command as last resort
 - Check container logs: `docker logs memfuse-pgai-postgres`
 
 **Test Failures**:
+
 - Ensure database is running and validated
 - Reset data with `reset` command
 - Check MemFuse server is running on port 8000
 
 **Launcher Issues**:
+
 - Check environment variables with `--help` to see current defaults
 - Use `--version` to verify launcher version
 - For debugging, run with explicit flags: `--start-db --show-logs`
@@ -309,6 +388,7 @@ poetry run python scripts/run_tests.py slow         # Slow/comprehensive tests
 - Use `--timeout` to adjust startup timeouts if needed
 
 **Database Manager Issues**:
+
 - Use `--version` to verify database manager version
 - Check container status first: `poetry run python scripts/database_manager.py status`
 - **Extension Notes**:

@@ -9,11 +9,20 @@ Usage:
     python scripts/run_tests.py tests/integration/api/test_users_api_integration.py  # run specific test file
     python scripts/run_tests.py tests/integration/api/test_users_api_integration.py::TestUsersAPIIntegration::test_create_user_persistence  # run specific test method
     poetry run python scripts/run_tests.py smoke                   # recommended with Poetry
+    
+    # Client type configuration:
+    python scripts/run_tests.py --client-type=server smoke         # Use actual server (default)
+    python scripts/run_tests.py --client-type=testclient smoke     # Use in-process TestClient
+    
+    # Server restart control:
+    python scripts/run_tests.py --no-restart-server smoke          # Keep your development server running
 """
 from __future__ import annotations
 import sys
 import subprocess
 import time
+import os
+import argparse
 from pathlib import Path
 
 # Try to import requests for health checking, but don't fail if it's not available
@@ -148,9 +157,29 @@ def start_memfuse_services() -> bool:
     return False
 
 
-def reset_database() -> bool:
+def reset_database(no_restart: bool = False) -> bool:
     """Reset database to clean state before running tests."""
-    print_status("Resetting database to clean state...", "INFO")
+    if no_restart:
+        print_status("Resetting database without server restart...", "INFO")
+        print_status("⚠️  WARNING: This may cause connection pool conflicts if server is running", "WARNING")
+    else:
+        print_status("Resetting database with server restart...", "INFO")
+    
+    if not no_restart:
+        # Stop the current server to prevent connection conflicts
+        print_status("Stopping server to reset database safely...", "INFO")
+        stop_cmd = [
+            "pkill", "-f", "memfuse_launcher.py"
+        ]
+        
+        try:
+            subprocess.run(stop_cmd, capture_output=True, text=True, timeout=10)
+            print_status("Server stopped", "SUCCESS")
+        except subprocess.TimeoutExpired:
+            print_status("Server stop timed out, continuing...", "WARNING")
+        
+        # Wait a moment for server to fully stop
+        time.sleep(3)
     
     # Reset database using database_manager.py
     reset_cmd = [
@@ -165,10 +194,54 @@ def reset_database() -> bool:
         return False
     
     print_status("Database reset successfully", "SUCCESS")
+    
+    if not no_restart:
+        # Start server again with clean database connections
+        print_status("Starting server with fresh database connections...", "INFO")
+        if not restart_server_after_reset():
+            print_status("Failed to start server after database reset", "ERROR")
+            return False
+    else:
+        print_status("Skipping server restart (--no-restart-server flag used)", "INFO")
+        print_status("💡 If you encounter connection issues, restart your server manually", "INFO")
+    
     return True
 
 
-def ensure_services_ready() -> bool:
+def restart_server_after_reset() -> bool:
+    """Restart the server after database reset to clear stale connections."""
+    # Start server in background mode
+    launcher_cmd = [
+        sys.executable, "scripts/memfuse_launcher.py", 
+        "--start-db", "--optimize-db", "--background"
+    ]
+    
+    print(f"Running: {' '.join(launcher_cmd)}")
+    result = subprocess.run(launcher_cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    
+    if result.returncode != 0:
+        print_status(f"Failed to restart server: {result.stderr}", "ERROR")
+        return False
+    
+    print_status("Server restarted successfully", "SUCCESS")
+    
+    # Wait a bit for server to fully restart
+    print_status("Waiting for server to be ready...", "INFO")
+    time.sleep(5)
+    
+    # Verify server is healthy after restart
+    for retry in range(3):
+        if check_memfuse_health():
+            return True
+        if retry < 2:
+            print_status(f"Server not ready yet, waiting... (attempt {retry + 1}/3)", "INFO")
+            time.sleep(3)
+    
+    print_status("Server restart succeeded but health check failed", "WARNING")
+    return False
+
+
+def ensure_services_ready(no_restart: bool = False) -> bool:
     """Ensure MemFuse services are ready for testing."""
     print_status("Ensuring MemFuse services are ready...", "INFO")
     
@@ -182,7 +255,7 @@ def ensure_services_ready() -> bool:
             return False
     
     # Reset database to clean state before testing
-    if not reset_database():
+    if not reset_database(no_restart):
         print_status("Failed to reset database", "ERROR")
         return False
     
@@ -201,7 +274,7 @@ def is_pytest_selection(path_str: str) -> bool:
     return '::' in path_str and ('test_' in path_str or path_str.endswith('_test.py'))
 
 
-def run_pytest_selection(test_selection: str) -> int:
+def run_pytest_selection(test_selection: str, extra_args: list = None) -> int:
     """Run pytest for a specific test selection (file::class::method)."""
     print(f"\n\033[1;34m▶▶  Running pytest selection: {test_selection} …\033[0m")
     
@@ -219,10 +292,16 @@ def run_pytest_selection(test_selection: str) -> int:
         test_selection
     ]
     
+    # Add extra pytest arguments if provided
+    if extra_args:
+        cmd.extend(extra_args)
+    
     print(f"Running: {' '.join(cmd)}")
     
     # Run the command and capture output for better error handling
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    # Pass environment variables to subprocess
+    env = os.environ.copy()
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, env=env)
     
     # Print output for transparency
     if result.stdout:
@@ -233,7 +312,7 @@ def run_pytest_selection(test_selection: str) -> int:
     return result.returncode
 
 
-def run_specific_test_file(test_file: str) -> int:
+def run_specific_test_file(test_file: str, extra_args: list = None) -> int:
     """Run pytest for a specific test file."""
     test_path = PROJECT_ROOT / test_file
     
@@ -249,10 +328,16 @@ def run_specific_test_file(test_file: str) -> int:
         str(test_path)
     ]
     
+    # Add extra pytest arguments if provided
+    if extra_args:
+        cmd.extend(extra_args)
+    
     print(f"Running: {' '.join(cmd)}")
     
     # Run the command and capture output for better error handling
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    # Pass environment variables to subprocess
+    env = os.environ.copy()
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, env=env)
     
     # Print output for transparency
     if result.stdout:
@@ -263,7 +348,7 @@ def run_specific_test_file(test_file: str) -> int:
     return result.returncode
 
 
-def run_layer(marker: str) -> int:
+def run_layer(marker: str, extra_args: list = None) -> int:
     """Run pytest for one marker, return its exit code."""
     print(f"\n\033[1;34m▶▶  Running {marker} layer …\033[0m")
     
@@ -299,10 +384,16 @@ def run_layer(marker: str) -> int:
             str(test_path)
         ]
     
+    # Add extra pytest arguments if provided
+    if extra_args:
+        cmd.extend(extra_args)
+    
     print(f"Running: {' '.join(cmd)}")
     
     # Run the command and capture output for better error handling
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    # Pass environment variables to subprocess
+    env = os.environ.copy()
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, env=env)
     
     # Print output for transparency
     if result.stdout:
@@ -320,46 +411,95 @@ def run_layer(marker: str) -> int:
 
 def main(argv: list[str]) -> None:
     # Parse command line arguments
-    if not argv:
-        # No arguments - run all layers
+    parser = argparse.ArgumentParser(
+        description="Run MemFuse test layers in order and abort on first failure.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python scripts/run_tests.py                                    # run all layers
+  python scripts/run_tests.py smoke                              # run up to smoke layer
+  python scripts/run_tests.py contract                           # run up to contract layer
+  python scripts/run_tests.py tests/integration/api/test_users_api_integration.py  # run specific test file
+  python scripts/run_tests.py tests/integration/api/test_users_api_integration.py::TestUsersAPIIntegration::test_create_user_persistence  # run specific test method
+  
+  # Client type configuration:
+  python scripts/run_tests.py --client-type=server smoke         # Use actual server (default)
+  python scripts/run_tests.py --client-type=testclient smoke     # Use in-process TestClient
+  
+  # Server restart control:
+  python scripts/run_tests.py --no-restart-server smoke          # Keep your development server running
+  python scripts/run_tests.py --client-type=server --no-restart-server integration  # Test against running server without restart
+        """
+    )
+    
+    parser.add_argument(
+        "target",
+        nargs="?",
+        help="Test target: layer name, test file path, or pytest selection (default: run all layers)"
+    )
+    
+    parser.add_argument(
+        "--client-type",
+        choices=["server", "testclient"],
+        default="server",
+        help="Client type for integration tests: 'server' for actual HTTP server, 'testclient' for in-process TestClient (default: server)"
+    )
+
+    parser.add_argument(
+        "--no-restart-server",
+        action="store_true",
+        help="Do not restart the MemFuse server after database reset. Keeps your development server running for monitoring, but may cause connection pool conflicts."
+    )
+    
+    # Parse known args only, so pytest flags like -v can be passed through
+    args, unknown_args = parser.parse_known_args(argv)
+    
+    # Set environment variable for client type
+    os.environ["MEMFUSE_TEST_CLIENT_TYPE"] = args.client_type
+    
+    # Print client type configuration
+    if args.client_type == "server":
+        print_status("Using actual HTTP server for integration tests", "INFO")
+    else:
+        print_status("Using in-process TestClient for integration tests", "INFO")
+    
+    # Parse target argument
+    target = args.target
+    
+    if not target:
+        # No target - run all layers
         max_layer_idx = len(LAYER_ORDER) - 1
         run_mode = "all_layers"
-    elif len(argv) == 1:
-        arg = argv[0]
-        
-        if is_pytest_selection(arg):
-            # Pytest-style test selection (file::class::method)
-            run_mode = "pytest_selection"
-            test_selection = arg
-        elif is_test_file(arg):
-            # Single test file
-            run_mode = "single_file"
-            test_file = arg
-        elif arg in LAYER_ORDER:
-            # Run up to specific layer
-            max_layer_idx = LAYER_ORDER.index(arg)
-            run_mode = "up_to_layer"
-        else:
-            print(f"\033[1;31m✖  Unknown layer or invalid test selection: {arg}\033[0m")
-            print(f"Available layers: {', '.join(LAYER_ORDER)}")
-            print(f"Or specify:")
-            print(f"  - A test file: tests/integration/api/test_users_api_integration.py")
-            print(f"  - A pytest selection: tests/integration/api/test_users_api_integration.py::TestUsersAPIIntegration::test_create_user_persistence")
-            sys.exit(1)
+    elif is_pytest_selection(target):
+        # Pytest-style test selection (file::class::method)
+        run_mode = "pytest_selection"
+        test_selection = target
+    elif is_test_file(target):
+        # Single test file
+        run_mode = "single_file"
+        test_file = target
+    elif target in LAYER_ORDER:
+        # Run up to specific layer
+        max_layer_idx = LAYER_ORDER.index(target)
+        run_mode = "up_to_layer"
     else:
-        print(f"\033[1;31m✖  Too many arguments. Usage: {sys.argv[0]} [layer_name|test_file_path|pytest_selection]\033[0m")
+        print(f"\033[1;31m✖  Unknown layer or invalid test selection: {target}\033[0m")
+        print(f"Available layers: {', '.join(LAYER_ORDER)}")
+        print(f"Or specify:")
+        print(f"  - A test file: tests/integration/api/test_users_api_integration.py")
+        print(f"  - A pytest selection: tests/integration/api/test_users_api_integration.py::TestUsersAPIIntegration::test_create_user_persistence")
         sys.exit(1)
 
     # Ensure MemFuse services are ready before running any tests
     print_status("Preparing MemFuse services for testing...", "INFO")
-    if not ensure_services_ready():
+    if not ensure_services_ready(args.no_restart_server):
         print_status("Failed to prepare services for testing", "ERROR")
         sys.exit(1)
 
     # Run tests based on mode
     if run_mode == "pytest_selection":
         # Run pytest selection
-        rc = run_pytest_selection(test_selection)
+        rc = run_pytest_selection(test_selection, unknown_args)
         if rc != 0:
             print(f"\n\033[1;31m✖  Pytest selection {test_selection} failed.\033[0m")
             sys.exit(rc)
@@ -367,7 +507,7 @@ def main(argv: list[str]) -> None:
             print(f"\n\033[1;32m✓  Pytest selection {test_selection} passed!\033[0m")
     elif run_mode == "single_file":
         # Run single test file
-        rc = run_specific_test_file(test_file)
+        rc = run_specific_test_file(test_file, unknown_args)
         if rc != 0:
             print(f"\n\033[1;31m✖  Test file {test_file} failed.\033[0m")
             sys.exit(rc)
@@ -376,7 +516,7 @@ def main(argv: list[str]) -> None:
     else:
         # Run layers up to specified layer
         for marker in LAYER_ORDER[: max_layer_idx + 1]:
-            rc = run_layer(marker)
+            rc = run_layer(marker, unknown_args)
             if rc != 0:
                 print(f"\n\033[1;31m✖  {marker} layer failed. Stopping.\033[0m")
                 sys.exit(rc)

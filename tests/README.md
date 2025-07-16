@@ -2,6 +2,11 @@
 
 This directory contains comprehensive tests for the MemFuse system following industry best practices.
 
+## 📖 Documentation
+
+- **[TEST.md](TEST.md)** - **Practical testing guide** for running tests with `run_tests.py`
+- **[README.md](README.md)** - **Test architecture** and direct pytest usage (this file)
+
 ## 📁 Directory Structure
 
 ```
@@ -46,12 +51,14 @@ tests/
 ## 🧪 Test Categories
 
 ### Unit Tests (`tests/unit/`)
+
 - Test individual components in isolation
 - Fast execution (< 1 second per test)
 - Mock external dependencies
 - High code coverage focus
 
 ### Integration Tests (`tests/integration/`)
+
 - Test component interactions and complete workflows
 - Medium execution time (1-10 seconds per test)
 - Test real component integration without external dependencies
@@ -61,6 +68,7 @@ tests/
 - **Chunking Integration**: Complete chunking workflows with real conversation data
 
 ### End-to-End Tests (`tests/e2e/`)
+
 - Test complete user workflows
 - Slower execution (10+ seconds per test)
 - Test against running system
@@ -139,7 +147,7 @@ pytest tests/e2e/test_chunking.py
 Tests are marked with the following markers for easy filtering:
 
 - `@pytest.mark.unit` - Unit tests
-- `@pytest.mark.integration` - Integration tests  
+- `@pytest.mark.integration` - Integration tests
 - `@pytest.mark.e2e` - End-to-end tests
 - `@pytest.mark.chunking` - Chunking-related tests
 - `@pytest.mark.slow` - Slow-running tests
@@ -153,6 +161,7 @@ Tests are marked with the following markers for easy filtering:
 ### Pytest Configuration (`pytest.ini`)
 
 The test suite is configured with:
+
 - Automatic test discovery
 - Async test support
 - Custom markers
@@ -162,6 +171,7 @@ The test suite is configured with:
 ### Shared Fixtures (`conftest.py`)
 
 Common fixtures available to all tests:
+
 - `sample_messages` - Sample message data
 - `sample_message_batch` - Sample message batch data
 - `mock_config` - Mock configuration
@@ -176,6 +186,7 @@ Common fixtures available to all tests:
 ### Current Coverage Areas
 
 ✅ **Chunking System**
+
 - ChunkData class functionality
 - ChunkStrategy abstract base class
 - MessageChunkStrategy implementation
@@ -236,7 +247,7 @@ class TestMyComponent:
     @pytest.fixture
     def component(self):
         return MessageChunkStrategy()
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_my_functionality(self, component):
@@ -313,6 +324,7 @@ pytest tests/unit/ --memray
 The test directory has been reorganized to improve maintainability:
 
 ### Removed Files
+
 - **Build artifacts**: Removed 17 test files from `build/scripts/` directory
 - **Documentation artifacts**: Removed test files from `docs/_build/`
 - **Root directory cleanup**: Moved `test_e2e.py` to `tests/e2e/test_complete_workflow.py`
@@ -321,12 +333,14 @@ The test directory has been reorganized to improve maintainability:
 - **Standalone test files**: Removed `tests/simple_query_test.py` and `tests/test_auto_embedding_final.py`
 
 ### Consolidated Tests
+
 - **Query method tests**: Consolidated in `tests/store/pgai_store/test_event_driven_store_query_method.py`
 - **E2E tests**: Organized in `tests/e2e/` directory with clear naming
 - **Performance tests**: Separated into dedicated `tests/performance/` directory
 - **Integration tests**: Removed duplicates, kept most comprehensive versions
 
 ### Benefits
+
 - **Reduced complexity**: From 80+ test files to ~50 focused test files
 - **Eliminated duplication**: Removed redundant test coverage
 - **Improved organization**: Clear separation by test type and component

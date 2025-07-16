@@ -177,6 +177,7 @@ print(f"Follow-up: {followup_response.choices[0].message.content}")
 - **[Installation Guide](https://memfuse.vercel.app/docs/installation)**: Comprehensive instructions for installing and configuring MemFuse
 - **[Getting Started](https://memfuse.vercel.app/docs/quickstart)**: Step-by-step guide to integrating MemFuse into your projects
 - **[Examples](https://github.com/memfuse/memfuse-python/tree/main/examples)**: Sample implementations for chatbots, autonomous agents, customer support, LangChain integration, and more
+- **[Testing Guide](tests/TEST.md)**: Practical guide for running tests with different configurations
 
 ---
 

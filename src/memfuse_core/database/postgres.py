@@ -46,6 +46,9 @@ class PostgresDB(DBBase):
         # Connect to database
         self.conn = psycopg2.connect(**self.conn_params)
         
+        # Initialize database tables
+        self._initialize_tables()
+        
         logger.info(f"PostgreSQL backend initialized at {host}:{port}/{database}")
     
     def execute(self, query: str, params: tuple = ()) -> Any:
@@ -73,6 +76,10 @@ class PostgresDB(DBBase):
     
     def create_tables(self):
         """Create database tables if they don't exist."""
+        self._initialize_tables()
+
+    def _initialize_tables(self):
+        """Initialize database tables with proper schema."""
         # Create users table
         self.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -104,8 +111,8 @@ class PostgresDB(DBBase):
             name TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id),
-            FOREIGN KEY (agent_id) REFERENCES agents (id)
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+            FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
         )
         ''')
         
@@ -116,7 +123,7 @@ class PostgresDB(DBBase):
             session_id TEXT,
             created_at TIMESTAMP,
             updated_at TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions (id)
+            FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
         )
         ''')
         
@@ -129,7 +136,7 @@ class PostgresDB(DBBase):
             content TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP,
-            FOREIGN KEY (round_id) REFERENCES rounds (id)
+            FOREIGN KEY (round_id) REFERENCES rounds (id) ON DELETE CASCADE
         )
         ''')
         
@@ -141,7 +148,7 @@ class PostgresDB(DBBase):
             content TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         ''')
         
@@ -155,7 +162,7 @@ class PostgresDB(DBBase):
             permissions TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         ''')
         
@@ -353,3 +360,5 @@ class PostgresDB(DBBase):
             return [data.get('id', '') for data in processed_data_list]
 
         return []
+
+

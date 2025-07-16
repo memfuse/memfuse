@@ -7,13 +7,12 @@ to the database and work correctly with real database operations.
 
 import pytest
 from typing import Dict, Any
-from fastapi.testclient import TestClient
 
 
 class TestUsersAPIIntegration:
     """Integration tests for Users API endpoints."""
 
-    def test_create_user_persistence(self, client: TestClient, headers: Dict[str, str],
+    def test_create_user_persistence(self, client, headers: Dict[str, str],
                                    test_user_data: Dict[str, Any], database_connection,
                                    integration_helper, mock_embedding_service):
         """Test that creating a user actually persists to database."""
@@ -56,7 +55,9 @@ class TestUsersAPIIntegration:
         assert db_record[3] is not None  # created_at
         assert db_record[4] is not None  # updated_at
 
-    def test_get_user_from_database(self, client: TestClient, headers: Dict[str, str],
+
+
+    def test_get_user_from_database(self, client, headers: Dict[str, str],
                                    test_user_data: Dict[str, Any], integration_helper,
                                    mock_embedding_service):
         """Test that getting a user retrieves actual database data."""
@@ -77,7 +78,7 @@ class TestUsersAPIIntegration:
         assert retrieved_user["name"] == test_user_data["name"]
         assert retrieved_user["description"] == test_user_data["description"]
 
-    def test_update_user_persistence(self, client: TestClient, headers: Dict[str, str],
+    def test_update_user_persistence(self, client, headers: Dict[str, str],
                                     test_user_data: Dict[str, Any], database_connection,
                                     integration_helper, mock_embedding_service):
         """Test that updating a user actually modifies database record."""
@@ -85,9 +86,11 @@ class TestUsersAPIIntegration:
         user = integration_helper.create_user_via_api(client, headers, test_user_data)
         user_id = user["id"]
         
-        # Update user data
+        # Update user data with unique name to avoid conflicts
+        import uuid
+        unique_suffix = str(uuid.uuid4())[:8]
         updated_data = {
-            "name": "updated_integration_test_user",
+            "name": f"updated_integration_test_user_{unique_suffix}",
             "description": "Updated description for integration testing"
         }
         
@@ -117,7 +120,7 @@ class TestUsersAPIIntegration:
         assert db_record[1] == updated_data["description"]
         assert db_record[2] is not None  # updated_at should be set
 
-    def test_delete_user_persistence(self, client: TestClient, headers: Dict[str, str],
+    def test_delete_user_persistence(self, client, headers: Dict[str, str],
                                     test_user_data: Dict[str, Any], database_connection,
                                     integration_helper, mock_embedding_service):
         """Test that deleting a user actually removes it from database."""
@@ -141,7 +144,33 @@ class TestUsersAPIIntegration:
             database_connection, "users", user_id
         )
 
-    def test_list_users_from_database(self, client: TestClient, headers: Dict[str, str],
+    def test_delete_user_with_error_handling(self, client, headers: Dict[str, str],
+                                           test_user_data: Dict[str, Any], database_connection,
+                                           integration_helper, mock_embedding_service):
+        """Test that user deletion properly handles errors with correct HTTP status codes."""
+        # Create user first
+        user = integration_helper.create_user_via_api(client, headers, test_user_data)
+        user_id = user["id"]
+        
+        # Delete the user successfully
+        response = client.delete(f"/api/v1/users/{user_id}", headers=headers)
+        assert response.status_code == 204
+        
+        # Try to delete the same user again (should fail with 404)
+        response = client.delete(f"/api/v1/users/{user_id}", headers=headers)
+        assert response.status_code == 404
+        
+        # Should have proper error response
+        response_data = response.json()
+        assert response_data["status"] == "error"
+        assert "not found" in response_data["message"].lower()
+        
+        # Try to delete a non-existent user (should fail with 404)
+        fake_user_id = "00000000-0000-0000-0000-000000000000"
+        response = client.delete(f"/api/v1/users/{fake_user_id}", headers=headers)
+        assert response.status_code == 404
+
+    def test_list_users_from_database(self, client, headers: Dict[str, str],
                                      test_user_data: Dict[str, Any], database_connection,
                                      integration_helper, mock_embedding_service):
         """Test that listing users returns actual database records."""
@@ -168,7 +197,7 @@ class TestUsersAPIIntegration:
         assert user1["id"] in user_ids
         assert user2["id"] in user_ids
 
-    def test_user_name_uniqueness_database_constraint(self, client: TestClient,
+    def test_user_name_uniqueness_database_constraint(self, client,
                                                      headers: Dict[str, str],
                                                      test_user_data: Dict[str, Any],
                                                      integration_helper,
@@ -186,7 +215,7 @@ class TestUsersAPIIntegration:
         assert response_data["status"] == "error"
         assert "already exists" in response_data["message"].lower()
 
-    def test_user_cascade_deletion_with_sessions(self, client: TestClient,
+    def test_user_cascade_deletion_with_sessions(self, client,
                                                 headers: Dict[str, str],
                                                 test_user_data: Dict[str, Any],
                                                 test_agent_data: Dict[str, Any],
@@ -222,7 +251,9 @@ class TestUsersAPIIntegration:
             database_connection, "sessions", session["id"]
         )
 
-    def test_database_transaction_rollback_on_error(self, client: TestClient,
+
+
+    def test_database_transaction_rollback_on_error(self, client,
                                                    headers: Dict[str, str],
                                                    database_connection,
                                                    integration_helper,

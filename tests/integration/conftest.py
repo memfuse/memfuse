@@ -52,15 +52,8 @@ def setup_integration_environment():
     if result.returncode != 0:
         pytest.fail(f"Database is not available. Please start it first with: poetry run python scripts/memfuse_launcher.py --start-db --optimize-db\nError: {result.stderr}")
     
-    # Reset database using database_manager.py for clean state
-    print("🔄 Resetting database for clean state...")
-    result = subprocess.run([
-        sys.executable, "scripts/database_manager.py", "reset"
-    ], capture_output=True, text=True, cwd=PROJECT_ROOT)
-    
-    if result.returncode != 0:
-        pytest.fail(f"Failed to reset database: {result.stderr}")
-    
+    # Database reset is handled by run_tests.py with server restart
+    # No need to reset again here to avoid transaction conflicts
     print("✅ Integration environment setup completed")
     yield
     
@@ -70,57 +63,108 @@ def setup_integration_environment():
 
 @pytest.fixture
 def client():
-    """Create test client for API testing with proper service initialization."""
+    """Create configurable test client based on MEMFUSE_TEST_CLIENT_TYPE environment variable."""
     import asyncio
-    # Import here to avoid circular imports
-    from memfuse_core.services.service_initializer import ServiceInitializer
-    from memfuse_core.utils.config import config_manager
-    from omegaconf import DictConfig, OmegaConf
+    import requests
     
-    # Create test configuration with PostgreSQL
-    test_config = {
-        "database": {
-            "type": "postgres",
-            "postgres": {
-                "host": "localhost",
-                "port": 5432,
-                "database": "memfuse",
-                "user": "postgres",
-                "password": "postgres"
+    # Check environment variable for client type
+    client_type = os.environ.get("MEMFUSE_TEST_CLIENT_TYPE", "server")
+    
+    if client_type == "server":
+        # Create real HTTP client for testing against running server
+        print(f"🔗 Using real HTTP client against server at http://localhost:8000")
+        
+        class RealHTTPClient:
+            def __init__(self, base_url="http://localhost:8000"):
+                self.base_url = base_url
+                self.session = requests.Session()
+                
+            def post(self, url, json=None, headers=None):
+                """Make POST request to running server."""
+                full_url = f"{self.base_url}{url}"
+                return self.session.post(full_url, json=json, headers=headers)
+                
+            def get(self, url, headers=None):
+                """Make GET request to running server."""
+                full_url = f"{self.base_url}{url}"
+                return self.session.get(full_url, headers=headers)
+                
+            def put(self, url, json=None, headers=None):
+                """Make PUT request to running server."""
+                full_url = f"{self.base_url}{url}"
+                return self.session.put(full_url, json=json, headers=headers)
+                
+            def delete(self, url, headers=None):
+                """Make DELETE request to running server."""
+                full_url = f"{self.base_url}{url}"
+                return self.session.delete(full_url, headers=headers)
+                
+            def close(self):
+                """Close the session."""
+                self.session.close()
+        
+        client = RealHTTPClient()
+        yield client
+        client.close()
+    
+    else:
+        # Create in-process TestClient
+        print(f"⚙️  Using in-process TestClient")
+        
+        # Import here to avoid circular imports
+        from memfuse_core.services.service_initializer import ServiceInitializer
+        from memfuse_core.utils.config import config_manager
+        from omegaconf import DictConfig, OmegaConf
+        
+        # Create test configuration with PostgreSQL
+        test_config = {
+            "database": {
+                "type": "postgres",
+                "postgres": {
+                    "host": "localhost",
+                    "port": 5432,
+                    "database": "memfuse",
+                    "user": "postgres",
+                    "password": "postgres"
+                }
+            },
+            "embedding": {
+                "model": "all-MiniLM-L6-v2",
+                "dimension": 384
+            },
+            "store": {
+                "backend": "pgai"
             }
-        },
-        "embedding": {
-            "model": "all-MiniLM-L6-v2",
-            "dimension": 384
-        },
-        "store": {
-            "backend": "pgai"
         }
-    }
-    
-    # Convert to DictConfig for ServiceInitializer
-    cfg = OmegaConf.create(test_config)
-    
-    # Set configuration
-    config_manager.set_config(test_config)
-    
-    # Initialize services with test configuration
-    service_initializer = ServiceInitializer()
-    
-    # Run the async initialization in a synchronous context
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        success = loop.run_until_complete(service_initializer.initialize_all_services(cfg))
-        if not success:
-            raise RuntimeError("Failed to initialize services")
-    finally:
-        loop.close()
-    
-    # Create app with proper initialization
-    app = create_app()
-    
-    return TestClient(app)
+        
+        # Convert to DictConfig for ServiceInitializer
+        cfg = OmegaConf.create(test_config)
+        
+        # Set configuration
+        config_manager.set_config(test_config)
+        
+        # Initialize services with test configuration
+        service_initializer = ServiceInitializer()
+        
+        # Run the async initialization in a synchronous context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            success = loop.run_until_complete(service_initializer.initialize_all_services(cfg))
+            if not success:
+                raise RuntimeError("Failed to initialize services")
+        finally:
+            loop.close()
+        
+        # Create app with proper initialization
+        app = create_app()
+        
+        client = TestClient(app)
+        yield client
+        # TestClient doesn't need explicit cleanup
+
+
+
 
 
 @pytest.fixture
@@ -293,27 +337,27 @@ class IntegrationTestHelper:
     """Helper class for common integration test operations."""
     
     @staticmethod
-    def create_user_via_api(client: TestClient, headers: Dict[str, str], 
+    def create_user_via_api(client, headers: Dict[str, str], 
                            user_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a user via API and return the response data."""
         response = client.post("/api/v1/users", json=user_data, headers=headers)
-        assert response.status_code == 201
+        assert response.status_code == 201, f"Expected 201, got {response.status_code}. Response: {response.text}"
         return response.json()["data"]["user"]
     
     @staticmethod
-    def create_agent_via_api(client: TestClient, headers: Dict[str, str], 
+    def create_agent_via_api(client, headers: Dict[str, str], 
                             agent_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create an agent via API and return the response data."""
         response = client.post("/api/v1/agents", json=agent_data, headers=headers)
-        assert response.status_code == 201
+        assert response.status_code == 201, f"Expected 201, got {response.status_code}. Response: {response.text}"
         return response.json()["data"]["agent"]
     
     @staticmethod
-    def create_session_via_api(client: TestClient, headers: Dict[str, str], 
+    def create_session_via_api(client, headers: Dict[str, str], 
                               session_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a session via API and return the response data."""
         response = client.post("/api/v1/sessions", json=session_data, headers=headers)
-        assert response.status_code == 201
+        assert response.status_code == 201, f"Expected 201, got {response.status_code}. Response: {response.text}"
         return response.json()["data"]["session"]
     
     @staticmethod

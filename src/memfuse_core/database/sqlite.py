@@ -30,6 +30,9 @@ class SQLiteDB(DBBase):
         # Connect to database
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
+        
+        # Enable foreign key constraints in SQLite (they are disabled by default)
+        self.conn.execute("PRAGMA foreign_keys = ON")
 
         logger.info(f"SQLite backend initialized at {db_path}")
 
@@ -91,8 +94,8 @@ class SQLiteDB(DBBase):
             name TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id),
-            FOREIGN KEY (agent_id) REFERENCES agents (id),
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+            FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
             UNIQUE(name, user_id)
         )
         ''')
@@ -104,7 +107,7 @@ class SQLiteDB(DBBase):
             session_id TEXT,
             created_at TIMESTAMP,
             updated_at TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions (id)
+            FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
         )
         ''')
 
@@ -117,7 +120,7 @@ class SQLiteDB(DBBase):
             content TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP,
-            FOREIGN KEY (round_id) REFERENCES rounds (id)
+            FOREIGN KEY (round_id) REFERENCES rounds (id) ON DELETE CASCADE
         )
         ''')
 
@@ -129,7 +132,7 @@ class SQLiteDB(DBBase):
             content TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         ''')
 
@@ -143,7 +146,7 @@ class SQLiteDB(DBBase):
             permissions TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         ''')
 
