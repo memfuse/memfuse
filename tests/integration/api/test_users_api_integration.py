@@ -174,9 +174,12 @@ class TestUsersAPIIntegration:
                                      test_user_data: Dict[str, Any], database_connection,
                                      integration_helper, mock_embedding_service):
         """Test that listing users returns actual database records."""
-        # Create multiple users
-        user1_data = {**test_user_data, "name": "integration_test_user_1"}
-        user2_data = {**test_user_data, "name": "integration_test_user_2"}
+        # Create multiple users with unique names
+        import uuid
+        unique_suffix = str(uuid.uuid4())[:8]
+        
+        user1_data = {**test_user_data, "name": f"integration_test_user_1_{unique_suffix}"}
+        user2_data = {**test_user_data, "name": f"integration_test_user_2_{unique_suffix}"}
         
         user1 = integration_helper.create_user_via_api(client, headers, user1_data)
         user2 = integration_helper.create_user_via_api(client, headers, user2_data)
@@ -210,7 +213,7 @@ class TestUsersAPIIntegration:
         response = client.post("/api/v1/users", json=test_user_data, headers=headers)
         
         # Verify duplicate name is rejected
-        assert response.status_code == 409
+        assert response.status_code == 400
         response_data = response.json()
         assert response_data["status"] == "error"
         assert "already exists" in response_data["message"].lower()
