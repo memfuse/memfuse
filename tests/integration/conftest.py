@@ -71,10 +71,11 @@ def setup_integration_environment():
 @pytest.fixture
 def client():
     """Create test client for API testing with proper service initialization."""
+    import asyncio
     # Import here to avoid circular imports
     from memfuse_core.services.service_initializer import ServiceInitializer
     from memfuse_core.utils.config import config_manager
-    from omegaconf import DictConfig
+    from omegaconf import DictConfig, OmegaConf
     
     # Create test configuration with PostgreSQL
     test_config = {
@@ -97,8 +98,24 @@ def client():
         }
     }
     
+    # Convert to DictConfig for ServiceInitializer
+    cfg = OmegaConf.create(test_config)
+    
     # Set configuration
     config_manager.set_config(test_config)
+    
+    # Initialize services with test configuration
+    service_initializer = ServiceInitializer()
+    
+    # Run the async initialization in a synchronous context
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        success = loop.run_until_complete(service_initializer.initialize_all_services(cfg))
+        if not success:
+            raise RuntimeError("Failed to initialize services")
+    finally:
+        loop.close()
     
     # Create app with proper initialization
     app = create_app()
@@ -165,8 +182,10 @@ def mock_llm_service():
 @pytest.fixture
 def test_user_data():
     """Standard test user data."""
+    import uuid
+    unique_suffix = str(uuid.uuid4())[:8]
     return {
-        "name": "integration_test_user",
+        "name": f"integration_test_user_{unique_suffix}",
         "description": "User for integration testing"
     }
 
@@ -174,8 +193,10 @@ def test_user_data():
 @pytest.fixture
 def test_agent_data():
     """Standard test agent data."""
+    import uuid
+    unique_suffix = str(uuid.uuid4())[:8]
     return {
-        "name": "integration_test_agent", 
+        "name": f"integration_test_agent_{unique_suffix}", 
         "description": "Agent for integration testing"
     }
 
@@ -184,10 +205,12 @@ def test_agent_data():
 def test_session_data():
     """Standard test session data generator."""
     def _generate_session_data(user_id: str, agent_id: str, name_suffix: str = ""):
+        import uuid
+        unique_suffix = str(uuid.uuid4())[:8]
         return {
             "user_id": user_id,
             "agent_id": agent_id,
-            "name": f"integration_test_session{name_suffix}"
+            "name": f"integration_test_session_{unique_suffix}{name_suffix}"
         }
     return _generate_session_data
 

@@ -19,9 +19,10 @@ Integration tests are designed to:
 ### Database Setup
 
 - **TimescaleDB**: Real PostgreSQL with pgai extensions
-- **Fresh Database**: Each test gets clean database state
+- **Fresh Database**: Each test gets clean database state via `database_manager.py reset`
 - **Cleanup Strategy**: Reset database in setup, preserve for inspection after tests
-- **Management**: Use `database_manager.py` for schema operations
+- **Management**: Use `scripts/database_manager.py` for schema operations
+- **Service Startup**: Use `scripts/memfuse_launcher.py` for complete service setup
 
 ### Service Strategy
 
@@ -311,8 +312,8 @@ poetry run python scripts/run_tests.py integration
 **Option 2: Manual Control**
 
 ```bash
-# 1. Start database services first
-poetry run python scripts/memfuse_launcher.py --start-db --optimize-db
+# 1. Start MemFuse services first (database startup enabled by default)
+poetry run python scripts/memfuse_launcher.py --background
 
 # 2. Run integration tests (faster since database is already up)
 poetry run pytest tests/integration/ -v
@@ -336,8 +337,11 @@ poetry run pytest tests/integration/api/test_users_api_integration.py::test_crea
 ### 1. **Infrastructure Setup** (Once)
 
 ```bash
-# Start database and services (runs in background)
-poetry run python scripts/memfuse_launcher.py --start-db --optimize-db
+# Start MemFuse with database startup (recommended daily workflow)
+poetry run python scripts/memfuse_launcher.py
+
+# Alternative: start database and services in background
+poetry run python scripts/memfuse_launcher.py --start-db --optimize-db --background
 
 # Verify database status
 poetry run python scripts/database_manager.py status
@@ -351,6 +355,9 @@ poetry run pytest tests/integration/api/test_users_api_integration.py -v
 
 # Manual reset if needed
 poetry run python scripts/database_manager.py reset
+
+# Check database status between tests
+poetry run python scripts/database_manager.py status
 ```
 
 ### 3. **Performance Benefits**
@@ -367,10 +374,29 @@ The new two-stage approach provides:
 
 ```bash
 # Inspect database state (not cleaned up)
-python scripts/database_manager.py status
+poetry run python scripts/database_manager.py status
 
 # Check test data persistence
 psql -h localhost -p 5432 -U postgres -d memfuse
+```
+
+### 5. **Troubleshooting**
+
+**Common Issues:**
+
+- **Database Connection**: Ensure PostgreSQL is running via `poetry run python scripts/memfuse_launcher.py --start-db`
+- **Wrong Database**: Tests should use PostgreSQL, not SQLite - check service configuration
+- **Database Reset**: Use `poetry run python scripts/database_manager.py reset` between test runs
+- **Service Startup**: Use `poetry run python scripts/memfuse_launcher.py` for complete service setup
+- **Test Data Conflicts**: Clean database with `reset` command if tests fail with "already exists" errors
+
+**Quick Reset Workflow:**
+
+```bash
+# Reset database and restart services
+poetry run python scripts/database_manager.py reset
+poetry run python scripts/memfuse_launcher.py --background
+poetry run pytest tests/integration/api/test_users_api_integration.py -v
 ```
 
 ## Maintenance Guidelines

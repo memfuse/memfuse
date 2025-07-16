@@ -139,12 +139,12 @@ async def update_user(
     )
 
 
-@router.delete("/{user_id}", response_model=ApiResponse)
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_api_errors("delete user")
 async def delete_user(
     user_id: str,
     _: dict = Depends(validate_api_key),  # API key validation
-) -> ApiResponse:
+) -> None:
     """Delete a user."""
     db = DatabaseService.get_instance()
 
@@ -162,10 +162,7 @@ async def delete_user(
         )
         raise_api_error(error_response)
 
-    return ApiResponse.success(
-        data={"user_id": user_id},
-        message="User deleted successfully",
-    )
+    # Return 204 No Content (no response body)
 
 
 @router.post("/{user_id}/query", response_model=ApiResponse)

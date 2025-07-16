@@ -139,19 +139,7 @@ class TestUsersAPIContract:
         }
         return base_schema
     
-    @property
-    def user_delete_success_schema(self) -> Dict[str, Any]:
-        """Schema for successful user deletion response."""
-        base_schema = self.api_success_response_schema.copy()
-        base_schema["properties"]["data"] = {
-            "type": "object",
-            "properties": {
-                "user_id": {"type": "string"}
-            },
-            "required": ["user_id"],
-            "additionalProperties": False
-        }
-        return base_schema
+
     
     def validate_response_schema(self, response_data: Dict[str, Any], schema: Dict[str, Any]) -> None:
         """Validate response data against schema."""
@@ -393,7 +381,7 @@ class TestUsersAPIContract:
         assert response_data["message"] == "User with ID 'nonexistent-id' not found"
     
     def test_delete_user_success_contract(self, client, headers):
-        """Test DELETE /api/v1/users/{user_id} returns correct schema."""
+        """Test DELETE /api/v1/users/{user_id} returns 204 No Content."""
         # First create a user
         create_response = client.post(
             "/api/v1/users",
@@ -401,25 +389,17 @@ class TestUsersAPIContract:
             headers=headers
         )
 
-        # TODO: change to 204
         assert create_response.status_code == 201  # API correctly returns 201 for creation
         user_id = create_response.json()["data"]["user"]["id"]
         
         # Delete user
         response = client.delete(f"/api/v1/users/{user_id}", headers=headers)
         
-        # Validate HTTP status code
-        assert response.status_code == 200
+        # Validate HTTP status code - 204 No Content for successful deletion
+        assert response.status_code == 204
         
-        # Validate response schema
-        response_data = response.json()
-        self.validate_response_schema(response_data, self.user_delete_success_schema)
-        
-        # Validate specific contract requirements
-        assert response_data["status"] == "success"
-        assert response_data["code"] == 200
-        assert response_data["message"] == "User deleted successfully"
-        assert response_data["data"]["user_id"] == user_id
+        # 204 No Content should not have a response body
+        assert response.content == b""
     
     def test_delete_user_not_found_contract(self, client, headers):
         """Test DELETE /api/v1/users/{user_id} with invalid ID returns 404."""

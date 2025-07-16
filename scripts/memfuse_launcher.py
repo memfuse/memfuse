@@ -427,6 +427,9 @@ class MemFuseLauncher:
                         time.sleep(1)
                 except KeyboardInterrupt:
                     self.print_status("Received interrupt signal", StatusLevel.INFO)
+                finally:
+                    # Only stop services when showing logs (interactive mode)
+                    self.stop_services()
             else:
                 self.print_status("Server started in background mode", StatusLevel.SUCCESS)
 
@@ -434,9 +437,9 @@ class MemFuseLauncher:
 
         except Exception as e:
             self.print_status(f"Server startup failed: {e}", StatusLevel.ERROR)
-            return False
-        finally:
+            # Only stop services on error
             self.stop_services()
+            return False
 
 
 def main():
