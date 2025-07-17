@@ -276,7 +276,7 @@ class TestUsersAPIIntegration:
         response = client.post("/api/v1/users", json=invalid_user_data, headers=headers)
         
         # Verify request failed
-        assert response.status_code == 400
+        assert response.status_code == 422  # FastAPI validation error
         
         # Verify no partial data was committed to database
         final_count = integration_helper.verify_database_record_count(

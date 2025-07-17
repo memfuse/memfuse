@@ -41,12 +41,12 @@ class SessionCreate(BaseModel):
     """Request model for creating a session."""
     user_id: str
     agent_id: str
-    name: Optional[str] = None  # Session name, will be auto-generated if not provided
+    name: Optional[str] = Field(None, min_length=1, description="Session name - cannot be empty if provided")
 
 
 class SessionUpdate(BaseModel):
     """Request model for updating a session."""
-    name: Optional[str] = None  # New session name
+    name: Optional[str] = Field(None, min_length=1, description="Session name - cannot be empty if provided")
 
 
 # API Key models
