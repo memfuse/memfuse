@@ -14,9 +14,10 @@ from datetime import datetime
 
 class LayerType(Enum):
     """Memory layer types in the hierarchy."""
-    M0 = "m0"  # Episodic Memory: Raw data storage
-    M1 = "m1"  # Semantic Memory: Facts and concepts
-    M2 = "m2"  # Relational Memory: Knowledge graph
+    M0 = "m0"  # Raw Data: Original data storage
+    M1 = "m1"  # Episodic Memory: Event-centered experiences
+    M2 = "m2"  # Semantic Memory: Facts and concepts
+    M3 = "m3"  # Procedural Memory: Learned patterns and procedures
 
 
 class ProcessingMode(Enum):

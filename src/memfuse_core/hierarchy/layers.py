@@ -18,9 +18,9 @@ from .core import (
 from ..rag.chunk.base import ChunkData
 
 
-class M0EpisodicLayer(MemoryLayer):
+class M0RawDataLayer(MemoryLayer):
     """
-    M0 (Episodic Memory) Layer - Raw data storage.
+    M0 (Raw Data) Layer - Original data storage.
 
     Stores raw data in its original form using multiple storage backends:
     - Vector Store: For semantic similarity search
@@ -45,8 +45,8 @@ class M0EpisodicLayer(MemoryLayer):
         # M0-specific configuration
         self.storage_backends = config.storage_backends or ["vector", "keyword"]
 
-        logger.info(f"M0EpisodicLayer: Initialized for user {user_id}")
-    
+        logger.info(f"M0RawDataLayer: Initialized for user {user_id}")
+
     async def initialize(self) -> bool:
         """Initialize the M0 layer."""
         try:
@@ -54,11 +54,11 @@ class M0EpisodicLayer(MemoryLayer):
                 await self.storage_manager.initialize()
 
             self.initialized = True
-            logger.info(f"M0EpisodicLayer: Initialized successfully for user {self.user_id}")
+            logger.info(f"M0RawDataLayer: Initialized successfully for user {self.user_id}")
             return True
 
         except Exception as e:
-            logger.error(f"M0EpisodicLayer: Initialization failed: {e}")
+            logger.error(f"M0RawDataLayer: Initialization failed: {e}")
             return False
     
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
@@ -109,14 +109,14 @@ class M0EpisodicLayer(MemoryLayer):
             
 
             
-            logger.debug(f"M0EpisodicLayer: Processed data with {len(processed_items)} successful stores")
+            logger.debug(f"M0RawDataLayer: Processed data with {len(processed_items)} successful stores")
             return result
 
         except Exception as e:
             processing_time = time.time() - start_time
             self._update_stats(processing_time, False)
 
-            logger.error(f"M0EpisodicLayer: Processing failed: {e}")
+            logger.error(f"M0RawDataLayer: Processing failed: {e}")
             return ProcessingResult(
                 success=False,
                 layer_type=self.layer_type,
@@ -159,11 +159,11 @@ class M0EpisodicLayer(MemoryLayer):
                     )
                     all_results.extend(keyword_results)
             
-            logger.debug(f"M0EpisodicLayer: Query returned {len(all_results)} results")
+            logger.debug(f"M0RawDataLayer: Query returned {len(all_results)} results")
             return all_results
 
         except Exception as e:
-            logger.error(f"M0EpisodicLayer: Query failed: {e}")
+            logger.error(f"M0RawDataLayer: Query failed: {e}")
             return []
 
     def _convert_to_chunks(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
@@ -184,7 +184,7 @@ class M0EpisodicLayer(MemoryLayer):
                     chunks.append(chunk)
 
         except Exception as e:
-            logger.error(f"M0EpisodicLayer: Failed to convert data to chunks: {e}")
+            logger.error(f"M0RawDataLayer: Failed to convert data to chunks: {e}")
 
         return chunks
 
@@ -216,25 +216,25 @@ class M0EpisodicLayer(MemoryLayer):
             )
 
         except Exception as e:
-            logger.error(f"M0EpisodicLayer: Failed to create chunk from item: {e}")
+            logger.error(f"M0RawDataLayer: Failed to create chunk from item: {e}")
             return None
 
 
-class M1SemanticLayer(MemoryLayer):
+class M1EpisodicLayer(MemoryLayer):
     """
-    M1 (Semantic Memory) Layer - Facts and concepts.
+    M1 (Episodic Memory) Layer - Event-centered experiences.
 
-    Extracts and stores facts from raw data using LLM processing:
-    - Fact extraction from M0 data
-    - Fact storage and indexing
-    - Semantic search over facts
+    Stores personal experiences and specific events with context:
+    - Episode formation from M0 raw data
+    - Episode storage and indexing
+    - Contextual search over episodes
 
     Features:
     - Event-driven processing (triggered by M0 events)
-    - LLM-based fact extraction
-    - Fact deduplication and validation
+    - Episode formation and contextualization
+    - Temporal and contextual metadata preservation
     """
-    
+
     def __init__(
         self,
         layer_type: LayerType,
@@ -243,12 +243,12 @@ class M1SemanticLayer(MemoryLayer):
         storage_manager: Optional[StorageManager] = None
     ):
         super().__init__(layer_type, config, user_id, storage_manager)
-        
+
         # M1-specific configuration
         self.llm_config = config.custom_config.get("llm_config", {})
-        self.fact_extraction_enabled = config.custom_config.get("fact_extraction_enabled", True)
+        self.episode_formation_enabled = config.custom_config.get("episode_formation_enabled", True)
 
-        logger.info(f"M1SemanticLayer: Initialized for user {user_id}")
+        logger.info(f"M1EpisodicLayer: Initialized for user {user_id}")
     
     async def initialize(self) -> bool:
         """Initialize the M1 layer."""
@@ -257,11 +257,11 @@ class M1SemanticLayer(MemoryLayer):
                 await self.storage_manager.initialize()
 
             self.initialized = True
-            logger.info(f"M1SemanticLayer: Initialized successfully for user {self.user_id}")
+            logger.info(f"M1EpisodicLayer: Initialized successfully for user {self.user_id}")
             return True
 
         except Exception as e:
-            logger.error(f"M1SemanticLayer: Initialization failed: {e}")
+            logger.error(f"M1EpisodicLayer: Initialization failed: {e}")
             return False
     
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
@@ -313,14 +313,14 @@ class M1SemanticLayer(MemoryLayer):
             # Note: Event emission for M2 processing would be handled by the parallel manager
             # No direct event bus access needed in individual layers
 
-            logger.debug(f"M1SemanticLayer: Extracted {len(facts)} facts")
+            logger.debug(f"M1EpisodicLayer: Extracted {len(facts)} episodes")
             return result
 
         except Exception as e:
             processing_time = time.time() - start_time
             self._update_stats(processing_time, False)
 
-            logger.error(f"M1SemanticLayer: Processing failed: {e}")
+            logger.error(f"M1EpisodicLayer: Processing failed: {e}")
             return ProcessingResult(
                 success=False,
                 layer_type=self.layer_type,
@@ -343,11 +343,11 @@ class M1SemanticLayer(MemoryLayer):
                     StorageType.VECTOR, query, **kwargs
                 )
 
-            logger.debug(f"M1SemanticLayer: Query returned {len(results)} facts")
+            logger.debug(f"M1EpisodicLayer: Query returned {len(results)} episodes")
             return results
 
         except Exception as e:
-            logger.error(f"M1SemanticLayer: Query failed: {e}")
+            logger.error(f"M1EpisodicLayer: Query failed: {e}")
             return []
     
 
@@ -364,7 +364,7 @@ class M1SemanticLayer(MemoryLayer):
         Returns:
             ProcessingResult with extracted facts
         """
-        logger.info(f"M1SemanticLayer: Processing new data for user {user_id}, session {session_id}")
+        logger.info(f"M1EpisodicLayer: Processing new data for user {user_id}, session {session_id}")
 
         # Add metadata for context
         metadata = {
@@ -387,7 +387,7 @@ class M1SemanticLayer(MemoryLayer):
         Returns:
             List of fact dictionaries
         """
-        logger.debug(f"M1SemanticLayer: Querying facts with query '{query[:50]}...', top_k={top_k}")
+        logger.debug(f"M1EpisodicLayer: Querying episodes with query '{query[:50]}...', top_k={top_k}")
 
         try:
             results = await self.query(query, top_k=top_k, filters=filters)
@@ -400,11 +400,11 @@ class M1SemanticLayer(MemoryLayer):
                 else:
                     formatted_results.append({"content": str(result)})
 
-            logger.debug(f"M1SemanticLayer: Returning {len(formatted_results)} formatted facts")
+            logger.debug(f"M1EpisodicLayer: Returning {len(formatted_results)} formatted episodes")
             return formatted_results
 
         except Exception as e:
-            logger.error(f"M1SemanticLayer: Query facts failed: {e}")
+            logger.error(f"M1EpisodicLayer: Query episodes failed: {e}")
             return []
 
     @property
@@ -428,11 +428,11 @@ class M1SemanticLayer(MemoryLayer):
                 item_facts = await self._extract_facts_from_item(data, metadata)
                 facts.extend(item_facts)
 
-            logger.info(f"M1SemanticLayer: Extracted {len(facts)} facts from data")
+            logger.info(f"M1EpisodicLayer: Extracted {len(facts)} episodes from data")
             return facts
 
         except Exception as e:
-            logger.error(f"M1SemanticLayer: Fact extraction failed: {e}")
+            logger.error(f"M1EpisodicLayer: Episode extraction failed: {e}")
             return []
 
     async def _extract_facts_from_item(self, item: Any, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -466,7 +466,7 @@ class M1SemanticLayer(MemoryLayer):
             return facts
 
         except Exception as e:
-            logger.error(f"M1SemanticLayer: Failed to extract facts from item: {e}")
+            logger.error(f"M1EpisodicLayer: Failed to extract episodes from item: {e}")
             return []
 
     def _convert_facts_to_chunks(self, facts: List[Dict[str, Any]], metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
@@ -498,25 +498,25 @@ class M1SemanticLayer(MemoryLayer):
                 chunks.append(chunk)
 
         except Exception as e:
-            logger.error(f"M1SemanticLayer: Failed to convert facts to chunks: {e}")
+            logger.error(f"M1EpisodicLayer: Failed to convert episodes to chunks: {e}")
 
         return chunks
 
 
-class M2RelationalLayer(MemoryLayer):
+class M2SemanticLayer(MemoryLayer):
     """
-    M2 (Relational Memory) Layer - Knowledge graph.
+    M2 (Semantic Memory) Layer - Facts and concepts.
 
-    Constructs and maintains a knowledge graph from facts:
-    - Entity extraction from facts
-    - Relationship identification
-    - Graph construction and updates
-    - Graph-based querying
-    
+    Extracts and stores semantic knowledge from episodic experiences:
+    - Fact extraction from M1 episodes
+    - Fact storage and indexing
+    - Semantic search over facts
+    - Knowledge validation and conflict resolution
+
     Features:
     - Event-driven processing (triggered by M1 events)
-    - Graph database integration
-    - Entity resolution and linking
+    - LLM-based fact extraction
+    - Fact deduplication and validation
     """
 
     def __init__(
@@ -529,10 +529,10 @@ class M2RelationalLayer(MemoryLayer):
         super().__init__(layer_type, config, user_id, storage_manager)
 
         # M2-specific configuration
-        self.graph_config = config.custom_config.get("graph_config", {})
-        self.entity_extraction_enabled = config.custom_config.get("entity_extraction_enabled", True)
+        self.llm_config = config.custom_config.get("llm_config", {})
+        self.fact_extraction_enabled = config.custom_config.get("fact_extraction_enabled", True)
 
-        logger.info(f"M2RelationalLayer: Initialized for user {user_id}")
+        logger.info(f"M2SemanticLayer: Initialized for user {user_id}")
     
     async def initialize(self) -> bool:
         """Initialize the M2 layer."""
@@ -541,11 +541,11 @@ class M2RelationalLayer(MemoryLayer):
                 await self.storage_manager.initialize()
 
             self.initialized = True
-            logger.info(f"M2RelationalLayer: Initialized successfully for user {self.user_id}")
+            logger.info(f"M2SemanticLayer: Initialized successfully for user {self.user_id}")
             return True
 
         except Exception as e:
-            logger.error(f"M2RelationalLayer: Initialization failed: {e}")
+            logger.error(f"M2SemanticLayer: Initialization failed: {e}")
             return False
     
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
@@ -567,7 +567,7 @@ class M2RelationalLayer(MemoryLayer):
             
             # Extract entities and relationships (placeholder)
             entities, relationships = await self._extract_entities_and_relationships(data, metadata)
-            logger.debug(f"M2RelationalLayer: Extracted {len(entities)} entities, {len(relationships)} relationships from data: {type(data)}")
+            logger.debug(f"M2SemanticLayer: Extracted {len(entities)} facts, {len(relationships)} relationships from data: {type(data)}")
 
             # Convert entities and relationships to ChunkData objects and store
             processed_items = []
@@ -581,21 +581,21 @@ class M2RelationalLayer(MemoryLayer):
                         entity_id = await self.storage_manager.write_to_backend(
                             StorageType.GRAPH, chunk, metadata
                         )
-                        logger.debug(f"M2RelationalLayer: Successfully stored entity to graph storage: {entity_id}")
+                        logger.debug(f"M2SemanticLayer: Successfully stored fact to graph storage: {entity_id}")
                     except Exception as e:
-                        logger.debug(f"M2RelationalLayer: Graph storage not available, using vector storage: {e}")
+                        logger.debug(f"M2SemanticLayer: Graph storage not available, using vector storage: {e}")
                         try:
                             entity_id = await self.storage_manager.write_to_backend(
                                 StorageType.VECTOR, chunk, metadata
                             )
-                            logger.debug(f"M2RelationalLayer: Successfully stored entity to vector storage: {entity_id}")
+                            logger.debug(f"M2SemanticLayer: Successfully stored fact to vector storage: {entity_id}")
                         except Exception as ve:
-                            logger.error(f"M2RelationalLayer: Failed to store entity to vector storage: {ve}")
+                            logger.error(f"M2SemanticLayer: Failed to store fact to vector storage: {ve}")
 
                     if entity_id:
                         processed_items.append(entity_id)
                     else:
-                        logger.warning(f"M2RelationalLayer: Failed to store entity chunk: {chunk.chunk_id}")
+                        logger.warning(f"M2SemanticLayer: Failed to store fact chunk: {chunk.chunk_id}")
 
                 # Convert and store relationships
                 relationship_chunks = self._convert_relationships_to_chunks(relationships, metadata)
@@ -606,21 +606,21 @@ class M2RelationalLayer(MemoryLayer):
                         rel_id = await self.storage_manager.write_to_backend(
                             StorageType.GRAPH, chunk, metadata
                         )
-                        logger.debug(f"M2RelationalLayer: Successfully stored relationship to graph storage: {rel_id}")
+                        logger.debug(f"M2SemanticLayer: Successfully stored relationship to graph storage: {rel_id}")
                     except Exception as e:
-                        logger.debug(f"M2RelationalLayer: Graph storage not available, using vector storage: {e}")
+                        logger.debug(f"M2SemanticLayer: Graph storage not available, using vector storage: {e}")
                         try:
                             rel_id = await self.storage_manager.write_to_backend(
                                 StorageType.VECTOR, chunk, metadata
                             )
-                            logger.debug(f"M2RelationalLayer: Successfully stored relationship to vector storage: {rel_id}")
+                            logger.debug(f"M2SemanticLayer: Successfully stored relationship to vector storage: {rel_id}")
                         except Exception as ve:
-                            logger.error(f"M2RelationalLayer: Failed to store relationship to vector storage: {ve}")
+                            logger.error(f"M2SemanticLayer: Failed to store relationship to vector storage: {ve}")
 
                     if rel_id:
                         processed_items.append(rel_id)
                     else:
-                        logger.warning(f"M2RelationalLayer: Failed to store relationship chunk: {chunk.chunk_id}")
+                        logger.warning(f"M2SemanticLayer: Failed to store relationship chunk: {chunk.chunk_id}")
             
             processing_time = time.time() - start_time
             success = len(processed_items) > 0
@@ -640,14 +640,14 @@ class M2RelationalLayer(MemoryLayer):
                 processing_time=processing_time
             )
 
-            logger.debug(f"M2RelationalLayer: Processed {len(entities)} entities, {len(relationships)} relationships, success={success}, processed_items={len(processed_items)}")
+            logger.debug(f"M2SemanticLayer: Processed {len(entities)} facts, {len(relationships)} relationships, success={success}, processed_items={len(processed_items)}")
             return result
 
         except Exception as e:
             processing_time = time.time() - start_time
             self._update_stats(processing_time, False)
 
-            logger.error(f"M2RelationalLayer: Processing failed: {e}")
+            logger.error(f"M2SemanticLayer: Processing failed: {e}")
             return ProcessingResult(
                 success=False,
                 layer_type=self.layer_type,
@@ -670,11 +670,11 @@ class M2RelationalLayer(MemoryLayer):
                     StorageType.GRAPH, query, **kwargs
                 )
             
-            logger.debug(f"M2RelationalLayer: Query returned {len(results)} graph results")
+            logger.debug(f"M2SemanticLayer: Query returned {len(results)} semantic results")
             return results
 
         except Exception as e:
-            logger.error(f"M2RelationalLayer: Query failed: {e}")
+            logger.error(f"M2SemanticLayer: Query failed: {e}")
             return []
     
 
@@ -739,10 +739,10 @@ class M2RelationalLayer(MemoryLayer):
                 entities.append({"entity": f"Entity from data: {content}..."})
                 relationships.append({"relationship": "derived_from", "source": "data", "target": "entity"})
 
-            logger.debug(f"M2RelationalLayer: Extracted {len(entities)} entities and {len(relationships)} relationships from data")
+            logger.debug(f"M2SemanticLayer: Extracted {len(entities)} facts and {len(relationships)} relationships from data")
 
         except Exception as e:
-            logger.error(f"M2RelationalLayer: Entity extraction failed: {e}")
+            logger.error(f"M2SemanticLayer: Fact extraction failed: {e}")
             # Return empty lists on error
             entities = []
             relationships = []
@@ -777,7 +777,7 @@ class M2RelationalLayer(MemoryLayer):
                 chunks.append(chunk)
 
         except Exception as e:
-            logger.error(f"M2RelationalLayer: Failed to convert entities to chunks: {e}")
+            logger.error(f"M2SemanticLayer: Failed to convert facts to chunks: {e}")
 
         return chunks
 
@@ -814,6 +814,182 @@ class M2RelationalLayer(MemoryLayer):
                 chunks.append(chunk)
 
         except Exception as e:
-            logger.error(f"M2RelationalLayer: Failed to convert relationships to chunks: {e}")
+            logger.error(f"M2SemanticLayer: Failed to convert relationships to chunks: {e}")
+
+        return chunks
+
+
+class M3ProceduralLayer(MemoryLayer):
+    """
+    M3 (Procedural Memory) Layer - Learned patterns and procedures.
+
+    Stores learned patterns, procedures, and behavioral knowledge:
+    - Pattern recognition from semantic knowledge
+    - Skill and behavior storage
+    - Procedural knowledge indexing
+
+    Features:
+    - Event-driven processing (triggered by M2 events)
+    - Pattern recognition and learning
+    - Skill library management
+
+    Note: This is a placeholder implementation for future development.
+    """
+
+    def __init__(
+        self,
+        layer_type: LayerType,
+        config: LayerConfig,
+        user_id: str,
+        storage_manager: Optional[StorageManager] = None
+    ):
+        super().__init__(layer_type, config, user_id, storage_manager)
+
+        # M3-specific configuration
+        self.pattern_config = config.custom_config.get("pattern_config", {})
+        self.pattern_recognition_enabled = config.custom_config.get("pattern_recognition_enabled", True)
+
+        logger.info(f"M3ProceduralLayer: Initialized for user {user_id} (Placeholder implementation)")
+
+    async def initialize(self) -> bool:
+        """Initialize the M3 layer."""
+        try:
+            if self.storage_manager:
+                await self.storage_manager.initialize()
+
+            self.initialized = True
+            logger.info(f"M3ProceduralLayer: Initialized successfully for user {self.user_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"M3ProceduralLayer: Initialization failed: {e}")
+            return False
+
+    async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
+        """
+        Process data for procedural memory (placeholder implementation).
+
+        In the future, this will:
+        - Recognize patterns from semantic data
+        - Extract procedural knowledge
+        - Store skills and behaviors
+        """
+        start_time = time.time()
+
+        try:
+            logger.info(f"M3ProceduralLayer: Processing data (placeholder): {type(data)}")
+
+            # Placeholder: For now, just return success without actual processing
+            processed_items = []
+            success = True
+
+            # In future implementation, this would:
+            # 1. Analyze semantic data for patterns
+            # 2. Extract procedural knowledge
+            # 3. Store in procedural memory tables
+
+            processing_time = time.time() - start_time
+            self._update_stats(processing_time, success)
+
+            result = ProcessingResult(
+                layer_type=self.layer_type,
+                success=success,
+                processed_items=processed_items,
+                processing_time=processing_time,
+                metadata={"layer": "M3", "placeholder": True}
+            )
+
+            logger.debug("M3ProceduralLayer: Placeholder processing completed")
+            return result
+
+        except Exception as e:
+            processing_time = time.time() - start_time
+            self._update_stats(processing_time, False)
+
+            logger.error(f"M3ProceduralLayer: Processing failed: {e}")
+            return ProcessingResult(
+                layer_type=self.layer_type,
+                success=False,
+                processed_items=[],
+                processing_time=processing_time,
+                metadata={"error": str(e)}
+            )
+
+    async def query(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """
+        Query procedural memory (placeholder implementation).
+
+        In the future, this will search for relevant procedures, patterns, and skills.
+        """
+        try:
+            logger.debug(f"M3ProceduralLayer: Querying procedures with query '{query[:50]}...', top_k={top_k}")
+
+            # Placeholder: Return empty results for now
+            results = []
+
+            # In future implementation, this would:
+            # 1. Search procedural knowledge base using query and filters
+            # 2. Find relevant patterns and skills
+            # 3. Return top_k ranked results
+
+            # Note: filters parameter will be used in future implementation
+            _ = filters  # Acknowledge parameter for future use
+
+            logger.debug(f"M3ProceduralLayer: Query returned {len(results)} procedural results")
+            return results
+
+        except Exception as e:
+            logger.error(f"M3ProceduralLayer: Query failed: {e}")
+            return []
+
+    def _extract_patterns_from_data(self, data: Any) -> List[Dict[str, Any]]:
+        """
+        Extract patterns from semantic data (placeholder).
+
+        Future implementation will use ML/AI to recognize patterns.
+        """
+        try:
+            # Placeholder: Return empty patterns for now
+            patterns = []
+
+            # In future implementation, this would:
+            # 1. Analyze semantic data for recurring patterns
+            # 2. Identify procedural sequences
+            # 3. Extract skill-based knowledge
+
+            # Note: data parameter will be analyzed in future implementation
+            _ = data  # Acknowledge parameter for future use
+
+            logger.info(f"M3ProceduralLayer: Extracted {len(patterns)} patterns from data (placeholder)")
+            return patterns
+
+        except Exception as e:
+            logger.error(f"M3ProceduralLayer: Failed to extract patterns from data: {e}")
+            return []
+
+    def _convert_patterns_to_chunks(self, patterns: List[Dict[str, Any]], session_id: Optional[str] = None) -> List[ChunkData]:
+        """Convert patterns to chunks for storage (placeholder)."""
+        chunks = []
+
+        try:
+            for i, pattern in enumerate(patterns):
+                chunk_id = f"m3_pattern_{session_id}_{i}" if session_id else f"m3_pattern_{i}"
+
+                chunk = ChunkData(
+                    chunk_id=chunk_id,
+                    content=pattern.get("description", ""),
+                    metadata={
+                        "layer": "M3",
+                        "type": "pattern",
+                        "pattern_type": pattern.get("type", "unknown"),
+                        "confidence": pattern.get("confidence", 0.0),
+                        "session_id": session_id,
+                        "placeholder": True
+                    }
+                )
+                chunks.append(chunk)
+
+        except Exception as e:
+            logger.error(f"M3ProceduralLayer: Failed to convert patterns to chunks: {e}")
 
         return chunks

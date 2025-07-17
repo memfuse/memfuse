@@ -3,21 +3,20 @@ Optimized memory hierarchy system for MemFuse.
 
 This module provides a clean, unified architecture for the three-tier memory system:
 
-1. M0 (Episodic Memory): Stores raw data in its original form
+1. M0 (Raw Data): Stores original data in its unprocessed form
    - Vector Store: For semantic similarity search
    - Keyword Store: For keyword-based search
    - SQL Store: For structured metadata
 
-2. M1 (Semantic Memory): Extracts and stores facts from raw data
-   - LLM-based fact extraction
+2. M1 (Episodic Memory): Stores event-centered experiences and contexts
+   - Episode formation from raw data
+   - Contextual and temporal metadata preservation
+   - Episode storage and indexing
+
+3. M2 (Semantic Memory): Extracts and stores facts and concepts
+   - LLM-based fact extraction from episodes
    - Fact storage and indexing
    - Semantic search over facts
-
-3. M2 (Relational Memory): Constructs a knowledge graph from facts
-   - Entity extraction from facts
-   - Relationship identification
-   - Graph construction and updates
-   - Graph-based querying
 
 The optimized architecture features:
 - Unified interfaces across all layers
@@ -39,7 +38,7 @@ from .core import (
 from .storage import UnifiedStorageManager, StoreBackendAdapter
 
 # Memory layer implementations
-from .layers import M0EpisodicLayer, M1SemanticLayer, M2RelationalLayer
+from .layers import M0RawDataLayer, M1EpisodicLayer, M2SemanticLayer, M3ProceduralLayer
 
 # Main memory manager
 from .manager import MemoryHierarchyManager, create_memory_manager
@@ -64,9 +63,10 @@ __all__ = [
     "StoreBackendAdapter",
 
     # Memory layers
-    "M0EpisodicLayer",
-    "M1SemanticLayer",
-    "M2RelationalLayer",
+    "M0RawDataLayer",
+    "M1EpisodicLayer",
+    "M2SemanticLayer",
+    "M3ProceduralLayer",
 
     # Main manager
     "MemoryHierarchyManager",

@@ -317,6 +317,93 @@ class MemoryLayerImpl(MemoryLayer):
     async def get_layer_status(self) -> Dict[str, LayerStatus]:
         """Get the current status of all memory layers."""
         return self.layer_status.copy()
+
+    async def get_statistics(self) -> Dict[str, Any]:
+        """Get performance and usage statistics for all memory layers."""
+        return {
+            "total_operations": self.total_operations,
+            "successful_operations": self.successful_operations,
+            "failed_operations": self.failed_operations,
+            "success_rate": self.successful_operations / max(self.total_operations, 1),
+            "last_operation_time": self.last_operation_time,
+            "layer_status": {k: v.value for k, v in self.layer_status.items()},
+            "initialized": self.initialized
+        }
+
+    async def health_check(self) -> Dict[str, Any]:
+        """Perform a health check on all memory layers."""
+        health_status = {
+            "overall_status": "healthy" if self.initialized else "unhealthy",
+            "layers": {},
+            "components": {
+                "hierarchy_manager": self.hierarchy_manager is not None,
+                "parallel_manager": self.parallel_manager is not None
+            }
+        }
+
+        # Check each layer status
+        for layer_name, status in self.layer_status.items():
+            health_status["layers"][layer_name] = {
+                "status": status.value,
+                "healthy": status in [LayerStatus.ACTIVE, LayerStatus.INACTIVE]
+            }
+
+        return health_status
+
+    async def reset_layer(self, layer_name: str) -> bool:
+        """Reset a specific memory layer."""
+        try:
+            if layer_name not in self.layer_status:
+                logger.error(f"MemoryLayerImpl: Unknown layer {layer_name}")
+                return False
+
+            # Set layer to initializing status
+            self.layer_status[layer_name] = LayerStatus.INITIALIZING
+
+            # Reset layer through hierarchy manager if available
+            if self.hierarchy_manager and hasattr(self.hierarchy_manager, 'reset_layer'):
+                success = await self.hierarchy_manager.reset_layer(layer_name)
+                if success:
+                    self.layer_status[layer_name] = LayerStatus.ACTIVE
+                    logger.info(f"MemoryLayerImpl: Successfully reset layer {layer_name}")
+                else:
+                    self.layer_status[layer_name] = LayerStatus.ERROR
+                    logger.error(f"MemoryLayerImpl: Failed to reset layer {layer_name}")
+                return success
+            else:
+                logger.warning(f"MemoryLayerImpl: Reset not supported for layer {layer_name}")
+                self.layer_status[layer_name] = LayerStatus.INACTIVE
+                return False
+
+        except Exception as e:
+            logger.error(f"MemoryLayerImpl: Error resetting layer {layer_name}: {e}")
+            self.layer_status[layer_name] = LayerStatus.ERROR
+            return False
+
+    async def cleanup(self) -> bool:
+        """Clean up resources and shut down all memory layers."""
+        try:
+            logger.info("MemoryLayerImpl: Starting cleanup...")
+
+            # Cleanup parallel manager
+            if self.parallel_manager and hasattr(self.parallel_manager, 'cleanup'):
+                await self.parallel_manager.cleanup()
+
+            # Cleanup hierarchy manager
+            if self.hierarchy_manager and hasattr(self.hierarchy_manager, 'cleanup'):
+                await self.hierarchy_manager.cleanup()
+
+            # Reset state
+            self.initialized = False
+            for layer_name in self.layer_status:
+                self.layer_status[layer_name] = LayerStatus.INACTIVE
+
+            logger.info("MemoryLayerImpl: Cleanup completed successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"MemoryLayerImpl: Error during cleanup: {e}")
+            return False
     
     async def get_layer_statistics(self) -> Dict[str, Dict[str, Any]]:
         """Get statistics for all memory layers."""

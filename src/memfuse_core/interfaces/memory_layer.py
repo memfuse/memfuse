@@ -23,7 +23,7 @@ class LayerStatus(Enum):
 
 class WriteResult:
     """Result of a write operation across memory layers."""
-    
+
     def __init__(
         self,
         success: bool,
@@ -108,17 +108,17 @@ class MemoryLayer(ABC):
     ) -> WriteResult:
         """
         Write data to all active memory layers in parallel.
-        
-        This method handles:
-        - M0: Immediate episodic storage (vector/keyword/graph)
-        - M1: Semantic fact extraction and storage (parallel, not triggered)
-        - M2: Relational knowledge graph construction (parallel, not triggered)
-        
+
+        This method handles the new memory layer architecture:
+        - M0: Raw data storage (immediate storage of original data)
+        - M1: Episodic memory formation (event-centered experiences)
+        - M2: Semantic memory extraction (facts and concepts)
+
         Args:
             message_batch_list: Batch of message lists to process
             session_id: Optional session identifier
             metadata: Optional metadata for the operation
-            
+
         Returns:
             WriteResult with success status and layer-specific results
         """
@@ -166,29 +166,43 @@ class MemoryLayer(ABC):
     async def get_layer_status(self) -> Dict[str, LayerStatus]:
         """
         Get the current status of all memory layers.
-        
+
         Returns:
             Dictionary mapping layer names (M0, M1, M2) to their status
         """
         pass
-    
+
     @abstractmethod
-    async def get_layer_statistics(self) -> Dict[str, Dict[str, Any]]:
+    async def get_statistics(self) -> Dict[str, Any]:
         """
-        Get statistics for all memory layers.
-        
+        Get performance and usage statistics for all memory layers.
+
         Returns:
-            Dictionary with statistics for each layer (counts, performance metrics, etc.)
+            Dictionary containing statistics like operation counts, success rates,
+            processing times, and layer-specific metrics
         """
         pass
-    
+
     @abstractmethod
     async def health_check(self) -> Dict[str, Any]:
         """
-        Perform health check on all memory layers.
-        
+        Perform a health check on all memory layers.
+
         Returns:
-            Dictionary with health status and diagnostic information
+            Dictionary containing health status for each layer and overall system
+        """
+        pass
+
+    @abstractmethod
+    async def reset_layer(self, layer_name: str) -> bool:
+        """
+        Reset a specific memory layer.
+
+        Args:
+            layer_name: Name of the layer to reset (M0, M1, M2)
+
+        Returns:
+            True if reset successful, False otherwise
         """
         pass
     
@@ -196,7 +210,7 @@ class MemoryLayer(ABC):
     async def cleanup(self) -> bool:
         """
         Clean up resources and shut down all memory layers.
-        
+
         Returns:
             True if cleanup successful, False otherwise
         """
@@ -205,7 +219,7 @@ class MemoryLayer(ABC):
 
 class MemoryLayerConfig:
     """Configuration for MemoryLayer."""
-    
+
     def __init__(
         self,
         m0_enabled: bool = True,

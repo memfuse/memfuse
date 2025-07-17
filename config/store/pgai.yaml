@@ -41,10 +41,10 @@ pgai:
   # Event-driven configuration (enable real-time trigger mode)
   immediate_trigger: true
   
-  # Embedding configuration
+  # Embedding configuration (unified across all layers)
   embedding:
-    model: "text-embedding-3-small"
-    dimensions: 1536
+    model: "all-MiniLM-L6-v2"
+    dimensions: 384
     batch_size: 100
     
   # Chunking configuration
@@ -72,20 +72,36 @@ pgai:
 
 # Unified table naming for different memory layers
 tables:
-  # M0 layer tables
+  # M0 layer tables (Raw Data)
   m0:
-    messages: "m0_episodic"
+    messages: "m0_raw"
     metadata: "m0_metadata"
-    embedding_view: "m0_episodic_embedding"
-    vectorizer_name: "m0_episodic_vectorizer"
-    
-  # M1 layer tables (semantic memory implementation)
+    embedding_view: "m0_raw_embedding"
+    vectorizer_name: "m0_raw_vectorizer"
+
+  # M1 layer tables (Episodic Memory)
   m1:
-    facts: "m1_semantic"
+    episodes: "m1_episodic"
     lineage: "m1_lineage"
-    conflicts: "m1_conflicts"
-    embedding_view: "m1_semantic_embedding"
-    vectorizer_name: "m1_semantic_vectorizer"
+    metadata: "m1_metadata"
+    embedding_view: "m1_episodic_embedding"
+    vectorizer_name: "m1_episodic_vectorizer"
+
+  # M2 layer tables (Semantic Memory)
+  m2:
+    facts: "m2_semantic"
+    lineage: "m2_lineage"
+    conflicts: "m2_conflicts"
+    embedding_view: "m2_semantic_embedding"
+    vectorizer_name: "m2_semantic_vectorizer"
+
+  # M3 layer tables (Procedural Memory)
+  m3:
+    patterns: "m3_procedural"
+    skills: "m3_skills"
+    behaviors: "m3_behaviors"
+    embedding_view: "m3_procedural_embedding"
+    vectorizer_name: "m3_procedural_vectorizer"
     
 
 
@@ -118,18 +134,16 @@ store:
 
 # Memory layer specific configurations with PgAI integration
 memory_layers:
-  # M0 layer configuration (Episodic Memory)
+  # M0 layer configuration (Raw Data)
   m0:
     enabled: true
     priority: 1
-    table_name: "m0_episodic"
+    table_name: "m0_raw"
     
     # PgAI-specific settings for M0
     pgai:
       auto_embedding: true
       immediate_trigger: true
-      embedding_model: "all-MiniLM-L6-v2"
-      embedding_dimensions: 384
       
     # Processing pipeline configuration
     processing_pipeline: ["storage"]  # M0 only does storage
@@ -145,23 +159,64 @@ memory_layers:
     # Storage backend preferences
     storage_backends: ["vector", "keyword", "sql"]
     
-  # M1 layer configuration (Semantic Memory)
+  # M1 layer configuration (Episodic Memory)
   m1:
     enabled: true
     priority: 2
-    table_name: "m1_semantic"
+    table_name: "m1_episodic"
     
     # PgAI-specific settings for M1
     pgai:
       auto_embedding: true
       immediate_trigger: true
-      embedding_model: "all-MiniLM-L6-v2"
-      embedding_dimensions: 384
       
     # Processing pipeline configuration
-    processing_pipeline: ["fact_extraction", "storage"]  # M1 does fact extraction then storage
-    
-    # Fact extraction configuration
+    processing_pipeline: ["episode_formation", "storage"]  # M1 forms episodes then storage
+
+    # Episode formation configuration
+    episode_formation:
+      enabled: true
+      llm_model: "grok-3-mini"
+      temperature: 0.3
+      max_tokens: 1000
+      context_window: 2  # chunks before/after for context
+      temporal_grouping: true
+      event_detection: true
+      min_episode_length: 1  # minimum chunks per episode
+      
+    # Performance settings
+    performance:
+      max_retries: 3
+      retry_interval: 5.0
+      worker_count: 2
+      queue_size: 100
+      batch_size: 5  # Smaller batch for LLM processing
+      
+    # Storage backend preferences
+    storage_backends: ["vector", "sql"]  # M1 primarily uses vector and SQL
+
+    # Async processing settings (to avoid blocking M0)
+    async_processing:
+      enabled: true
+      queue_timeout: 30.0
+      max_concurrent_extractions: 3
+      fallback_on_failure: true  # Continue M0 processing if M1 fails
+
+  # M2 layer configuration (Semantic Memory)
+  m2:
+    enabled: true
+    priority: 3
+    table_name: "m2_semantic"
+
+    # PgAI-specific settings for M2
+    pgai:
+      auto_embedding: true
+      immediate_trigger: true
+
+    # Processing pipeline configuration
+    processing_pipeline: ["fact_extraction", "storage"]  # M2 extracts facts then storage
+
+    # Fact extraction configuration (M2's primary function)
     fact_extraction:
       enabled: true
       llm_model: "grok-3-mini"
@@ -176,25 +231,63 @@ memory_layers:
       classification_strategy: "open"  # "open", "predefined", "custom"
       enable_auto_categorization: true
       custom_fact_types: []  # Can be extended as needed
-      
+
+      # Conflict resolution
+      enable_conflict_detection: true
+      conflict_resolution_strategy: "latest"  # "latest", "confidence", "manual"
+
     # Performance settings
     performance:
       max_retries: 3
       retry_interval: 5.0
       worker_count: 2
-      queue_size: 100
-      batch_size: 5  # Smaller batch for LLM processing
-      
+      queue_size: 50
+      batch_size: 3
+
     # Storage backend preferences
-    storage_backends: ["vector", "sql"]  # M1 primarily uses vector and SQL
-    
-    # Async processing settings (to avoid blocking M0)
+    storage_backends: ["vector", "sql"]
+
+    # Async processing settings (to avoid blocking M1)
     async_processing:
       enabled: true
       queue_timeout: 30.0
-      max_concurrent_extractions: 3
-      fallback_on_failure: true  # Continue M0 processing if M1 fails
-    
+      max_concurrent_extractions: 2
+      fallback_on_failure: true
+
+  # M3 layer configuration (Procedural Memory) - Placeholder
+  m3:
+    enabled: false  # Placeholder implementation
+    priority: 4
+    table_name: "m3_procedural"
+
+    # PgAI-specific settings for M3
+    pgai:
+      auto_embedding: true
+      immediate_trigger: true
+
+    # Processing pipeline configuration
+    processing_pipeline: ["pattern_recognition", "storage"]  # M3 recognizes patterns then storage
+
+    # Pattern recognition configuration (M3's primary function)
+    pattern_recognition:
+      enabled: true
+      llm_model: "grok-3-mini"
+      temperature: 0.2
+      max_tokens: 800
+      min_confidence_threshold: 0.8
+      batch_size: 2
+      context_window: 3  # larger context for pattern detection
+
+    # Performance settings
+    performance:
+      max_retries: 3
+      retry_interval: 5.0
+      worker_count: 1
+      queue_size: 25
+      batch_size: 2
+
+    # Storage backend preferences
+    storage_backends: ["vector", "sql"]
 
 
 # =============================================================================

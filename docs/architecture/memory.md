@@ -1,72 +1,128 @@
-# MemFuse Memory Hierarchy Architecture
+# MemFuse Memory Architecture
 
 ## Overview
 
-MemFuse implements a three-layer hierarchical memory system positioned between the Memory Service and Storage Layer, inspired by human cognitive memory processes. This system organizes information at different levels of abstraction to enable sophisticated memory processing, consolidation, and retrieval that mirrors human memory cognition.
+MemFuse is positioned as a **complete knowledge ecosystem with full lifecycle management capabilities and dynamic evolution**. The core architecture directly maps cognitive science's multi-layered memory theory, depicting a complete information processing pipeline from raw signals to abstract wisdom.
 
-The memory hierarchy follows the design philosophy of **"Service Layer Perceives, Memory Layer Thinks, Storage Layer Remembers"**, implementing a progressive information processing pipeline from raw experiences to structured knowledge.
+MemFuse's core architecture follows the design philosophy of **"Service Layer Perceives, Memory Layer Thinks, Storage Layer Remembers"**, implementing a progressive information processing pipeline that mirrors human cognitive memory processes.
 
-## Architecture Principles
+## Part I: MemFuse Core Architecture
 
-### Human Memory Cognitive Theory Foundation
+### Positioning
 
-Based on established cognitive neuroscience research, human memory consists of distinct but interconnected systems:
+MemFuse is a **knowledge ecosystem with complete lifecycle management capabilities and dynamic evolution**. The core architecture directly maps cognitive science's multi-layered memory theory, describing a complete information processing pipeline from raw signals to abstract wisdom.
 
-**Declarative Memory System**:
-- **Episodic Memory**: Memory for specific events and experiences with temporal and contextual details
-- **Semantic Memory**: General knowledge and facts abstracted from specific experiences
+### 1.1 Layered Memory Storage & Layer-Specific Managers
 
-**Memory Consolidation Process**:
-- **Cellular Consolidation**: Stabilization of synaptic connections at the neural level
-- **System Consolidation**: Transfer from hippocampus-dependent to neocortex-dependent storage
+MemFuse's storage layer consists of multiple specialized memory types, **each memory type is maintained by a dedicated, tactical-level "Layer-Specific Memory Manager"**.
 
-### MemFuse Memory Layer Mapping
+#### Guiding Principles:
+- **Single Responsibility**: Each Manager is only responsible for internal operations (CRUD, indexing, deduplication, etc.) of its corresponding memory type, and provides standardized service APIs to upper layers (C1 routing engine, global KISS engine).
+- **Implementation Decoupling**: M1 Manager can use vector databases, M2 Manager can use graph databases. Upper layer modules don't care about specific implementations, only interact through APIs.
 
-The three-layer architecture implements a progressive information processing pipeline:
+#### Core Memory Layers & Corresponding Managers:
 
-**Layer 0 - Episodic Memory Layer**:
-- **Core Function**: Records "what happened" - preserves raw conversational episodes with complete contextual information
-- **Implementation Status**: ✅ **Active** - Fully implemented with Multi-Path indexing (vector, keyword, temporal/metadata)
-- **Key Features**: Maintains temporal sequences, experiential details, and provides immediate access to recent experiences
+#### 1. M0: Raw Data Layer & M0 Manager
+- **Description**: The starting point of memory. Stores completely unprocessed raw data in its original form, preserving complete fidelity of incoming information.
+- **Implementation**: Multi-backend storage system using vector embeddings, keyword indices, and structured metadata. Implemented as `M0RawDataLayer` class with immediate storage capabilities.
+- **Current Status**: ✅ Fully implemented with PgAI integration for automatic embedding generation
 
-**Layer 1 - Semantic Memory Layer**:
-- **Core Function**: Extracts "what is" - transforms episodic experiences into decontextualized, verifiable facts
-- **Implementation Status**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT activated in MemoryService
-- **Key Features**: Designed for knowledge abstraction, conflict resolution, and structured knowledge representations (not currently used)
+#### 2. M1: Episodic Memory Layer & M1 Manager
+- **Description**: Event-centered memory storing personal experiences and specific events with rich contextual information.
+- **Implementation**: Episode formation from M0 raw data with temporal and contextual metadata preservation. Implemented as `M1EpisodicLayer` class with PgAI integration for automatic embedding.
+- **Current Status**: ✅ Implemented with parallel processing architecture, PgAI integration in progress
 
-**Layer 2 - Relational Knowledge Layer**:
-- **Core Function**: Understands "why and how" - builds interconnected knowledge networks enabling complex reasoning
-- **Implementation Status**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT activated in MemoryService
-- **Key Features**: Designed for relationship modeling, cross-session integration, and sophisticated inference capabilities (not currently used)
+#### 3. M2: Semantic Memory Layer & M2 Manager
+- **Description**: Stores general facts and concepts extracted from episodic experiences, providing abstracted knowledge representation.
+- **Implementation**: LLM-based fact extraction from M1 episodes with validation and conflict resolution. Implemented as `M2SemanticLayer` class with fact storage and indexing capabilities.
+- **Current Status**: ✅ Basic implementation complete, PgAI integration and advanced fact extraction in development
 
-### Architectural Positioning
+#### 4. M3: Procedural Memory Layer & M3 Manager
+- **Description**: Stores learned patterns, procedures, and behavioral knowledge including skills, habits, and processes.
+- **Implementation**: Pattern recognition from semantic knowledge with adaptive learning capabilities. Planned as `M3ProceduralLayer` class with reinforcement learning integration.
+- **Current Status**: 🔄 Planned for future implementation - architecture designed but not yet implemented
 
-The memory hierarchy operates as an **intermediate processing layer** between:
-- **Memory Service**: High-level memory operations and API interfaces
-- **Storage Layer**: Physical data persistence and retrieval mechanisms
+### 1.2 MSMG: Multi-Scale Mental Graph
 
-This positioning allows for:
-- **Cognitive Processing**: Human-like memory consolidation and reasoning
-- **Storage Abstraction**: Database-agnostic architectural design
-- **Service Integration**: Seamless integration with existing memory services
+- **Positioning**: MSMG is not parallel to M0/M1/M2/M3, but rather the meta-structure that organizes, links, and elevates them.
+- **Cognitive Science Foundation**: MSMG's design philosophy integrates psychological Schema Theory, explaining structured knowledge organization; and cognitive neuroscience's Global Neuronal Workspace Theory (GWT), explaining how structured knowledge is dynamically invoked to the conscious level.
+  - **Cognitive Schema**: In psychology, schemas are mental frameworks used to organize and interpret information. For example, we have a "restaurant" schema containing tables, chairs, menus (M2 facts), ordering, eating, paying (M3 skills), and memories of specific restaurants we've visited (M1 episodes). MSMG mental graph is the collection and connection network of all Agent schemas.
+  - **Global Neuronal Workspace Theory (GWT)**: This theory suggests consciousness arises from a distributed "broadcast system" in the brain, where processing results from different modules (like vision, memory) are broadcast to this global workspace, enabling information integration and unified cognition. MSMG can be seen as the long-term sedimentation and structured representation of this workspace.
 
-### Current Implementation Status
+- **MSMG Different Levels of Abstraction**:
+  1. **Instance Layer**: The bottom layer of the graph, composed of countless Contextual Knowledge Graphs (CKGs), achieving "horizontal expansion" of knowledge. Each CKG corresponds to a specific event (like a chat session, reading a book, executing a workflow). The same entity in different CKGs links to unified nodes in the ontology layer, forming a vast experience network.
+  2. **Ontology/Schema Layer**: The skeleton of the graph, achieving "vertical abstraction" of knowledge by defining Classes, Hierarchy relationships, and Properties. It ensures logical consistency of the graph and provides a strict structural foundation for reasoning.
+     - **Classes**: Events, places, people, books, etc.
+     - **Hierarchy**: Different granularities or organizational level abstractions
+     - **Properties**: Additional information for each type or hierarchy relationship
+  3. **Meta-cognitive Layer**: The "self-awareness" of the graph, recording knowledge about knowledge. Its core feature is Traceable Knowledge Provenance, i.e., data lineage. It attaches metadata like source, credibility, reasoning paths to each knowledge point, giving the system introspection, self-correction, and explainability capabilities.
 
-The MemFuse memory hierarchy is currently **partially operational** with only M0 layer actively processing data:
+### 1.3 KISS: Global Knowledge Integration & Synthesis System
 
-- **M0 (Episodic)**: ✅ **Active** - Handles immediate message storage and retrieval through MemoryService
-- **M1 (Semantic)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
-- **M2 (Relational)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
+The Layer-Specific Managers interact with the upper-level **KISS (Global Knowledge Integration & Synthesis System)** engine.
 
-**Current Data Flow**: `API → BufferService → MemoryService → M0 Processing Only → Store Classes`
+#### Relationship with Layer-Specific Managers
+- **KISS engine is the "Central Government"**, while Layer-Specific Managers are "Local Governments"
+- **KISS does not execute specific storage operations**, but issues strategic directives or performs cross-layer analysis
 
-**Processing Model**: MemoryService currently only processes M0 episodic memory. M1 and M2 layers exist as complete implementations in the hierarchy/ directory but are not activated or integrated into the main execution flow.
+#### Core Responsibilities:
 
-**Future Vision**: The architecture is designed for eventual unified Memory Layer abstraction where MemoryService would call a single Memory Layer that handles parallel M0/M1/M2 processing internally, completely decoupled from MemoryService logic.
+1. **Initiate Macro Tasks**: Schedule periodic system consolidation and **Forgetting** tasks. Forgetting mechanisms include **Graceful Decay** and **Active Pruning**.
+
+2. **Perform Cross-Layer Synthesis**: KISS's core value lies in analyzing **data across different memory layers** to discover high-order patterns. It requests data from Layer-Specific Managers, analyzes it, and directly creates new abstract relationships in MSMG.
+
+3. **Handle Escalated Exceptions**: When Layer-Specific Managers encounter problems they cannot resolve themselves (such as **Conflict Resolution**), they escalate the issue to KISS, which initiates higher-level **Meta-cognitive Arbitration** processes.
+
+## Part II: Memory Lifecycle
+
+This defines the core mechanism that makes MemFuse a "dynamically evolving" system, including knowledge birth, invocation, elevation, and health management.
+
+### 2.1 Encoding & Indexing: Knowledge Birth
+
+Executed automatically by the internal Knowledge Integration & Synthesis System (KISS), i.e., Reflexive Synthesis Engine, through the following process for knowledge internalization.
+
+- **Process (ETLS)**:
+  - **E - Extract**: Extract entities, relationships, time, etc. from M0 raw data
+  - **T - Transform**: Transform into M1's vectorized log streams and M2's dual representation (vector + triple)
+  - **L - Link**: Link new knowledge to MSMG graph's instance and ontology layers
+  - **S - Synthesize**: Discover new patterns and abstractions based on linking
+
+### 2.2 Extraction & Retrieval: Knowledge Invocation
+
+Uses Hybrid Retrieval Funnel, a multi-stage strategy from broad to precise:
+1. **Stage 1**: Fast Parallel Vector Recall (Broad Semantic Recall)
+2. **Stage 2**: Structured Graph Traversal (Structured Graph Traversal)
+3. **Stage 3**: Context Synthesis & Generation (Context Synthesis & Generation)
+
+### 2.3 Learning & Evolution: Knowledge Elevation
+
+Driven by Introspection Loop, including two modes:
+- **Active Mode - Introspection**: Event-driven, performing fast, dramatic changes
+- **Passive Mode - Consolidation**: Cycle-driven, performing slow, gentle optimization
+
+### 2.4 Maintenance & Dynamics: Knowledge Health Management
+
+- **Conflict Resolution**: Resolve memory contradictions and conflicts
+- **Forgetting Mechanisms**: Simulate human brain forgetting mechanisms
+- **Temporal Reasoning**: Implemented by storing standardized temporal relationships in MSMG
+
+## Current Implementation Status
+
+The MemFuse memory hierarchy is currently **partially operational** with only M1 layer actively processing data:
+
+- **M1 (Episodic)**: ✅ **Active** - Handles immediate message storage and retrieval through MemoryService
+- **M2 (Semantic)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
+- **M3 (Procedural)**: ❌ **Inactive** - Code exists in hierarchy/ directory but is NOT integrated into MemoryService execution flow
+
+**Current Data Flow**: `API → BufferService → MemoryService → M1 Processing Only → Store Classes`
+
+**Processing Model**: MemoryService currently only processes M1 episodic memory. M2 and M3 layers exist as complete implementations in the hierarchy/ directory but are not activated or integrated into the main execution flow.
+
+**Future Vision**: The architecture is designed for eventual unified Memory Layer abstraction where MemoryService would call a single Memory Layer that handles parallel M1/M2/M3 processing internally, completely decoupled from MemoryService logic.
 
 ## Layer Architecture
 
-### Layer 0: Episodic Memory Layer
+### M1: Episodic Memory Layer
 
 **Purpose**: Store and maintain raw conversational episodes with full contextual and temporal information, mirroring human episodic memory for specific experiences and events.
 
@@ -89,13 +145,6 @@ The MemFuse memory hierarchy is currently **partially operational** with only M0
 - **Temporal/Metadata Indexing**: Time-based access patterns and structured contextual search
 
 **Key Technology**: Parallel establishment of Vector and Keyword indices to support both semantic similarity and exact text matching retrieval, enabling comprehensive episode access patterns for different query optimization paths.
-
-**Storage Abstraction Layer**:
-- **Database-Agnostic Design**: Support for multiple storage backends without architectural changes
-- **Vector Store Interface**: Pluggable vector database implementations (Qdrant, Weaviate, Pinecone, etc.)
-- **Document Store Interface**: Flexible document storage (MongoDB, PostgreSQL, SQLite, etc.)
-- **Graph Store Interface**: Configurable graph database support (Neo4j, ArangoDB, etc.)
-- **Search Engine Interface**: Adaptable search implementations (Elasticsearch, Solr, etc.)
 
 #### Key Features
 
@@ -125,7 +174,7 @@ The MemFuse memory hierarchy is currently **partially operational** with only M0
 
 #### Data Flow Architecture
 
-**M0 Episodic Memory Ingestion Flow**:
+**M1 Episodic Memory Ingestion Flow**:
 
 ```mermaid
 ---
@@ -140,17 +189,17 @@ flowchart TD
         KeywordIndex["Keyword Index<br>(Text Matching)"]
         TemporalIndex["Temporal/Meta Index<br>(Time & Context)"]
   end
- subgraph m0_flow["M0: Episodic Memory Ingestion Flow"]
+ subgraph m1_flow["M1: Episodic Memory Ingestion Flow"]
         EpisodeFormation["Episode Formation<br>(Conversation Segmentation)"]
         Input["Conversation Data<br>(Raw Dialogue)"]
         indexing_sub
         Storage["Persist to Storage Layer<br>(Multi-Path Storage)"]
-        TriggerM1["Trigger M1 Fact Extraction<br>(Semantic Processing)"]
+        TriggerM2["Trigger M2 Fact Extraction<br>(Semantic Processing)"]
   end
     Input --> EpisodeFormation
     EpisodeFormation --> indexing_sub
     indexing_sub --> Storage
-    Storage --> TriggerM1
+    Storage --> TriggerM2
      VectorIndex:::node_style
      KeywordIndex:::node_style
      TemporalIndex:::node_style
@@ -158,8 +207,8 @@ flowchart TD
      Input:::node_style
      indexing_sub:::header_style
      Storage:::node_style
-     TriggerM1:::node_style
-     m0_flow:::header_style
+     TriggerM2:::node_style
+     m1_flow:::header_style
     classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap
     classDef node_style fill:#E3F2FD,stroke:#42A5F5
@@ -167,7 +216,7 @@ flowchart TD
 
 **Episode Ingestion Pipeline**:
 ```
-Memory Service → Episode Formation → Contextual Enrichment → Multi-Path Indexing → Layer 1 Trigger
+Memory Service → Episode Formation → Contextual Enrichment → Multi-Path Indexing → M2 Trigger
                         ↓                    ↓                        ↓
                 Episode Boundaries    Temporal Context      Parallel Processing:
                 Session Context       Metadata Extraction   - Vector Embeddings
@@ -187,9 +236,9 @@ Memory Service Query → Context Analysis → Multi-Path Search → Episode Reco
 
 #### Interface Specifications
 
-**M0Manager Interface**:
+**M1Manager Interface**:
 ```python
-class M0Manager(MemoryLayer):
+class M1Manager(MemoryLayer):
     async def add(self, item: Any) -> str
     async def add_batch(self, items: List[Any]) -> List[str]
     async def get(self, item_id: str) -> Optional[Any]
@@ -213,7 +262,7 @@ class StoreCoordinator:
 
 **Store Configuration**:
 ```yaml
-m0:
+m1:
   metadata_db:
     path: "data/metadata.db"
     connection_pool_size: 10
@@ -236,7 +285,7 @@ m0:
 
 **Performance Tuning**:
 ```yaml
-m0_performance:
+m1_performance:
   batch_size: 50
   parallel_workers: 4
   cache_ttl: 3600
@@ -244,13 +293,13 @@ m0_performance:
   consistency_check_interval: 3600
 ```
 
-### Layer 1: Semantic Memory Layer
+### M2: Semantic Memory Layer
 
 **Purpose**: Extract and consolidate semantic knowledge from episodic experiences, mirroring the human semantic memory system that stores general knowledge and facts independent of specific experiential contexts.
 
 **Cognitive Analogy**: Human Semantic Memory - stores decontextualized, universal facts that have been abstracted from specific episodic experiences, creating a repository of general knowledge.
 
-**Core Function**: Extracts universal knowledge from M0 episodes through LLM-based abstraction, performing knowledge validation, conflict detection, temporal processing, and memory consolidation to produce high-quality, structured fact repositories.
+**Core Function**: Extracts universal knowledge from M1 episodes through LLM-based abstraction, performing knowledge validation, conflict detection, temporal processing, and memory consolidation to produce high-quality, structured fact repositories.
 
 #### Core Components
 
@@ -304,7 +353,7 @@ m0_performance:
 - **Adaptive Batching**: Dynamic batch size based on content complexity
 
 **Comprehensive Source Lineage**:
-- **Multi-Level Tracking**: Links to M0 chunks, sessions, and users
+- **Multi-Level Tracking**: Links to M1 chunks, sessions, and users
 - **Provenance Graphs**: Visual representation of fact derivation
 - **Source Weighting**: Credibility scoring for different source types
 - **Update Propagation**: Automatic updates when source data changes
@@ -333,7 +382,7 @@ m0_performance:
 
 #### Processing Workflows
 
-**M1 Semantic Memory Abstraction & Consolidation Flow**:
+**M2 Semantic Memory Abstraction & Consolidation Flow**:
 
 ```mermaid
 ---
@@ -341,27 +390,27 @@ config:
   theme: neo
 ---
 graph TD
-    subgraph m1_flow ["M1: Semantic Memory Abstraction & Consolidation Flow"]
-        Input["M0 Episodic Chunks<br/>(Conversation Episodes)"] --> AbstractionEngine["Knowledge Abstraction Engine (LLM)<br/>(Fact Extraction)"]
+    subgraph m2_flow ["M2: Semantic Memory Abstraction & Consolidation Flow"]
+        Input["M1 Episodic Chunks<br/>(Conversation Episodes)"] --> AbstractionEngine["Knowledge Abstraction Engine (LLM)<br/>(Fact Extraction)"]
         subgraph processing_sub ["Fact Processing Pipeline"]
             direction LR
             ConflictDetection["Conflict Detection"] --> TemporalProcessing["Temporal Processing"] --> Consolidation["Memory Consolidation"]
         end
         AbstractionEngine -- "Extract Raw Facts" --> processing_sub
         processing_sub --> Output["Structured Facts<br/>(Knowledge Repository)<br/>Store in Database"]
-        Output --> TriggerM2["Trigger M2 Relationship Building<br/>(Graph Construction)"]
+        Output --> TriggerM3["Trigger M3 Relationship Building<br/>(Graph Construction)"]
     end
     classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap;
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap;
     classDef node_style fill:#E8F5E9,stroke:#66BB6A;
-    class Input,AbstractionEngine,ConflictDetection,TemporalProcessing,Consolidation,Output,TriggerM2 node_style;
-    m1_flow:::header_style;
+    class Input,AbstractionEngine,ConflictDetection,TemporalProcessing,Consolidation,Output,TriggerM3 node_style;
+    m2_flow:::header_style;
     processing_sub:::header_style;
 ```
 
 **Real-Time Fact Extraction**:
 ```
-M0 Chunks (batch of 5) → Context Assembly → LLM Fact Extraction → Raw Facts
+M1 Chunks (batch of 5) → Context Assembly → LLM Fact Extraction → Raw Facts
                                                                       ↓
 Raw Facts → Conflict Detection → Temporal Processing → Source Lineage → Facts DB
                     ↓                      ↓                ↓
@@ -369,7 +418,7 @@ Raw Facts → Conflict Detection → Temporal Processing → Source Lineage → 
                     ↓                      ↓                ↓
             Updated Facts         Temporal Relations    Lineage Table
                                                               ↓
-                                                    Trigger M2 Processing
+                                                    Trigger M3 Processing
 ```
 
 **Background Consolidation Workflow**:
@@ -439,65 +488,65 @@ m1:
     max_age_for_review: 604800  # 1 week
 ```
 
-### Layer 2: Relational Knowledge Layer
+### M3: Procedural Memory Layer
 
-**Purpose**: Build and maintain interconnected knowledge networks that model complex relationships between semantic concepts, enabling sophisticated reasoning and inference capabilities that extend beyond individual facts.
+**Purpose**: Store and manage procedural knowledge about "how to do" skills, habits, workflows, and executable processes, enabling the system to learn, retain, and execute complex behavioral patterns and operational procedures.
 
-**Cognitive Analogy**: Higher Cognitive Functions - represents the human brain's ability to form complex associative networks between concepts, enabling analogical reasoning, inference, and discovery of implicit relationships.
+**Cognitive Analogy**: Human Procedural Memory - represents the brain's ability to store and execute learned skills, habits, and motor sequences without conscious effort, such as riding a bike or typing on a keyboard.
 
-**Core Function**: Extracts entities and relationships from M1 facts to construct knowledge graphs, enabling advanced reasoning (multi-hop queries) and advanced retrieval (DPR/PPR) for contextual answers and insights generation.
+**Core Function**: Encapsulates Standard Operating Procedures (SOPs), successful action trajectories, and executable workflows as reusable "skills" that can be invoked, combined, and refined over time to enable autonomous task execution and behavioral learning.
 
 #### Core Components
 
-**Graph Database (Neo4j-Compatible)**:
-- **Entity Nodes**: Rich entity representation with types, attributes, and metadata
-- **Relationship Edges**: Typed relationships with weights, confidence, and temporal information
-- **Session Subgraphs**: Isolated knowledge graphs per conversation session
-- **People Subgraphs**: Cross-session entity graphs centered on individuals
-- **Global Graph**: Unified view across all sessions and people
-- **Index Management**: Optimized indices for fast traversal and querying
+**Executable Skill Library**:
+- **Skill Definitions**: Structured representations of procedural knowledge and workflows
+- **Action Sequences**: Step-by-step procedures and operational sequences
+- **Skill Parameters**: Configurable parameters and input/output specifications
+- **Skill Metadata**: Execution context, success rates, and performance metrics
+- **Skill Versioning**: Version control and evolution tracking for skills
+- **Skill Dependencies**: Inter-skill relationships and prerequisite management
 
-**Entity Extraction Engine**:
-- **Named Entity Recognition**: Advanced NER with custom entity types
-- **Entity Linking**: Disambiguation and linking to existing entities
-- **Entity Classification**: Hierarchical entity type classification
-- **Attribute Extraction**: Entity properties and characteristics extraction
-- **Coreference Resolution**: Entity mention resolution across contexts
-- **Entity Validation**: Confidence scoring and validation workflows
+**Workflow Engine**:
+- **Process Orchestration**: Coordination and execution of complex multi-step workflows
+- **Task Scheduling**: Temporal scheduling and dependency management
+- **Error Handling**: Exception handling and recovery mechanisms
+- **State Management**: Workflow state tracking and persistence
+- **Parallel Execution**: Concurrent execution of independent workflow branches
+- **Workflow Validation**: Pre-execution validation and feasibility checking
 
-**Relationship Mapping System**:
-- **Triplet Extraction**: (Subject, Predicate, Object) relationship extraction
-- **Relationship Classification**: Typed relationships with semantic meaning
-- **Relationship Weighting**: Confidence and strength scoring
-- **Temporal Relationships**: Time-aware relationship modeling
-- **Causal Relationships**: Cause-effect relationship identification
-- **Hierarchical Relationships**: Parent-child and containment relationships
+**Skill Acquisition System**:
+- **Pattern Recognition**: Identification of successful action patterns from M2 semantic knowledge
+- **Skill Extraction**: Automatic extraction of procedural knowledge from successful experiences
+- **Skill Generalization**: Abstraction of specific actions into reusable skill templates
+- **Skill Validation**: Testing and validation of extracted skills
+- **Skill Optimization**: Performance optimization and refinement of existing skills
+- **Skill Composition**: Combination of simple skills into complex procedures
 
-**Session Organization Framework**:
-- **Session Boundaries**: Automatic session detection and segmentation
-- **Session Context**: Maintaining session-specific knowledge context
-- **Session Inheritance**: Knowledge transfer between related sessions
-- **Session Merging**: Combining related sessions when appropriate
-- **Session Archival**: Lifecycle management for completed sessions
-- **Session Analytics**: Session-level knowledge graph analysis
+**Execution Context Manager**:
+- **Environment Modeling**: Representation of execution environments and constraints
+- **Resource Management**: Allocation and management of computational and external resources
+- **Context Switching**: Management of different execution contexts and environments
+- **State Persistence**: Saving and restoring execution states across sessions
+- **Context Validation**: Verification of execution prerequisites and conditions
+- **Context Analytics**: Analysis of execution patterns and context effectiveness
 
-**People-Centric Knowledge Management**:
-- **Person Identification**: Cross-session person entity resolution
-- **Person Profiles**: Comprehensive person knowledge aggregation
-- **Relationship Networks**: Social and professional relationship mapping
-- **Temporal Person Evolution**: Tracking changes in person attributes over time
-- **Privacy Controls**: Person-specific privacy and access controls
-- **Person Analytics**: Individual knowledge pattern analysis
+**Skill Performance Monitor**:
+- **Execution Tracking**: Real-time monitoring of skill execution and performance
+- **Success Metrics**: Collection and analysis of skill success rates and outcomes
+- **Performance Analytics**: Statistical analysis of skill effectiveness over time
+- **Failure Analysis**: Root cause analysis of skill execution failures
+- **Optimization Recommendations**: Suggestions for skill improvement and optimization
+- **Learning Feedback**: Integration of execution results back into skill refinement
 
-**Advanced Retrieval System**:
-- **Dense Passage Retrieval (DPR)**: Semantic similarity-based retrieval for precise content matching
-- **Personalized PageRank (PPR)**: Relationship-importance based ranking for contextual relevance
-- **Graph Neural Networks**: Advanced graph embedding and reasoning capabilities
-- **Multi-Hop Reasoning**: Complex relationship chain traversal for deep insights
-- **Contextual Ranking**: Query context-aware result ranking and optimization
-- **Hybrid Retrieval**: Combination of multiple retrieval strategies for comprehensive results
+**Procedural Knowledge Graph**:
+- **Skill Nodes**: Graph representation of individual skills and procedures
+- **Dependency Edges**: Relationships between skills, prerequisites, and compositions
+- **Execution Paths**: Optimal paths for achieving specific goals through skill combinations
+- **Skill Clustering**: Grouping of related skills by domain, complexity, or function
+- **Knowledge Inheritance**: Hierarchical organization of skills from general to specific
+- **Cross-Domain Linking**: Connections between skills across different domains and contexts
 
-**Key Value**: Knowledge graphs enable advanced reasoning capabilities and sophisticated retrieval mechanisms that go beyond simple fact lookup to provide contextual understanding and insights.
+**Key Value**: Procedural memory enables autonomous task execution, behavioral learning, and the development of increasingly sophisticated operational capabilities through experience and practice.
 
 #### Key Features
 
@@ -535,7 +584,7 @@ m1:
 
 #### Processing Workflows
 
-**M2 Relational Knowledge Construction & Reasoning Flow**:
+**M3 Procedural Memory Skill Acquisition & Execution Flow**:
 
 ```mermaid
 ---
@@ -543,24 +592,24 @@ config:
   theme: neo
 ---
 graph TD
-    subgraph m2_flow ["M2: Relational Knowledge Construction & Reasoning Flow"]
-        Input["M1 Structured Facts<br/>(Semantic Knowledge)"] --> Extraction["Entity & Relationship Extraction<br/>(Graph Element Identification)"]
-        Extraction --> KG["Knowledge Graph Construction & Maintenance<br/>(Network Building)"]
-        subgraph reasoning_sub ["Advanced Applications"]
+    subgraph m3_flow ["M3: Procedural Memory Skill Acquisition & Execution Flow"]
+        Input["M2 Structured Facts<br/>(Semantic Knowledge)"] --> SkillExtraction["Skill Acquisition System<br/>(Pattern Recognition & Extraction)"]
+        SkillExtraction --> SkillLibrary["Executable Skill Library<br/>(Skill Storage & Management)"]
+        subgraph execution_sub ["Skill Execution & Learning"]
             direction LR
-            Reasoning["Multi-hop Reasoning<br/>(Complex Inference)"]
-            Retrieval["Advanced Retrieval (DPR/PPR)<br/>(Contextual Search)"]
-            Insights["Insight Generation<br/>(Knowledge Discovery)"]
+            WorkflowEngine["Workflow Engine<br/>(Process Orchestration)"]
+            ContextManager["Execution Context Manager<br/>(Environment & Resources)"]
+            PerformanceMonitor["Performance Monitor<br/>(Learning & Optimization)"]
         end
-        KG --> reasoning_sub
-        reasoning_sub --> Output["Contextual Answers & Insights<br/>(Intelligent Responses)"]
+        SkillLibrary --> execution_sub
+        execution_sub --> Output["Executed Procedures & Skills<br/>(Autonomous Task Completion)"]
     end
     classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap;
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap;
     classDef node_style fill:#F3E5F5,stroke:#AB47BC;
-    class Input,Extraction,KG,Reasoning,Retrieval,Insights,Output node_style;
-    m2_flow:::header_style;
-    reasoning_sub:::header_style;
+    class Input,SkillExtraction,SkillLibrary,WorkflowEngine,ContextManager,PerformanceMonitor,Output node_style;
+    m3_flow:::header_style;
+    execution_sub:::header_style;
 ```
 
 **Knowledge Graph Construction**:
@@ -698,8 +747,8 @@ class MemoryServiceIntegration:
 
     async def on_conversation_episode(self, episode: ConversationEpisode) -> None:
         """Called when Memory Service identifies a complete episode"""
-        # Trigger Layer 0 processing
-        await self.hierarchy_manager.layer0_manager.process_episode(episode)
+        # Trigger M1 processing
+        await self.hierarchy_manager.m1_manager.process_episode(episode)
 
     async def on_session_completion(self, session_id: str) -> None:
         """Called when a conversation session completes"""
@@ -813,7 +862,7 @@ class HierarchyMemoryManager(MemoryInterface):
         return {
             "status": "success",
             "message_ids": chunk_ids,
-            "layers_processed": ["m0", "m1", "m2"]
+            "layers_processed": ["m1", "m2", "m3"]
         }
 
     async def query(self, query: str, top_k: int = 5, **kwargs) -> Dict[str, Any]:
@@ -865,27 +914,27 @@ memfuse:
   memory_hierarchy:
     enabled: true
 
-    # Layer 0: Episodic Memory
-    layer0_episodic:
+    # M1: Episodic Memory
+    m1_episodic:
       enabled: true
       storage_backend: "configurable"  # mongodb, postgresql, etc.
       indexing_strategies: ["vector", "keyword", "temporal", "metadata"]
       episode_retention_policy: "time_based"  # time_based, size_based, hybrid
 
-    # Layer 1: Semantic Memory
-    layer1_semantic:
+    # M2: Semantic Memory
+    m2_semantic:
       enabled: true
       abstraction_engine: "llm_based"  # llm_based, rule_based, hybrid
       knowledge_validation: true
       conflict_resolution: "evidence_based"
       consolidation_schedule: "periodic"
 
-    # Layer 2: Relational Knowledge
-    layer2_relational:
+    # M3: Procedural Memory
+    m3_procedural:
       enabled: true
-      relationship_modeling: "graph_based"  # graph_based, network_based
-      reasoning_strategies: ["inference", "analogy", "association"]
-      cross_session_integration: true
+      skill_modeling: "executable_library"  # executable_library, workflow_based
+      execution_strategies: ["orchestration", "monitoring", "optimization"]
+      cross_session_skill_transfer: true
 
     # Storage abstraction
     storage:
@@ -928,28 +977,32 @@ class HierarchyMigrationManager:
 
 ### Data Ingestion Workflow
 
-1. **Message Input**: User-assistant message pairs arrive via API
-2. **Buffer Processing**: Messages flow through RoundBuffer → HybridBuffer
-3. **M0 Storage**: Chunks stored in vector/keyword/graph/metadata stores
-4. **M1 Trigger**: Batch of 5 chunks triggers fact extraction
-5. **M2 Trigger**: New facts trigger knowledge graph updates
+1. **Raw Data Input**: Multi-modal raw data arrives via API
+2. **M0 Storage**: Raw data stored in multi-modal object storage
+3. **M1 Processing**: Episode formation and vectorized log stream creation
+4. **M2 Trigger**: Batch of 5 chunks triggers fact extraction and abstraction
+5. **M3 Trigger**: New facts trigger skill extraction and procedural learning
+6. **MSMG Integration**: All layers contribute to Multi-Scale Mental Graph construction
 
 ### Query Processing Workflow
 
 1. **Query Analysis**: Determine optimal layer(s) for retrieval
 2. **Multi-Layer Search**:
-   - M0: Direct vector/keyword/graph search
-   - M1: Fact-based retrieval with temporal filtering
-   - M2: Graph traversal with DPR+PPR ranking
-3. **Result Fusion**: Combine and rank results from multiple layers
-4. **Context Enhancement**: Enrich results with cross-layer information
+   - M0: Raw data access and retrieval
+   - M1: Direct vector/keyword/graph search on episodes
+   - M2: Fact-based retrieval with temporal filtering
+   - M3: Skill-based execution and procedural task completion
+3. **MSMG Reasoning**: Multi-scale mental graph traversal and reasoning
+4. **Result Fusion**: Combine and rank results from multiple layers
+5. **Context Enhancement**: Enrich results with cross-layer information
 
 ### Background Consolidation Workflow
 
-1. **M1 Consolidation**: Periodic fact verification and conflict resolution
-2. **M2 Consolidation**: Knowledge graph optimization and cross-session linking
-3. **Performance Optimization**: Index maintenance and cache warming
-4. **Data Lifecycle**: Automated archival and cleanup of old data
+1. **M2 Consolidation**: Periodic fact verification and conflict resolution
+2. **M3 Consolidation**: Skill optimization and procedural knowledge refinement
+3. **MSMG Optimization**: Mental graph structure optimization and pruning
+4. **Performance Optimization**: Index maintenance and cache warming
+5. **Data Lifecycle**: Automated archival and cleanup of old data
 
 ## Configuration and Extensibility
 
@@ -959,21 +1012,32 @@ class HierarchyMigrationManager:
 hierarchy:
   m0:
     enabled: true
+    storage_type: "multi_modal_object_store"
+    supported_formats: ["text", "pdf", "image", "audio", "video"]
+  m1:
+    enabled: true
     stores: ["vector", "keyword", "graph", "metadata"]
     buffer_integration: true
-  m1:
+    episode_formation: true
+  m2:
     enabled: true
     extraction_batch_size: 5
     consolidation_interval: 3600  # 1 hour
     conflict_detection: true
     temporal_awareness: true
-  m2:
+  m3:
     enabled: true
-    session_graphs: true
-    people_graphs: true
-    dpr_enabled: true
-    ppr_enabled: true
+    skill_extraction: true
+    workflow_engine: true
+    execution_monitoring: true
+    skill_optimization: true
     consolidation_interval: 86400  # 24 hours
+  msmg:
+    enabled: true
+    instance_layer: true
+    ontology_layer: true
+    meta_cognitive_layer: true
+    knowledge_provenance: true
 ```
 
 ### Extensibility Points
@@ -1001,7 +1065,7 @@ hierarchy:
 
 ### Overall Architecture Flow
 
-The following diagram shows the three-layer memory hierarchy implementing the progressive information processing pipeline from experiences to knowledge to wisdom:
+The following diagram shows the four-layer memory hierarchy implementing the progressive information processing pipeline from raw data to abstract wisdom:
 
 ```mermaid
 ---
@@ -1013,35 +1077,46 @@ flowchart TD
  subgraph service_sub["Service Layer"]
         MS["Memory Service<br>(Interface)"]
   end
- subgraph hierarchy_sub["3-Layer Memory System"]
+ subgraph hierarchy_sub["4-Layer Memory System + MSMG"]
     direction TB
-        M0["M0: Episodic Memory<br>(Experience Layer)"]
-        M1["M1: Semantic Memory<br>(Knowledge Layer)"]
-        M2["M2: Relational Knowledge<br>(Reasoning Layer)"]
+        M0["M0: Raw Data Store<br>(Raw Data Layer)"]
+        M1["M1: Episodic Memory<br>(Experience Layer)"]
+        M2["M2: Semantic Memory<br>(Knowledge Layer)"]
+        M3["M3: Procedural Memory<br>(Skills & Execution Layer)"]
+        MSMG["MSMG: Multi-Scale Mental Graph<br>(Meta-Structure)"]
   end
  subgraph storage_sub["Storage Layer"]
         SL["Database Agnostic Storage<br>(Backend)"]
   end
-    M0 -- "Abstraction & Extraction" --> M1
-    M1 -- "Relationship Modeling & Reasoning" --> M2
+    M0 -- "Episode Formation" --> M1
+    M1 -- "Abstraction & Extraction" --> M2
+    M2 -- "Skill Extraction & Procedure Learning" --> M3
     MS -- "Raw Data I/O & Query" --> M0
     M0 -- "Persistence" --> SL
     M1 -- "Persistence" --> SL
     M2 -- "Persistence" --> SL
-    MS -- "Advanced Memory Query" --> M2
+    M3 -- "Persistence" --> SL
+    M1 -.-> MSMG
+    M2 -.-> MSMG
+    M3 -.-> MSMG
+    MS -- "Advanced Memory Query" --> M3
      MS:::service_style
      M0:::m0_style
      M1:::m1_style
      M2:::m2_style
+     M3:::m3_style
+     MSMG:::msmg_style
      SL:::service_style
      service_sub:::header_style
      hierarchy_sub:::header_style
      storage_sub:::header_style
     classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap
-    classDef m0_style fill:#E3F2FD,stroke:#42A5F5
-    classDef m1_style fill:#E8F5E9,stroke:#66BB6A
-    classDef m2_style fill:#F3E5F5,stroke:#AB47BC
+    classDef m0_style fill:#FFF3E0,stroke:#FF9800
+    classDef m1_style fill:#E3F2FD,stroke:#42A5F5
+    classDef m2_style fill:#E8F5E9,stroke:#66BB6A
+    classDef m3_style fill:#F3E5F5,stroke:#AB47BC
+    classDef msmg_style fill:#FCE4EC,stroke:#E91E63
     classDef service_style fill:#FFFDE7,stroke:#FDD835
 ```
 
@@ -1052,48 +1127,136 @@ graph TB
     %% Memory Service Layer
     MS[Memory Service] --> HM[Hierarchy Manager<br/>Cognitive Processing]
 
-    %% Layer 0: Episodic Memory
-    HM --> M0[Layer 0: Episodic Memory<br/>Raw Conversational Episodes]
-    M0 --> ES[Episode Storage<br/>Contextual & Temporal]
-    M0 --> MI[Multi-Path Indexing<br/>Vector, Keyword, Graph, Temporal]
+    %% M1: Episodic Memory
+    HM --> M1[M1: Episodic Memory<br/>Raw Conversational Episodes]
+    M1 --> ES[Episode Storage<br/>Contextual & Temporal]
+    M1 --> MI[Multi-Path Indexing<br/>Vector, Keyword, Graph, Temporal]
 
-    %% Layer 1: Semantic Memory
-    M0 --> M1[Layer 1: Semantic Memory<br/>Decontextualized Knowledge]
-    M1 --> KAE[Knowledge Abstraction Engine<br/>LLM-Based Processing]
-    M1 --> SKR[Semantic Knowledge Repository<br/>Facts & Concepts]
-    M1 --> CD[Conflict Detection<br/>Knowledge Validation]
-    M1 --> TC[Temporal Consolidation<br/>Background Processing]
+    %% M2: Semantic Memory
+    M1 --> M2[M2: Semantic Memory<br/>Decontextualized Knowledge]
+    M2 --> KAE[Knowledge Abstraction Engine<br/>LLM-Based Processing]
+    M2 --> SKR[Semantic Knowledge Repository<br/>Facts & Concepts]
+    M2 --> CD[Conflict Detection<br/>Knowledge Validation]
+    M2 --> TC[Temporal Consolidation<br/>Background Processing]
 
-    %% Layer 2: Relational Knowledge
-    M1 --> M2[Layer 2: Relational Knowledge<br/>Interconnected Networks]
-    M2 --> RME[Relationship Modeling Engine<br/>Network Construction]
-    M2 --> KN[Knowledge Networks<br/>Concept Relationships]
-    M2 --> AR[Advanced Reasoning<br/>Inference & Analogy]
-    M2 --> CSI[Cross-Session Integration<br/>Knowledge Synthesis]
+    %% M3: Procedural Memory
+    M2 --> M3[M3: Procedural Memory<br/>Executable Skills & Workflows]
+    M3 --> WE[Workflow Engine<br/>Process Orchestration]
+    M3 --> SKILL_LIB[Skill Library<br/>Executable Procedures]
+    M3 --> PM[Performance Monitor<br/>Execution Optimization]
+    M3 --> CM[Context Manager<br/>Environment & Resources]
 
     %% Storage Layer Abstraction
-    ES --> SL[Storage Layer<br/>Database Agnostic]
-    MI --> SL
-    SKR --> SL
-    KN --> SL
+    ES --> STORAGE[Storage Layer<br/>Database Agnostic]
+    MI --> STORAGE
+    SKR --> STORAGE
+    SL_PROC[Skill Storage<br/>Procedural Knowledge] --> STORAGE
+    WE --> SL_PROC
+    PM --> SL_PROC
 
     %% Query Processing
     MS --> QP[Cognitive Query Processor]
-    QP --> M0
     QP --> M1
     QP --> M2
+    QP --> M3
     QP --> QR[Synthesized Results<br/>Multi-Layer Integration]
     QR --> MS
 ```
 
-### Layer 1 Semantic Memory Pipeline
+## Summary of Architecture Updates
 
-The Layer 1 processes episodic memories through semantic abstraction and knowledge consolidation:
+### Major Structural Changes
+
+1. **Expanded Memory Hierarchy**: Updated from 3-layer (M0/M1/M2) to 4-layer (M0/M1/M2/M3) architecture:
+   - **M0**: Raw Data Store (new layer for unprocessed multi-modal data) *(Future Feature)*
+   - **M1**: Episodic Memory (previously M0, now handles episode formation)
+   - **M2**: Semantic Memory (previously M1, handles fact extraction and abstraction)
+   - **M3**: Procedural Memory (new layer for skills, workflows, and executable procedures)
+
+2. **Added Layer-Specific Memory Managers**: Introduced dedicated tactical-level managers for each memory layer:
+   - **M0 Manager**: Raw data storage and multi-modal object management
+   - **M1 Manager**: Episodic memory and vectorized log stream management
+   - **M2 Manager**: Semantic memory and dual-representation fact base management
+   - **M3 Manager**: Procedural memory and executable skill library management
+
+3. **Added KISS Global System**: Introduced Knowledge Integration & Synthesis System as the central coordination engine:
+   - **Central Government Role**: Strategic directive issuing and cross-layer analysis
+   - **Macro Task Management**: System consolidation and forgetting mechanisms
+   - **Meta-cognitive Arbitration**: High-level conflict resolution and exception handling
+
+4. **Added MSMG Meta-Structure**: Introduced Multi-Scale Mental Graph as the organizing meta-structure:
+   - **Instance Layer**: Contextual Knowledge Graphs (CKGs) for specific events
+   - **Ontology/Schema Layer**: Classes, hierarchies, and properties for knowledge organization
+   - **Meta-cognitive Layer**: Knowledge provenance and data lineage tracking
+
+5. **Enhanced Cognitive Science Foundation**: Integrated advanced cognitive theories:
+   - **Schema Theory**: Mental frameworks for information organization
+   - **Global Neuronal Workspace Theory**: Distributed consciousness and information integration
+   - **Knowledge Lifecycle Management**: Complete birth-to-evolution knowledge processes
+
+### Architectural Philosophy Updates
+
+1. **Knowledge Ecosystem Positioning**: Redefined MemFuse as a complete knowledge ecosystem with full lifecycle management capabilities and dynamic evolution, rather than just a memory hierarchy.
+
+2. **Progressive Information Processing**: Enhanced the pipeline from raw signals to abstract wisdom:
+   - Raw Data → Episodes → Facts → Relationships → Mental Graph
+   - ETLS Process: Extract → Transform → Link → Synthesize
+
+3. **Memory Lifecycle Integration**: Added comprehensive lifecycle management:
+   - **Encoding & Indexing**: Knowledge birth through KISS (Knowledge Integration & Synthesis System)
+   - **Extraction & Retrieval**: Knowledge invocation via Hybrid Retrieval Funnel
+   - **Learning & Evolution**: Knowledge elevation through Introspection Loop
+   - **Maintenance & Dynamics**: Knowledge health management
+
+### Implementation Status Updates
+
+1. **Current State Clarification**: Updated implementation status to reflect M1-only active processing:
+   - M1 (Episodic): ✅ Active
+   - M2 (Semantic): ❌ Inactive (code exists but not integrated)
+   - M3 (Relational): ❌ Inactive (code exists but not integrated)
+
+2. **Future Vision**: Enhanced architectural roadmap for unified Memory Layer abstraction with parallel M1/M2/M3 processing.
+
+### Technical Enhancements
+
+1. **Multi-Modal Support**: Added M0 raw data store supporting text, PDF, image, audio, video formats *(Future Feature)*.
+
+2. **Layer-Specific Management**: Implemented dedicated managers with single responsibility principle:
+   - **Implementation Decoupling**: Each manager uses optimal storage technology for its layer
+   - **Standardized APIs**: Uniform interfaces for upper-layer interaction
+   - **Independent Scaling**: Each layer can scale independently based on workload
+
+3. **Advanced Procedural Capabilities**: Enhanced M3 with sophisticated procedural memory:
+   - Executable Skill Library with workflow orchestration
+   - Skill acquisition and pattern recognition from semantic knowledge
+   - Performance monitoring and skill optimization
+   - Context-aware execution and resource management
+
+4. **KISS Coordination System**: Implemented global knowledge integration:
+   - Cross-layer synthesis and pattern discovery
+   - Macro task scheduling and forgetting mechanisms
+   - Meta-cognitive arbitration for complex conflicts
+
+5. **Comprehensive Configuration**: Updated configuration schema to support all layers, managers, and MSMG components.
+
+### Flow Diagram Updates
+
+1. **Overall Architecture Flow**: Updated to show 4-layer + MSMG structure with proper data flow relationships.
+
+2. **Processing Workflows**: Enhanced data ingestion, query processing, and consolidation workflows to reflect new architecture.
+
+3. **Layer-Specific Flows**: Updated M2 and M3 flow diagrams with correct input/output relationships.
+
+These updates transform the documentation from a simple 3-layer memory hierarchy to a comprehensive knowledge ecosystem architecture that better reflects MemFuse's cognitive science foundations and advanced capabilities.
+
+### M2 Semantic Memory Pipeline
+
+The M2 layer processes episodic memories through semantic abstraction and knowledge consolidation:
 
 ```mermaid
 graph TD
-    %% Input from Layer 0
-    M0_EPISODES[Layer 0 Episodes<br/>Contextual Conversations] --> CONTEXT_ANALYSIS[Context Analysis<br/>Episode Understanding]
+    %% Input from M1
+    M1_EPISODES[M1 Episodes<br/>Contextual Conversations] --> CONTEXT_ANALYSIS[Context Analysis<br/>Episode Understanding]
 
     %% Semantic Abstraction Pipeline
     CONTEXT_ANALYSIS --> SEMANTIC_EXTRACT[Semantic Extraction<br/>Knowledge Abstraction Engine]
@@ -1106,7 +1269,7 @@ graph TD
 
     %% Storage and Consolidation
     CONFLICT_DETECT --> SEMANTIC_REPO[Semantic Knowledge Repository<br/>Abstract Facts Storage]
-    SEMANTIC_REPO --> M2_TRIGGER[Trigger Layer 2<br/>Relationship Modeling]
+    SEMANTIC_REPO --> M3_TRIGGER[Trigger M3<br/>Skill Extraction]
 
     %% Background Consolidation
     BG_CONSOLIDATION[Background Consolidation] --> KNOWLEDGE_REVIEW[Knowledge Review<br/>Semantic Validation]
@@ -1114,37 +1277,37 @@ graph TD
     ABSTRACTION_REFINE --> SEMANTIC_REPO
 ```
 
-### Layer 2 Relational Knowledge Construction
+### M3 Procedural Memory Construction
 
-The Layer 2 builds interconnected knowledge networks enabling sophisticated reasoning:
+The M3 layer builds executable skills and workflows enabling autonomous task execution:
 
 ```mermaid
 graph TD
-    %% Input from Layer 1
-    M1_SEMANTIC[Layer 1 Semantic Knowledge<br/>Abstract Facts & Concepts] --> RELATIONSHIP_ANALYSIS[Relationship Analysis<br/>Concept Connection Discovery]
+    %% Input from M2
+    M2_SEMANTIC[M2 Semantic Knowledge<br/>Abstract Facts & Concepts] --> SKILL_ANALYSIS[Skill Analysis<br/>Procedural Pattern Recognition]
 
-    %% Relationship Modeling
-    RELATIONSHIP_ANALYSIS --> CONCEPT_MAPPING[Concept Mapping<br/>Semantic Relationships]
-    RELATIONSHIP_ANALYSIS --> ASSOCIATION_DETECT[Association Detection<br/>Implicit Connections]
+    %% Skill Modeling
+    SKILL_ANALYSIS --> WORKFLOW_EXTRACTION[Workflow Extraction<br/>Process Identification]
+    SKILL_ANALYSIS --> ACTION_SEQUENCE[Action Sequence<br/>Step-by-Step Procedures]
 
-    %% Network Construction
-    CONCEPT_MAPPING --> KNOWLEDGE_NETWORK[Knowledge Network Construction<br/>Interconnected Concepts]
-    ASSOCIATION_DETECT --> KNOWLEDGE_NETWORK
-    KNOWLEDGE_NETWORK --> NETWORK_VALIDATION[Network Validation<br/>Relationship Verification]
+    %% Skill Construction
+    WORKFLOW_EXTRACTION --> SKILL_LIBRARY[Skill Library Construction<br/>Executable Procedures]
+    ACTION_SEQUENCE --> SKILL_LIBRARY
+    SKILL_LIBRARY --> SKILL_VALIDATION[Skill Validation<br/>Execution Testing]
 
     %% Advanced Processing
-    NETWORK_VALIDATION --> INFERENCE_ENGINE[Inference Engine<br/>Logical Reasoning]
-    NETWORK_VALIDATION --> ANALOGY_PROCESSOR[Analogy Processor<br/>Pattern Recognition]
-    NETWORK_VALIDATION --> ASSOCIATION_LEARNER[Association Learner<br/>Implicit Learning]
+    SKILL_VALIDATION --> WORKFLOW_ENGINE[Workflow Engine<br/>Process Orchestration]
+    SKILL_VALIDATION --> CONTEXT_MANAGER[Context Manager<br/>Environment Management]
+    SKILL_VALIDATION --> PERFORMANCE_MONITOR[Performance Monitor<br/>Execution Optimization]
 
     %% Cross-Session Integration
-    INFERENCE_ENGINE --> CSI[Cross-Session Integration<br/>Knowledge Synthesis]
-    ANALOGY_PROCESSOR --> CSI
-    ASSOCIATION_LEARNER --> CSI
+    WORKFLOW_ENGINE --> CSI[Cross-Session Integration<br/>Skill Transfer]
+    CONTEXT_MANAGER --> CSI
+    PERFORMANCE_MONITOR --> CSI
 
-    %% Storage and Retrieval
-    CSI --> RELATIONAL_STORE[Relational Knowledge Store<br/>Network Persistence]
-    RELATIONAL_STORE --> REASONING_RETRIEVAL[Reasoning-Based Retrieval<br/>Intelligent Query Processing]
+    %% Storage and Execution
+    CSI --> PROCEDURAL_STORE[Procedural Knowledge Store<br/>Skill Persistence]
+    PROCEDURAL_STORE --> EXECUTION_RETRIEVAL[Execution-Based Retrieval<br/>Task Completion]
 ```
 
 ### Cognitive Query Processing Flow
@@ -1159,17 +1322,17 @@ graph TD
     %% Cognitive Strategy Selection
     COGNITIVE_ANALYZER --> EPISODIC_NEED[Episodic Memory Need?<br/>Specific Experience Recall]
     COGNITIVE_ANALYZER --> SEMANTIC_NEED[Semantic Memory Need?<br/>Factual Knowledge Recall]
-    COGNITIVE_ANALYZER --> RELATIONAL_NEED[Relational Memory Need?<br/>Reasoning & Inference]
+    COGNITIVE_ANALYZER --> PROCEDURAL_NEED[Procedural Memory Need?<br/>Skill Execution & Tasks]
 
     %% Layer-Specific Processing
-    EPISODIC_NEED --> M0_EPISODIC[Layer 0: Episodic Retrieval<br/>Contextual Episode Search]
-    SEMANTIC_NEED --> M1_SEMANTIC[Layer 1: Semantic Retrieval<br/>Abstract Knowledge Search]
-    RELATIONAL_NEED --> M2_RELATIONAL[Layer 2: Relational Retrieval<br/>Network-Based Reasoning]
+    EPISODIC_NEED --> M1_EPISODIC[M1: Episodic Retrieval<br/>Contextual Episode Search]
+    SEMANTIC_NEED --> M2_SEMANTIC[M2: Semantic Retrieval<br/>Abstract Knowledge Search]
+    PROCEDURAL_NEED --> M3_PROCEDURAL[M3: Procedural Retrieval<br/>Skill-Based Execution]
 
     %% Cognitive Synthesis
-    M0_EPISODIC --> COGNITIVE_SYNTHESIS[Cognitive Synthesis<br/>Human-Like Integration]
-    M1_SEMANTIC --> COGNITIVE_SYNTHESIS
-    M2_RELATIONAL --> COGNITIVE_SYNTHESIS
+    M1_EPISODIC --> COGNITIVE_SYNTHESIS[Cognitive Synthesis<br/>Human-Like Integration]
+    M2_SEMANTIC --> COGNITIVE_SYNTHESIS
+    M3_PROCEDURAL --> COGNITIVE_SYNTHESIS
 
     %% Result Processing
     COGNITIVE_SYNTHESIS --> CONTEXT_RECONSTRUCTION[Context Reconstruction<br/>Episodic Enhancement]
@@ -1181,11 +1344,11 @@ graph TD
 ## Implementation Roadmap
 
 ### Phase 1: Foundation (Weeks 1-4)
-**M0 Layer Enhancement**:
-- [ ] Enhance existing M0Manager with improved store coordination
+**M1 Layer Enhancement**:
+- [ ] Enhance existing M1Manager with improved store coordination
 - [ ] Implement parallel indexing across vector/keyword/graph stores
 - [ ] Add comprehensive buffer integration hooks
-- [ ] Implement unified query interface for M0 stores
+- [ ] Implement unified query interface for M1 stores
 - [ ] Add performance monitoring and metrics collection
 
 **Core Infrastructure**:
@@ -1204,7 +1367,7 @@ graph TD
 - [ ] Add fact validation and confidence scoring
 
 **Integration Testing**:
-- [ ] Test M0 → M1 data flow and processing
+- [ ] Test M1 → M2 data flow and processing
 - [ ] Validate fact extraction quality and accuracy
 - [ ] Performance testing for batch processing
 - [ ] Integration testing with existing buffer system
@@ -1276,21 +1439,21 @@ graph TD
 ### Metrics Collection
 ```yaml
 hierarchy_metrics:
-  m0_metrics:
+  m1_metrics:
     - chunks_processed_per_second
     - store_indexing_latency
     - query_response_time
     - cache_hit_ratio
-  m1_metrics:
+  m2_metrics:
     - facts_extracted_per_batch
     - conflict_detection_rate
     - consolidation_effectiveness
     - llm_api_usage
-  m2_metrics:
-    - entities_extracted_per_fact
-    - graph_update_latency
-    - retrieval_accuracy
-    - reasoning_path_length
+  m3_metrics:
+    - skills_extracted_per_fact
+    - workflow_execution_latency
+    - execution_success_rate
+    - skill_optimization_effectiveness
 ```
 
 ### Health Checks
@@ -1316,7 +1479,7 @@ hierarchy_metrics:
 
 ## Conclusion
 
-The three-layer memory hierarchy architecture provides a sophisticated foundation for building human-like memory systems in MemFuse. By combining the immediate access of M0 raw data, the structured knowledge of M1 facts, and the relationship intelligence of M2 knowledge graphs, the system enables both efficient retrieval and advanced reasoning capabilities.
+The four-layer memory hierarchy architecture provides a sophisticated foundation for building human-like memory systems in MemFuse. By combining the raw data foundation of M0, the experiential richness of M1 episodic memory, the structured knowledge of M2 semantic facts, and the executable intelligence of M3 procedural skills, the system enables comprehensive cognitive capabilities from perception to action.
 
 The architecture is designed for:
 - **Scalability**: Handle growing data volumes and user bases

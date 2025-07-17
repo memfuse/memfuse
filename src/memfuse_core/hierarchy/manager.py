@@ -12,7 +12,7 @@ from loguru import logger
 
 from .core import LayerType, LayerConfig, ProcessingResult, StorageManager
 from .storage import UnifiedStorageManager
-from .layers import M0EpisodicLayer, M1SemanticLayer, M2RelationalLayer
+from .layers import M0RawDataLayer, M1EpisodicLayer, M2SemanticLayer, M3ProceduralLayer
 
 
 class MemoryHierarchyManager:
@@ -77,7 +77,7 @@ class MemoryHierarchyManager:
             # M0 Layer
             if layers_config.get("m0", {}).get("enabled", True):
                 m0_config = self._create_layer_config(layers_config.get("m0", {}))
-                self.layers[LayerType.M0] = M0EpisodicLayer(
+                self.layers[LayerType.M0] = M0RawDataLayer(
                     LayerType.M0, m0_config, self.user_id,
                     self.storage_manager
                 )
@@ -86,7 +86,7 @@ class MemoryHierarchyManager:
             # M1 Layer
             if layers_config.get("m1", {}).get("enabled", True):
                 m1_config = self._create_layer_config(layers_config.get("m1", {}))
-                self.layers[LayerType.M1] = M1SemanticLayer(
+                self.layers[LayerType.M1] = M1EpisodicLayer(
                     LayerType.M1, m1_config, self.user_id,
                     self.storage_manager
                 )
@@ -95,12 +95,21 @@ class MemoryHierarchyManager:
             # M2 Layer
             if layers_config.get("m2", {}).get("enabled", True):
                 m2_config = self._create_layer_config(layers_config.get("m2", {}))
-                self.layers[LayerType.M2] = M2RelationalLayer(
+                self.layers[LayerType.M2] = M2SemanticLayer(
                     LayerType.M2, m2_config, self.user_id,
                     self.storage_manager
                 )
                 await self.layers[LayerType.M2].initialize()
-            
+
+            # M3 Layer (Placeholder)
+            if layers_config.get("m3", {}).get("enabled", False):  # Default disabled
+                m3_config = self._create_layer_config(layers_config.get("m3", {}))
+                self.layers[LayerType.M3] = M3ProceduralLayer(
+                    LayerType.M3, m3_config, self.user_id,
+                    self.storage_manager
+                )
+                await self.layers[LayerType.M3].initialize()
+
             self.initialized = True
             logger.info(f"MemoryHierarchyManager: Initialized {len(self.layers)} layers successfully")
             return True

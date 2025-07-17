@@ -1,6 +1,12 @@
 # @package memory
 # MemFuse Memory System Configuration
 # Optimized configuration for M0/M1/M2 memory hierarchy
+#
+# Memory Layer Architecture (Updated Naming):
+# - M0: Raw Data Layer - Stores original data in unprocessed form
+# - M1: Episodic Memory Layer - Stores event-centered experiences and contexts
+# - M2: Semantic Memory Layer - Extracts and stores facts and concepts
+# - M3: Procedural Memory Layer - Planned for future implementation
 
 # =============================================================================
 # CORE ARCHITECTURE SETTINGS
@@ -28,7 +34,7 @@ processing:
 # =============================================================================
 
 layers:
-  # M0: Episodic Memory - Raw data storage
+  # M0: Raw Data - Original data storage
   m0:
     enabled: true
     priority: 1
@@ -40,41 +46,59 @@ layers:
 
     # M0 storage tables
     storage:
-      message_table: "m0_episodic"
+      message_table: "m0_raw"
       metadata_table: "m0_metadata"
 
-  # M1: Semantic Memory - Fact extraction and processing
+  # M1: Episodic Memory - Event-centered experiences
   m1:
     enabled: true
     priority: 2
 
-    # M1-specific settings (for future implementation)
-    fact_extraction_enabled: true
+    # M1-specific settings
+    episode_formation_enabled: true
     llm_model: "grok-3-mini"
     batch_size: 5
     min_confidence_threshold: 0.7
 
     # M1 storage tables
     storage:
-      fact_table: "m1_facts"
+      episode_table: "m1_episodic"
       lineage_table: "m1_lineage"
-      conflicts_table: "m1_conflicts"
+      metadata_table: "m1_metadata"
 
-  # M2: Relational Memory - Knowledge graph construction
+  # M2: Semantic Memory - Facts and concepts
   m2:
     enabled: true
     priority: 3
 
     # M2-specific settings
-    graph_update_strategy: "incremental"
-    entity_resolution_threshold: 0.8
-    entity_extraction_enabled: true
+    fact_extraction_enabled: true
+    llm_model: "grok-3-mini"
+    batch_size: 5
+    min_confidence_threshold: 0.7
 
     # M2 storage tables
     storage:
-      entity_table: "m2_entities"
-      relationship_table: "m2_relationships"
-      graph_table: "m2_graphs"
+      fact_table: "m2_semantic"
+      lineage_table: "m2_lineage"
+      conflicts_table: "m2_conflicts"
+
+  # M3: Procedural Memory - Learned patterns and procedures
+  m3:
+    enabled: false  # Placeholder implementation
+    priority: 4
+
+    # M3-specific settings
+    pattern_recognition_enabled: true
+    llm_model: "grok-3-mini"
+    batch_size: 3
+    min_confidence_threshold: 0.8
+
+    # M3 storage tables
+    storage:
+      pattern_table: "m3_procedural"
+      skill_table: "m3_skills"
+      behavior_table: "m3_behaviors"
 
 # =============================================================================
 # STORAGE BACKEND CONFIGURATION
