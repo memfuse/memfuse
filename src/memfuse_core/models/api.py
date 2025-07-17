@@ -5,7 +5,7 @@ providing a unified interface for API interactions.
 """
 
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .core import Message, ErrorDetail, ApiResponse, StoreType
 
@@ -13,7 +13,7 @@ from .core import Message, ErrorDetail, ApiResponse, StoreType
 # User API models
 class UserCreate(BaseModel):
     """Request model for creating a user."""
-    name: str
+    name: str = Field(..., min_length=1, description="User name - cannot be empty")
     description: Optional[str] = None
 
 
@@ -26,7 +26,7 @@ class UserUpdate(BaseModel):
 # Agent API models
 class AgentCreate(BaseModel):
     """Request model for creating an agent."""
-    name: str
+    name: str = Field(..., min_length=1, description="Agent name - cannot be empty")
     description: Optional[str] = None
 
 
