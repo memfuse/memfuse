@@ -143,7 +143,44 @@ class PgaiStore(ChunkStoreInterface):
             password = os.getenv("POSTGRES_PASSWORD", self.db_config.get("password", "postgres"))
 
         return f"postgresql://{user}:{password}@{host}:{port}/{database}"
-    
+
+    async def _check_required_extensions(self) -> bool:
+        """Check if required PostgreSQL extensions are available."""
+        try:
+            # Create a temporary connection to check extensions
+            import psycopg
+
+            logger.debug("Checking required PostgreSQL extensions...")
+
+            async with await psycopg.AsyncConnection.connect(self.db_url) as conn:
+                async with conn.cursor() as cur:
+                    # Check if pgvector extension exists
+                    await cur.execute(
+                        "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')"
+                    )
+                    vector_exists = (await cur.fetchone())[0]
+
+                    if not vector_exists:
+                        logger.error("pgvector extension is not installed")
+                        logger.error("Please ensure pgvector extension is installed in your PostgreSQL database")
+                        logger.error("Run: CREATE EXTENSION IF NOT EXISTS vector;")
+                        return False
+
+                    # Test vector functionality
+                    try:
+                        await cur.execute("SELECT '[1,2,3]'::vector")
+                        logger.debug("pgvector extension verified successfully")
+                    except Exception as e:
+                        logger.error(f"pgvector functionality test failed: {e}")
+                        return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Extension check failed: {e}")
+            logger.error("Please ensure PostgreSQL database is accessible and pgvector extension is installed")
+            return False
+
     async def initialize(self) -> bool:
         """Initialize pgai store and vectorizer."""
         if self.initialized:
@@ -152,9 +189,11 @@ class PgaiStore(ChunkStoreInterface):
         try:
             logger.info(f"Initializing PgaiStore with table: {self.table_name}")
             
-            # Skip pgai.install() as extensions are already installed in Docker
-            logger.debug("Skipping pgai.install() - extensions already available")
-            
+            # Check required extensions first
+            if not await self._check_required_extensions():
+                logger.error("Required extensions are not available")
+                return False
+
             # Create connection pool with conservative settings
             logger.debug("Creating connection pool...")
             postgres_config = self.db_config.get("postgres", {})
@@ -1214,15 +1253,30 @@ class PgaiStore(ChunkStoreInterface):
 
     async def close(self):
         """Close the store and cleanup resources."""
-        if self.pool:
-            await self.pool.close()
+        try:
+            if self.pool:
+                logger.debug("Closing connection pool...")
+                # Cancel all pending tasks in the pool
+                if hasattr(self.pool, '_workers'):
+                    for worker in self.pool._workers:
+                        if not worker.done():
+                            worker.cancel()
 
-        if self.vectorizer_worker:
-            # Stop the worker (implementation depends on pgai version)
-            pass
+                # Close the pool
+                await self.pool.close()
+                logger.debug("Connection pool closed successfully")
 
-        self.initialized = False
-        logger.debug("PgaiStore closed")
+            if self.vectorizer_worker:
+                # Stop the worker (implementation depends on pgai version)
+                logger.debug("Stopping vectorizer worker...")
+                pass
+
+            self.initialized = False
+            logger.debug("PgaiStore closed successfully")
+
+        except Exception as e:
+            logger.error(f"Error during PgaiStore cleanup: {e}")
+            self.initialized = False
 
     async def get_chunks_by_session(self, session_id: str) -> List[ChunkData]:
         """Get all chunks for a specific session."""
@@ -1389,5 +1443,33 @@ class PgaiStore(ChunkStoreInterface):
     def __del__(self):
         """Cleanup when object is destroyed."""
         if hasattr(self, 'initialized') and self.initialized:
-            # Note: Can't use async in __del__, so we just log
-            logger.debug("PgaiStore being destroyed, resources may not be properly cleaned up")
+            # Try to cleanup synchronously if possible
+            if hasattr(self, 'pool') and self.pool:
+                try:
+                    # Cancel any pending tasks
+                    if hasattr(self.pool, '_workers'):
+                        for worker in self.pool._workers:
+                            if not worker.done():
+                                worker.cancel()
+
+                    # Force close without waiting
+                    if hasattr(self.pool, '_closed') and not self.pool._closed:
+                        logger.debug("Force closing connection pool in destructor")
+                        # This is a synchronous close, may not be perfect but better than nothing
+                        try:
+                            import asyncio
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                # Schedule cleanup for later
+                                loop.create_task(self.close())
+                            else:
+                                # Try to run cleanup
+                                asyncio.run(self.close())
+                        except Exception:
+                            # Last resort: just mark as closed
+                            self.initialized = False
+                            logger.debug("PgaiStore destroyed with forced cleanup")
+                except Exception as e:
+                    logger.debug(f"Error in PgaiStore destructor: {e}")
+
+            self.initialized = False

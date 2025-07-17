@@ -6,6 +6,7 @@ service initialization and server startup.
 
 import asyncio
 import os
+import signal
 import threading
 from typing import Optional, Any
 from fastapi import FastAPI
@@ -149,21 +150,135 @@ def run_server(cfg: Optional[DictConfig] = None):
 
     # Keep the event loop running in a separate thread
     def run_event_loop():
-        loop.run_forever()
+        try:
+            loop.run_forever()
+        except Exception as e:
+            logger.error(f"Event loop error: {e}")
+        finally:
+            # Clean up pending tasks
+            try:
+                if loop and not loop.is_closed():
+                    pending = asyncio.all_tasks(loop)
+                    if pending:
+                        logger.info(f"Cleaning up {len(pending)} pending tasks...")
+                        for task in pending:
+                            task.cancel()
+
+                        # Only try to run cleanup if loop is still running
+                        if loop.is_running():
+                            try:
+                                loop.run_until_complete(asyncio.wait_for(
+                                    asyncio.gather(*pending, return_exceptions=True),
+                                    timeout=3.0
+                                ))
+                            except (asyncio.TimeoutError, RuntimeError) as e:
+                                logger.warning(f"Task cleanup timed out or failed: {e}")
+                        else:
+                            logger.info("Event loop not running, skipping task cleanup")
+            except Exception as e:
+                logger.warning(f"Error during task cleanup: {e}")
+            finally:
+                try:
+                    if loop and not loop.is_closed():
+                        loop.close()
+                        logger.debug("Event loop closed successfully")
+                except Exception as e:
+                    logger.warning(f"Error closing event loop: {e}")
 
     event_loop_thread = threading.Thread(target=run_event_loop)
     event_loop_thread.daemon = True
     event_loop_thread.start()
 
-    # 5. Start the server
-    reload = server_config.get("reload", False)
-    uvicorn.run(
-        "memfuse_core.server:create_app",
-        host=host,
-        port=port,
-        reload=reload,
-        factory=True,
-    )
+    # Setup signal handlers for graceful shutdown
+    def signal_handler(signum, frame):
+        logger.info(f"Received signal {signum}, shutting down gracefully...")
+
+        # Schedule service shutdown in the event loop
+        if loop and not loop.is_closed() and loop.is_running():
+            try:
+                async def cleanup_services():
+                    try:
+                        from .services.service_initializer import ServiceInitializer
+                        initializer = ServiceInitializer()
+                        await initializer.shutdown_all_services()
+                        logger.info("Service cleanup completed")
+                    except Exception as e:
+                        logger.error(f"Error during service cleanup: {e}")
+                    finally:
+                        loop.stop()
+
+                # Schedule the cleanup task
+                try:
+                    asyncio.run_coroutine_threadsafe(cleanup_services(), loop)
+                    logger.info("Cleanup task scheduled")
+                except RuntimeError as e:
+                    logger.warning(f"Could not schedule cleanup task: {e}")
+                    loop.call_soon_threadsafe(loop.stop)
+            except Exception as e:
+                logger.error(f"Error scheduling cleanup: {e}")
+                if loop and not loop.is_closed():
+                    loop.call_soon_threadsafe(loop.stop)
+        else:
+            logger.info("Event loop not available for cleanup, stopping immediately")
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        # 5. Start the server
+        reload = server_config.get("reload", False)
+        uvicorn.run(
+            "memfuse_core.server:create_app",
+            host=host,
+            port=port,
+            reload=reload,
+            factory=True,
+        )
+    except KeyboardInterrupt:
+        logger.info("Server interrupted by user")
+    finally:
+        # Cleanup services
+        try:
+            from .services.service_initializer import ServiceInitializer
+            initializer = ServiceInitializer()
+
+            # Try to cleanup services
+            if loop and not loop.is_closed() and not loop.is_running():
+                # Loop exists but not running, try to run cleanup in new loop
+                try:
+                    logger.info("Running service cleanup in new event loop")
+                    asyncio.run(initializer.shutdown_all_services())
+                except Exception as e:
+                    logger.error(f"Error in new loop cleanup: {e}")
+            elif loop and not loop.is_closed() and loop.is_running():
+                # Loop is running, schedule cleanup
+                async def final_cleanup():
+                    try:
+                        await initializer.shutdown_all_services()
+                        logger.info("Final service cleanup completed")
+                    except Exception as e:
+                        logger.error(f"Error in final cleanup: {e}")
+
+                try:
+                    future = asyncio.run_coroutine_threadsafe(final_cleanup(), loop)
+                    future.result(timeout=5)  # Wait up to 5 seconds for cleanup
+                except (asyncio.TimeoutError, RuntimeError) as e:
+                    logger.warning(f"Final cleanup timed out or failed: {e}")
+            else:
+                # Loop is closed or unavailable, try direct cleanup
+                try:
+                    logger.info("Running direct service cleanup")
+                    asyncio.run(initializer.shutdown_all_services())
+                except Exception as e:
+                    logger.error(f"Error in direct cleanup: {e}")
+        except Exception as e:
+            logger.error(f"Error during final cleanup: {e}")
+
+        # Ensure event loop cleanup
+        if loop and not loop.is_closed():
+            loop.call_soon_threadsafe(loop.stop)
+        if event_loop_thread.is_alive():
+            event_loop_thread.join(timeout=5)
 
 
 # ============================================================================

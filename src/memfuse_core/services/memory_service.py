@@ -1605,3 +1605,29 @@ class MemoryService(MessageInterface):
             "message": f"Found {len(result_dicts)} results",
             "errors": None,
         }
+
+    async def shutdown(self):
+        """Shutdown the memory service and cleanup resources."""
+        try:
+            logger.info("Shutting down MemoryService...")
+
+            # Shutdown memory layer if it exists
+            if hasattr(self, 'memory_layer') and self.memory_layer:
+                if hasattr(self.memory_layer, 'cleanup'):
+                    await self.memory_layer.cleanup()
+                elif hasattr(self.memory_layer, 'shutdown'):
+                    await self.memory_layer.shutdown()
+                elif hasattr(self.memory_layer, 'close'):
+                    await self.memory_layer.close()
+
+            # Shutdown storage backends
+            if hasattr(self, 'storage_manager') and self.storage_manager:
+                if hasattr(self.storage_manager, 'shutdown'):
+                    await self.storage_manager.shutdown()
+                elif hasattr(self.storage_manager, 'close'):
+                    await self.storage_manager.close()
+
+            logger.info("MemoryService shutdown completed")
+
+        except Exception as e:
+            logger.error(f"Error during MemoryService shutdown: {e}")

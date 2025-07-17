@@ -28,15 +28,16 @@ MemFuse implements its own **custom pgai-like system** that provides advanced ve
 2. [Custom pgai Implementation](#custom-pgai-implementation)
 3. [PgAI Store Package Structure](#pgai-store-package-structure)
 4. [M0 Episodic Memory Layer](#m0-episodic-memory-layer)
-5. [Immediate Trigger System](#immediate-trigger-system)
-6. [Event-Driven Store Implementations](#event-driven-store-implementations)
-7. [Database Schema Design](#database-schema-design)
-8. [Configuration Guide](#configuration-guide)
-9. [Schema Management](#schema-management)
-10. [Usage Examples](#usage-examples)
-11. [Performance Analysis](#performance-analysis)
-12. [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
-13. [Migration Guide](#migration-guide)
+5. [**🆕 Multi-Layer Architecture (M0 + M1)**](#multi-layer-architecture-m0--m1)
+6. [Immediate Trigger System](#immediate-trigger-system)
+7. [Event-Driven Store Implementations](#event-driven-store-implementations)
+8. [Database Schema Design](#database-schema-design)
+9. [Configuration Guide](#configuration-guide)
+10. [Schema Management](#schema-management)
+11. [Usage Examples](#usage-examples)
+12. [Performance Analysis](#performance-analysis)
+13. [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
+14. [Migration Guide](#migration-guide)
 
 ## Architecture Overview
 
@@ -239,12 +240,60 @@ The M0 layer represents the **episodic memory** component of MemFuse's three-tie
 | Layer | Table Name | Purpose | Status |
 |-------|------------|---------|--------|
 | **M0** | `m0_episodic` | Raw episodic memory storage | ✅ Implemented |
-| **M1** | `m1_semantic` | Semantic knowledge extraction | 🚧 Future |
+| **M1** | `m1_semantic` | Semantic knowledge extraction | ✅ **Implemented** |
 | **M2** | `m2_relational` | Relationship mapping | 🚧 Future |
 
 **Important**: The `m0_episodic` table is **separate** from the traditional `messages` table:
 - `messages`: Traditional conversation storage (both PostgreSQL and SQLite)
 - `m0_episodic`: M0 memory layer storage (PostgreSQL only, with vector support)
+
+## 🆕 Multi-Layer Architecture (M0 + M1)
+
+### Overview
+
+MemFuse now supports **multi-layer PgAI processing** with M0 (episodic) and M1 (semantic) memory layers operating in parallel. This extends the single-layer M0 architecture described above.
+
+### Key Features
+
+- **Parallel Processing**: Data flows simultaneously to M0 and M1 layers
+- **Automatic Fact Extraction**: LLM-based extraction of structured facts from conversational data
+- **Unified Embedding Generation**: Both layers use the same embedding infrastructure
+- **Flexible Classification**: Open-ended fact categorization system
+- **Backward Compatibility**: Existing M0-only code continues to work
+
+### Architecture Comparison
+
+| Aspect | Single-Layer (M0 Only) | Multi-Layer (M0 + M1) |
+|--------|------------------------|----------------------|
+| **Data Flow** | `data → M0` | `data → M0` + `data → M1` (parallel) |
+| **Processing** | Raw episodic storage | Episodic + semantic fact extraction |
+| **Tables** | `m0_episodic` | `m0_episodic` + `m1_semantic` |
+| **Embedding** | M0 auto-embedding | M0 + M1 auto-embedding |
+| **Use Cases** | Conversation memory | Conversation + structured knowledge |
+
+### Quick Start
+
+```python
+from src.memfuse_core.store.pgai_store.multi_layer_store import MultiLayerPgaiStore
+
+# Initialize multi-layer store
+store = MultiLayerPgaiStore(config)
+await store.initialize()
+
+# Write to both layers in parallel
+results = await store.write_to_all_layers(chunks)
+# Returns: {'m0': ['id1', 'id2'], 'm1': ['fact_id1']}
+
+# Query across layers
+all_results = await store.query_all_layers("Python programming")
+```
+
+### Detailed Documentation
+
+For complete implementation details, configuration options, and advanced usage, see:
+📖 **[Multi-Layer PgAI Architecture Guide](multi_layer_pgai.md)**
+
+---
 
 ## Immediate Trigger System
 

@@ -38,7 +38,7 @@ pgai:
   auto_embedding: true
   auto_initialize: true
 
-  # Event-driven configuration (启用实时触发模式)
+  # Event-driven configuration (enable real-time trigger mode)
   immediate_trigger: true
   
   # Embedding configuration
@@ -61,10 +61,10 @@ pgai:
 
   # Event-driven specific settings
   event_driven:
-    worker_count: 2              # 并发处理worker数量
-    queue_size: 100              # 事件队列大小
-    enable_metrics: true         # 启用性能指标
-    notification_timeout: 10.0   # 通知超时时间
+    worker_count: 2              # Number of concurrent processing workers
+    queue_size: 100              # Event queue size
+    enable_metrics: true         # Enable performance metrics
+    notification_timeout: 10.0   # Notification timeout in seconds
 
 # =============================================================================
 # TABLE AND VIEW NAMING CONVENTIONS
@@ -79,21 +79,15 @@ tables:
     embedding_view: "m0_episodic_embedding"
     vectorizer_name: "m0_episodic_vectorizer"
     
-  # M1 layer tables (for future implementation)
+  # M1 layer tables (semantic memory implementation)
   m1:
-    facts: "m1_facts"
+    facts: "m1_semantic"
     lineage: "m1_lineage"
     conflicts: "m1_conflicts"
-    embedding_view: "m1_facts_embedding"
-    vectorizer_name: "m1_facts_vectorizer"
+    embedding_view: "m1_semantic_embedding"
+    vectorizer_name: "m1_semantic_vectorizer"
     
-  # M2 layer tables (for future implementation)
-  m2:
-    entities: "m2_entities"
-    relationships: "m2_relationships"
-    graphs: "m2_graphs"
-    embedding_view: "m2_entities_embedding"
-    vectorizer_name: "m2_entities_vectorizer"
+
 
 # =============================================================================
 # STORE-SPECIFIC SETTINGS
@@ -119,35 +113,89 @@ store:
     fusion_strategy: "rrf"
 
 # =============================================================================
-# MEMORY LAYER INTEGRATION
+# MEMORY LAYER INTEGRATION (Enhanced for Dual-Layer PgAI)
 # =============================================================================
 
-# Memory layer specific configurations
+# Memory layer specific configurations with PgAI integration
 memory_layers:
-  # M0 layer configuration
+  # M0 layer configuration (Episodic Memory)
   m0:
     enabled: true
     priority: 1
-    buffer_size: 1000
-    auto_flush_interval: 60
+    table_name: "m0_episodic"
+    
+    # PgAI-specific settings for M0
+    pgai:
+      auto_embedding: true
+      immediate_trigger: true
+      embedding_model: "all-MiniLM-L6-v2"
+      embedding_dimensions: 384
+      
+    # Processing pipeline configuration
+    processing_pipeline: ["storage"]  # M0 only does storage
+    
+    # Performance settings
+    performance:
+      max_retries: 3
+      retry_interval: 5.0
+      worker_count: 2
+      queue_size: 100
+      batch_size: 10
+      
+    # Storage backend preferences
     storage_backends: ["vector", "keyword", "sql"]
     
-  # M1 layer configuration (future)
+  # M1 layer configuration (Semantic Memory)
   m1:
     enabled: true
     priority: 2
-    fact_extraction_enabled: true
-    llm_model: "grok-3-mini"
-    batch_size: 5
-    min_confidence_threshold: 0.7
+    table_name: "m1_semantic"
     
-  # M2 layer configuration (future)
-  m2:
-    enabled: true
-    priority: 3
-    graph_update_strategy: "incremental"
-    entity_resolution_threshold: 0.8
-    entity_extraction_enabled: true
+    # PgAI-specific settings for M1
+    pgai:
+      auto_embedding: true
+      immediate_trigger: true
+      embedding_model: "all-MiniLM-L6-v2"
+      embedding_dimensions: 384
+      
+    # Processing pipeline configuration
+    processing_pipeline: ["fact_extraction", "storage"]  # M1 does fact extraction then storage
+    
+    # Fact extraction configuration
+    fact_extraction:
+      enabled: true
+      llm_model: "grok-3-mini"
+      temperature: 0.3
+      max_tokens: 1000
+      max_facts_per_chunk: 10
+      min_confidence_threshold: 0.7
+      batch_size: 5
+      context_window: 2  # chunks before/after for context
+
+      # Flexible classification system
+      classification_strategy: "open"  # "open", "predefined", "custom"
+      enable_auto_categorization: true
+      custom_fact_types: []  # Can be extended as needed
+      
+    # Performance settings
+    performance:
+      max_retries: 3
+      retry_interval: 5.0
+      worker_count: 2
+      queue_size: 100
+      batch_size: 5  # Smaller batch for LLM processing
+      
+    # Storage backend preferences
+    storage_backends: ["vector", "sql"]  # M1 primarily uses vector and SQL
+    
+    # Async processing settings (to avoid blocking M0)
+    async_processing:
+      enabled: true
+      queue_timeout: 30.0
+      max_concurrent_extractions: 3
+      fallback_on_failure: true  # Continue M0 processing if M1 fails
+    
+
 
 # =============================================================================
 # STORAGE BACKEND CONFIGURATION

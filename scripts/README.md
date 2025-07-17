@@ -413,7 +413,7 @@ poetry run python scripts/database_manager.py status
 # 🔄 Reset data (keep schema)
 poetry run python scripts/database_manager.py reset
 
-# ✅ Validate setup
+# ✅ Validate setup (includes pgvector extension check)
 poetry run python scripts/database_manager.py validate
 
 # 🧪 Run quick tests

@@ -19,11 +19,12 @@ from ..llm.prompts.manager import get_prompt_manager
 class ExtractedFact:
     """Represents an extracted fact from content."""
     content: str
-    type: str  # personal, preference, decision, general, temporal
+    type: str  # Flexible fact type, no longer constrained to specific values
     confidence: float
     entities: List[str]
     temporal_info: Optional[Dict[str, Any]] = None
     source_context: Optional[str] = None
+    category: Optional[Dict[str, Any]] = None  # Flexible categorization system
 
 
 @dataclass

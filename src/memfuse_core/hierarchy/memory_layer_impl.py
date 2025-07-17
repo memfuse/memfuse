@@ -360,9 +360,18 @@ class MemoryLayerImpl(MemoryLayer):
             logger.info("MemoryLayerImpl: Starting cleanup...")
 
             if self.parallel_manager:
-                # Cleanup parallel manager if it has cleanup method
-                # await self.parallel_manager.cleanup()
-                pass
+                # Shutdown parallel manager
+                if hasattr(self.parallel_manager, 'shutdown'):
+                    await self.parallel_manager.shutdown()
+                elif hasattr(self.parallel_manager, 'cleanup'):
+                    await self.parallel_manager.cleanup()
+
+            if self.hierarchy_manager:
+                # Shutdown hierarchy manager
+                if hasattr(self.hierarchy_manager, 'shutdown'):
+                    await self.hierarchy_manager.shutdown()
+                elif hasattr(self.hierarchy_manager, 'cleanup'):
+                    await self.hierarchy_manager.cleanup()
 
             self.initialized = False
             self.layer_status = {layer: LayerStatus.INACTIVE for layer in self.layer_status}

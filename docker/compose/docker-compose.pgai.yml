@@ -18,7 +18,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_pgai_data:/var/lib/postgresql/data
-      - ./docker/pgvectorscale/init-scripts:/docker-entrypoint-initdb.d:ro
+      - ../../docker/pgvectorscale/init-scripts:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d memfuse"]
       interval: 10s
