@@ -11,10 +11,11 @@ tests/
 ├── smoke/          # Quick health checks
 ├── contract/       # API contract validation
 ├── integration/    # Database integration tests
+├── unit/           # Unit tests
 ├── retrieval/      # RAG and retrieval tests
-├── e2e/           # End-to-end workflows
-├── perf/          # Performance benchmarks
-└── slow/          # Comprehensive test suite
+├── e2e/            # End-to-end workflows
+├── perf/           # Performance benchmarks
+└── slow/           # Comprehensive test suite
 ```
 
 ## 🚀 Quick Start
