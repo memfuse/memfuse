@@ -86,29 +86,29 @@ class FlushManager:
         default_timeout: float = 30.0,
         flush_interval: float = 60.0,
         enable_auto_flush: bool = True,
-        sqlite_handler: Optional[Callable] = None,
+        memory_service_handler: Optional[Callable] = None,
         qdrant_handler: Optional[Callable] = None
     ):
         """Initialize the flush manager.
-        
+
         Args:
             max_workers: Maximum number of concurrent flush workers
             max_queue_size: Maximum size of the flush queue
             default_timeout: Default timeout for flush operations
             flush_interval: Interval for auto-flush operations
             enable_auto_flush: Whether to enable automatic flushing
-            sqlite_handler: Handler for SQLite operations
-            qdrant_handler: Handler for Qdrant operations
+            memory_service_handler: Handler for MemoryService operations
+            qdrant_handler: Handler for Qdrant operations (legacy, will be removed)
         """
         self.max_workers = max_workers
         self.max_queue_size = max_queue_size
         self.default_timeout = default_timeout
         self.flush_interval = flush_interval
         self.enable_auto_flush = enable_auto_flush
-        
+
         # Storage handlers
-        self.sqlite_handler = sqlite_handler
-        self.qdrant_handler = qdrant_handler
+        self.memory_service_handler = memory_service_handler
+        self.qdrant_handler = qdrant_handler  # Legacy support
         
         # Task queue and workers
         self.task_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(maxsize=max_queue_size)
@@ -182,56 +182,56 @@ class FlushManager:
     
     def set_handlers(
         self,
-        sqlite_handler: Optional[Callable] = None,
+        memory_service_handler: Optional[Callable] = None,
         qdrant_handler: Optional[Callable] = None
     ) -> None:
         """Set or update storage handlers.
-        
+
         Args:
-            sqlite_handler: Handler for SQLite operations
-            qdrant_handler: Handler for Qdrant operations
+            memory_service_handler: Handler for MemoryService operations
+            qdrant_handler: Handler for Qdrant operations (legacy)
         """
-        if sqlite_handler:
-            self.sqlite_handler = sqlite_handler
-            logger.debug("FlushManager: SQLite handler updated")
-        
+        if memory_service_handler:
+            self.memory_service_handler = memory_service_handler
+            logger.debug("FlushManager: MemoryService handler updated")
+
         if qdrant_handler:
             self.qdrant_handler = qdrant_handler
             logger.debug("FlushManager: Qdrant handler updated")
     
-    async def flush_sqlite(
+    async def flush_messages(
         self,
         rounds: List[MessageList],
         priority: FlushPriority = FlushPriority.NORMAL,
         timeout: Optional[float] = None,
         callback: Optional[Callable[[bool, str], Awaitable[None]]] = None
     ) -> str:
-        """Schedule SQLite flush operation.
-        
+        """Schedule message flush operation to persistent storage.
+
         Args:
             rounds: List of message rounds to flush
             priority: Task priority
             timeout: Operation timeout
             callback: Optional callback for completion notification
-            
+
         Returns:
             Task ID for tracking
         """
-        if not self.sqlite_handler:
-            raise ValueError("SQLite handler not configured")
-        
-        task_id = self._generate_task_id("sqlite")
+        if not self.memory_service_handler:
+            raise ValueError("MemoryService handler not configured")
+
+        task_id = self._generate_task_id("messages")
         task = FlushTask(
             task_id=task_id,
             priority=priority,
-            data_type="sqlite",
+            data_type="messages",
             data=rounds,
             callback=callback,
             timeout=timeout or self.default_timeout
         )
-        
+
         await self._enqueue_task(task)
-        logger.debug(f"SQLite flush task queued: {task_id}, rounds={len(rounds)}")
+        logger.debug(f"Messages flush task queued: {task_id}, rounds={len(rounds)}")
         return task_id
     
     async def flush_qdrant(
@@ -271,21 +271,22 @@ class FlushManager:
         logger.debug(f"Qdrant flush task queued: {task_id}, chunks={len(chunks)}")
         return task_id
 
-    async def flush_hybrid(
+    async def flush_buffer_data(
         self,
         rounds: List[MessageList],
-        chunks: List[ChunkData],
-        embeddings: List[List[float]],
         priority: FlushPriority = FlushPriority.NORMAL,
         timeout: Optional[float] = None,
         callback: Optional[Callable[[bool, str], Awaitable[None]]] = None
     ) -> str:
-        """Schedule hybrid flush operation (unified MemoryService or separate SQLite/Qdrant).
+        """Schedule buffer data flush operation to MemoryService.
+
+        This method only flushes the rounds data to MemoryService, which will handle
+        the routing to appropriate storage layers (PostgreSQL rounds/messages tables).
+        VectorCache data (chunks/embeddings) is not persisted - it's only used for
+        immediate querying and will be regenerated by Memory Layer processing.
 
         Args:
             rounds: List of message rounds to flush
-            chunks: List of chunks to flush
-            embeddings: List of embeddings
             priority: Task priority
             timeout: Operation timeout
             callback: Optional callback for completion notification
@@ -293,32 +294,23 @@ class FlushManager:
         Returns:
             Task ID for tracking
         """
-        # Support unified MemoryService handler (sqlite_handler only) or separate handlers
-        if not self.sqlite_handler:
-            raise ValueError("SQLite handler (or unified MemoryService handler) must be configured for flush")
+        if not self.memory_service_handler:
+            raise ValueError("MemoryService handler must be configured for buffer flush")
 
-        # Log the handler configuration for debugging
-        if self.qdrant_handler:
-            logger.debug("FlushManager: Using separate SQLite and Qdrant handlers")
-        else:
-            logger.debug("FlushManager: Using unified MemoryService handler (sqlite_handler only)")
+        logger.debug("FlushManager: Using MemoryService handler for buffer data flush")
 
-        task_id = self._generate_task_id("hybrid")
+        task_id = self._generate_task_id("buffer_data")
         task = FlushTask(
             task_id=task_id,
             priority=priority,
-            data_type="hybrid",
-            data={
-                "rounds": rounds,
-                "chunks": chunks,
-                "embeddings": embeddings
-            },
+            data_type="buffer_data",
+            data={"rounds": rounds},
             callback=callback,
             timeout=timeout or self.default_timeout
         )
 
         await self._enqueue_task(task)
-        logger.debug(f"Hybrid flush task queued: {task_id}, rounds={len(rounds)}, chunks={len(chunks)}")
+        logger.debug(f"Buffer data flush task queued: {task_id}, rounds={len(rounds)}")
         return task_id
 
     async def get_metrics(self) -> FlushMetrics:
@@ -470,16 +462,12 @@ class FlushManager:
             True if successful, False otherwise
         """
         try:
-            if task.data_type == "sqlite":
-                return await self._execute_sqlite_flush(task.data)
+            if task.data_type == "messages":
+                return await self._execute_messages_flush(task.data)
             elif task.data_type == "qdrant":
                 return await self._execute_qdrant_flush(task.data["chunks"], task.data["embeddings"])
-            elif task.data_type == "hybrid":
-                return await self._execute_hybrid_flush(
-                    task.data["rounds"],
-                    task.data["chunks"],
-                    task.data["embeddings"]
-                )
+            elif task.data_type == "buffer_data":
+                return await self._execute_buffer_data_flush(task.data["rounds"])
             else:
                 logger.error(f"Unknown task data type: {task.data_type}")
                 return False
@@ -488,8 +476,8 @@ class FlushManager:
             logger.error(f"Task execution error: {e}")
             return False
 
-    async def _execute_sqlite_flush(self, rounds: List[MessageList]) -> bool:
-        """Execute SQLite flush operation.
+    async def _execute_messages_flush(self, rounds: List[MessageList]) -> bool:
+        """Execute messages flush operation through MemoryService.
 
         Args:
             rounds: List of message rounds to flush
@@ -498,15 +486,15 @@ class FlushManager:
             True if successful, False otherwise
         """
         try:
-            if self.sqlite_handler:
-                await self.sqlite_handler(rounds)
-                logger.debug(f"SQLite flush completed: {len(rounds)} rounds")
+            if self.memory_service_handler:
+                await self.memory_service_handler(rounds)
+                logger.debug(f"Messages flush completed: {len(rounds)} rounds")
                 return True
             else:
-                logger.error("SQLite handler not available")
+                logger.error("MemoryService handler not available")
                 return False
         except Exception as e:
-            logger.error(f"SQLite flush error: {e}")
+            logger.error(f"Messages flush error: {e}")
             return False
 
     async def _execute_qdrant_flush(self, chunks: List[ChunkData], embeddings: List[List[float]]) -> bool:
@@ -551,9 +539,9 @@ class FlushManager:
         Returns:
             True if MemoryService processing successful, False otherwise
         """
-        # Only call the unified MemoryService handler (mapped to sqlite_handler)
+        # Only call the unified MemoryService handler (mapped to memory_service_handler)
         # The chunks and embeddings are already processed and stored in the rounds data
-        success = await self._execute_sqlite_flush(rounds)
+        success = await self._execute_messages_flush(rounds)
 
         if success:
             logger.info(f"Unified MemoryService flush completed: {len(rounds)} rounds processed through M0/M1/M2 hierarchy")
@@ -561,6 +549,23 @@ class FlushManager:
             logger.error(f"Unified MemoryService flush failed for {len(rounds)} rounds")
 
         return success
+
+    async def _execute_buffer_data_flush(self, rounds: List[MessageList]) -> bool:
+        """Execute buffer data flush operation through MemoryService.
+
+        This method only flushes the rounds data to MemoryService, which will handle
+        the routing to appropriate storage layers (PostgreSQL rounds/messages tables).
+        VectorCache data (chunks/embeddings) is not persisted - it's only used for
+        immediate querying and will be regenerated by Memory Layer processing.
+
+        Args:
+            rounds: List of message rounds to flush
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Delegate to the common messages flush implementation
+        return await self._execute_messages_flush(rounds)
 
     async def _update_metrics(self, success: bool, duration: float) -> None:
         """Update flush metrics.

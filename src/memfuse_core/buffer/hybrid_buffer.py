@@ -409,22 +409,19 @@ class HybridBuffer:
                 return True
 
             try:
-                # Prepare data snapshots
+                # Prepare data snapshots - only rounds data will be persisted
                 rounds_snapshot = self.original_rounds.copy()
-                chunks_snapshot = self.chunks.copy()
-                embeddings_snapshot = self.embeddings.copy()
 
-                # Clear buffers immediately (optimistic clearing)
+                # Clear all buffers immediately (optimistic clearing)
+                # VectorCache (chunks/embeddings) is cleared but not persisted
                 self.original_rounds.clear()
                 self.chunks.clear()
                 self.embeddings.clear()
                 self.last_flush_time = time.time()
 
-                # Schedule hybrid flush task
-                task_id = await self.flush_manager.flush_hybrid(
+                # Schedule buffer data flush task - only rounds data
+                task_id = await self.flush_manager.flush_buffer_data(
                     rounds=rounds_snapshot,
-                    chunks=chunks_snapshot,
-                    embeddings=embeddings_snapshot,
                     priority=priority,
                     timeout=timeout,
                     callback=self._flush_callback
@@ -446,10 +443,8 @@ class HybridBuffer:
 
             except Exception as e:
                 logger.error(f"HybridBuffer: Failed to initiate flush: {e}")
-                # Restore data on failure
+                # Restore only rounds data on failure (VectorCache is regenerated as needed)
                 self.original_rounds.extend(rounds_snapshot)
-                self.chunks.extend(chunks_snapshot)
-                self.embeddings.extend(embeddings_snapshot)
                 return False
 
     async def _synchronous_flush(self) -> bool:

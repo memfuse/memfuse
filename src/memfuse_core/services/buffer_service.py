@@ -9,10 +9,9 @@ from omegaconf import DictConfig
 from loguru import logger
 
 from ..interfaces import MemoryInterface, ServiceInterface, MessageInterface, MessageList, MessageBatchList
-from ..buffer.round_buffer import RoundBuffer
-from ..buffer.hybrid_buffer import HybridBuffer
+from ..buffer.write_buffer import WriteBuffer
 from ..buffer.query_buffer import QueryBuffer
-from ..buffer.flush_manager import FlushManager
+from ..buffer.speculative_buffer import SpeculativeBuffer
 
 if TYPE_CHECKING:
     from .memory_service import MemoryService
@@ -63,36 +62,25 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             'enable_auto_flush': performance_config.get('enable_auto_flush', True)
         }
 
-        # Initialize FlushManager
-        self.flush_manager = FlushManager(
-            max_workers=flush_config['max_workers'],
-            max_queue_size=flush_config['max_queue_size'],
-            default_timeout=flush_config['default_timeout'],
-            flush_interval=flush_config['flush_interval'],
-            enable_auto_flush=flush_config['enable_auto_flush']
-        )
+        # Create MemoryService handler for storage operations
+        memory_service_handler = self._create_memory_service_handler()
 
         # Rerank configuration
         retrieval_config = self.config.get('retrieval', {})
         self.use_rerank = retrieval_config.get('use_rerank', True)
 
-        # Initialize Buffer components
-        self.round_buffer = RoundBuffer(
-            max_tokens=round_config.get('max_tokens', 800),
-            max_size=round_config.get('max_size', 5),
-            token_model=round_config.get('token_model', 'gpt-4o-mini')
+        # Initialize WriteBuffer (manages RoundBuffer, HybridBuffer, FlushManager)
+        write_buffer_config = {
+            'round_buffer': round_config,
+            'hybrid_buffer': hybrid_config,
+            'flush_manager': flush_config
+        }
+        self.write_buffer = WriteBuffer(
+            config=write_buffer_config,
+            memory_service_handler=memory_service_handler
         )
 
-        # Initialize HybridBuffer
-        self.hybrid_buffer = HybridBuffer(
-            max_size=hybrid_config.get('max_size', 5),
-            chunk_strategy=hybrid_config.get('chunk_strategy', 'message'),
-            embedding_model=hybrid_config.get('embedding_model', 'all-MiniLM-L6-v2'),
-            flush_manager=self.flush_manager,
-            auto_flush_interval=flush_config['flush_interval'],
-            enable_auto_flush=flush_config['enable_auto_flush']
-        )
-        
+        # Initialize QueryBuffer for unified querying
         self.query_buffer = QueryBuffer(
             retrieval_handler=self._create_retrieval_handler(),
             max_size=query_config.get('max_size', 15),
@@ -100,10 +88,17 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             default_sort_by=query_config.get('default_sort_by', 'score'),
             default_order=query_config.get('default_order', 'desc')
         )
-        
+
+        # Initialize SpeculativeBuffer for predictive prefetching
+        speculative_config = buffer_config.get('speculative_buffer', {})
+        self.speculative_buffer = SpeculativeBuffer(
+            max_size=speculative_config.get('max_size', 10),
+            context_window=speculative_config.get('context_window', 3),
+            retrieval_handler=self._create_retrieval_handler()
+        )
+
         # Set up component connections
-        self.round_buffer.set_transfer_handler(self.hybrid_buffer.add_from_rounds)
-        self.query_buffer.set_hybrid_buffer(self.hybrid_buffer)
+        self.query_buffer.set_hybrid_buffer(self.write_buffer.get_hybrid_buffer())
         
         # Statistics
         self.total_items_added = 0
@@ -198,23 +193,23 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             True if initialization was successful, False otherwise
         """
         try:
-            # Initialize FlushManager
-            if not await self.flush_manager.initialize():
-                logger.error("BufferService: Failed to initialize FlushManager")
-                return False
+            # Initialize WriteBuffer (manages FlushManager, HybridBuffer, RoundBuffer internally)
+            if hasattr(self.write_buffer, 'initialize'):
+                if not await self.write_buffer.initialize():
+                    logger.error("BufferService: Failed to initialize WriteBuffer")
+                    return False
 
-            # Set up unified MemoryService handler (replaces separate SQLite/Qdrant handlers)
-            # This maintains architectural separation: BufferService → MemoryService → MemoryLayer
-            memory_handler = self._create_memory_service_handler()
-            self.flush_manager.set_handlers(
-                sqlite_handler=memory_handler,  # Use unified MemoryService handler
-                qdrant_handler=None             # No separate Qdrant handler needed
-            )
+            # Initialize QueryBuffer
+            if hasattr(self.query_buffer, 'initialize'):
+                if not await self.query_buffer.initialize():
+                    logger.error("BufferService: Failed to initialize QueryBuffer")
+                    return False
 
-            # Initialize HybridBuffer
-            if not await self.hybrid_buffer.initialize():
-                logger.error("BufferService: Failed to initialize HybridBuffer")
-                return False
+            # Initialize SpeculativeBuffer
+            if hasattr(self.speculative_buffer, 'initialize'):
+                if not await self.speculative_buffer.initialize():
+                    logger.error("BufferService: Failed to initialize SpeculativeBuffer")
+                    return False
 
             # Initialize memory service if needed
             if self.memory_service:
@@ -238,14 +233,17 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             True if shutdown was successful, False otherwise
         """
         try:
-            # Shutdown components in reverse order
-            await self.hybrid_buffer.shutdown()
-            await self.flush_manager.shutdown()
+            # Shutdown WriteBuffer (manages RoundBuffer, HybridBuffer, FlushManager)
+            if hasattr(self.write_buffer, 'shutdown'):
+                await self.write_buffer.shutdown()
 
-            # Clear buffers
-            await self.round_buffer.clear()
+            # Clear QueryBuffer
             await self.query_buffer.clear()
             await self.query_buffer.clear_cache()
+
+            # Clear SpeculativeBuffer
+            if hasattr(self.speculative_buffer, 'clear'):
+                await self.speculative_buffer.clear()
 
             # Shutdown memory service if available
             if self.memory_service and hasattr(self.memory_service, 'shutdown'):
@@ -327,9 +325,10 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     else:
                         logger.warning(f"BufferService: Skipping non-dict message {j}: {type(message)} - {message}")
 
-                # Add to RoundBuffer (may trigger transfer to HybridBuffer)
-                logger.debug(f"BufferService.add_batch: Adding message_list to RoundBuffer")
-                if await self.round_buffer.add(message_list, session_id):
+                # Add to WriteBuffer (manages RoundBuffer → HybridBuffer flow)
+                logger.debug(f"BufferService.add_batch: Adding message_list to WriteBuffer")
+                write_result = await self.write_buffer.add(message_list, session_id)
+                if write_result.get("transfer_triggered", False):
                     transfer_triggered = True
                     self.total_transfers += 1
 
@@ -423,20 +422,22 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         logger.info(f"BufferService.query: Processing query '{query_preview}' with top_k={top_k}")
 
         try:
-            # Log buffer states before query (similar to V2)
-            round_buffer_size = len(self.round_buffer.rounds)
-            hybrid_buffer_size = len(self.hybrid_buffer.chunks)
+            # Log buffer states before query (through WriteBuffer)
+            write_buffer = self.get_write_buffer()
+            round_buffer_size = len(write_buffer.get_round_buffer().rounds)
+            hybrid_buffer_size = len(write_buffer.get_hybrid_buffer().chunks)
 
             logger.info(f"BufferService.query: Buffer states - RoundBuffer: {round_buffer_size} rounds, HybridBuffer: {hybrid_buffer_size} chunks")
 
-            # Query using QueryBuffer (similar to V2's QueryBuffer)
+            # Query using QueryBuffer (through WriteBuffer abstraction)
             logger.info("BufferService.query: Calling QueryBuffer.query")
+            hybrid_buffer = write_buffer.get_hybrid_buffer()
             results = await self.query_buffer.query(
                 query_text=query,
                 top_k=top_k,
                 sort_by=sort_by or "score",
                 order=order or "desc",
-                hybrid_buffer=self.hybrid_buffer
+                hybrid_buffer=hybrid_buffer
             )
 
             logger.info(f"BufferService.query: QueryBuffer returned {len(results) if results else 0} results")
@@ -511,8 +512,9 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         
         try:
             if buffer_only:
-                # Only return RoundBuffer data
-                return await self.round_buffer.get_all_messages_for_read_api(
+                # Only return RoundBuffer data (through WriteBuffer)
+                round_buffer = self.get_write_buffer().get_round_buffer()
+                return await round_buffer.get_all_messages_for_read_api(
                     limit=limit,
                     sort_by=sort_by,
                     order=order
@@ -573,22 +575,24 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         Returns:
             Dictionary with detailed buffer statistics
         """
-        round_stats = self.round_buffer.get_stats()
-        hybrid_stats = self.hybrid_buffer.get_stats()
+        # Get stats through proper abstraction layers
+        write_buffer_stats = self.write_buffer.get_stats()
         query_stats = self.query_buffer.get_stats()
+        speculative_stats = self.speculative_buffer.get_stats()
         
         return {
-            "version": "0.2.0",
+            "version": "0.3.0",
+            "architecture": "Refactored with proper abstraction layers",
             "total_items_added": self.total_items_added,
             "total_queries": self.total_queries,
             "total_transfers": self.total_transfers,
-            "round_buffer": round_stats,
-            "hybrid_buffer": hybrid_stats,
+            "write_buffer": write_buffer_stats,
             "query_buffer": query_stats,
-            "architecture": {
-                "round_buffer": "Token-based FIFO with automatic transfer",
-                "hybrid_buffer": "Dual-format (chunks + rounds) with FIFO",
-                "query_buffer": "Unified query with sorting and caching"
+            "speculative_buffer": speculative_stats,
+            "abstraction_layers": {
+                "write_buffer": "Manages RoundBuffer + HybridBuffer + FlushManager",
+                "query_buffer": "Unified query with sorting and caching",
+                "speculative_buffer": "Predictive prefetching (placeholder)"
             }
         }
     
@@ -613,6 +617,44 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             "errors": [{"field": "general", "message": message}]
         }
     
+    # Component access methods for controlled operations
+    def get_write_buffer(self) -> WriteBuffer:
+        """Get WriteBuffer instance for write operations.
+
+        Returns:
+            WriteBuffer instance
+        """
+        return self.write_buffer
+
+    def get_query_buffer(self) -> QueryBuffer:
+        """Get QueryBuffer instance for query operations.
+
+        Returns:
+            QueryBuffer instance
+        """
+        return self.query_buffer
+
+    def get_speculative_buffer(self) -> SpeculativeBuffer:
+        """Get SpeculativeBuffer instance for predictive operations.
+
+        Returns:
+            SpeculativeBuffer instance
+        """
+        return self.speculative_buffer
+
+    # Legacy component access (for backward compatibility)
+    def get_round_buffer(self):
+        """Get RoundBuffer instance (via WriteBuffer)."""
+        return self.write_buffer.get_round_buffer()
+
+    def get_hybrid_buffer(self):
+        """Get HybridBuffer instance (via WriteBuffer)."""
+        return self.write_buffer.get_hybrid_buffer()
+
+    def get_flush_manager(self):
+        """Get FlushManager instance (via WriteBuffer)."""
+        return self.write_buffer.get_flush_manager()
+
     # Delegate other methods to memory service
     async def read(self, item_ids: List[str]) -> Dict[str, Any]:
         """Read items from memory."""

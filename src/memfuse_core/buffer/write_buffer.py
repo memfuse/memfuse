@@ -11,6 +11,7 @@ from loguru import logger
 from ..interfaces import MessageList, MessageBatchList
 from .round_buffer import RoundBuffer
 from .hybrid_buffer import HybridBuffer
+from .flush_manager import FlushManager
 
 
 class WriteBuffer:
@@ -24,44 +25,56 @@ class WriteBuffer:
     def __init__(
         self,
         config: Dict[str, Any],
-        sqlite_handler: Optional[Callable] = None,
+        memory_service_handler: Optional[Callable] = None,
         qdrant_handler: Optional[Callable] = None
     ):
         """Initialize the WriteBuffer with integrated components.
-        
+
         Args:
             config: Configuration dictionary containing buffer settings
-            sqlite_handler: Handler for SQLite storage operations
+            memory_service_handler: Handler for MemoryService operations
             qdrant_handler: Handler for Qdrant storage operations
         """
         self.config = config
-        
+
         # Extract configuration for sub-components
         round_config = config.get('round_buffer', {})
         hybrid_config = config.get('hybrid_buffer', {})
-        
+        flush_config = config.get('flush_manager', {})
+
+        # Initialize FlushManager first
+        self.flush_manager = FlushManager(
+            max_workers=flush_config.get('max_workers', 2),
+            max_queue_size=flush_config.get('max_queue_size', 100),
+            default_timeout=flush_config.get('default_timeout', 30.0),
+            flush_interval=flush_config.get('flush_interval', 5.0),
+            enable_auto_flush=flush_config.get('enable_auto_flush', True),
+            memory_service_handler=memory_service_handler
+        )
+
         # Initialize RoundBuffer
         self.round_buffer = RoundBuffer(
             max_tokens=round_config.get('max_tokens', 800),
             max_size=round_config.get('max_size', 5),
             token_model=round_config.get('token_model', 'gpt-4o-mini')
         )
-        
-        # Initialize HybridBuffer
+
+        # Initialize HybridBuffer with FlushManager
         self.hybrid_buffer = HybridBuffer(
             max_size=hybrid_config.get('max_size', 5),
             chunk_strategy=hybrid_config.get('chunk_strategy', 'message'),
-            embedding_model=hybrid_config.get('embedding_model', 'all-MiniLM-L6-v2')
+            embedding_model=hybrid_config.get('embedding_model', 'all-MiniLM-L6-v2'),
+            flush_manager=self.flush_manager
         )
-        
+
         # Set up component connections
         self.round_buffer.set_transfer_handler(self.hybrid_buffer.add_from_rounds)
-        
+
         # Statistics
         self.total_writes = 0
         self.total_transfers = 0
-        
-        logger.info("WriteBuffer: Initialized with RoundBuffer and HybridBuffer integration")
+
+        logger.info("WriteBuffer: Initialized with RoundBuffer, HybridBuffer, and FlushManager integration")
     
     async def add(self, messages: MessageList, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Add a single list of messages to the buffer.
@@ -138,7 +151,11 @@ class WriteBuffer:
             HybridBuffer instance
         """
         return self.hybrid_buffer
-    
+
+    def get_flush_manager(self) -> FlushManager:
+        """Get FlushManager instance for direct operations."""
+        return self.flush_manager
+
     async def flush_all(self) -> Dict[str, Any]:
         """Force flush all buffers to persistent storage.
         
@@ -185,6 +202,8 @@ class WriteBuffer:
         return (len(self.round_buffer.rounds) == 0 and 
                 len(self.hybrid_buffer.chunks) == 0)
     
+
+
     async def clear_all(self) -> Dict[str, Any]:
         """Clear all buffers (for testing purposes).
         

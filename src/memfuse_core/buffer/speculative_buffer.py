@@ -1,19 +1,36 @@
 """SpeculativeBuffer implementation for MemFuse.
 
-    The SpeculativeBuffer predicts which items are likely to be accessed next
-    and prefetches them, reducing latency for subsequent accesses.
+The SpeculativeBuffer is designed to predict which items are likely to be accessed next
+and prefetch them, reducing latency for subsequent accesses.
 
-    It works by taking the most recent items from the WriteBuffer, concatenating
-    their content, and using that as a query to retrieve related items from the
-    vector store.
+ARCHITECTURE DESIGN:
+===================
 
-This is a high-performance rewrite of SpeculativeBuffer that maintains all functionality
-while eliminating performance bottlenecks:
+1. **Prediction Engine**: Analyzes recent access patterns to predict future needs
+   - Context Analysis: Extracts semantic context from recent WriteBuffer activity
+   - Pattern Recognition: Identifies access patterns and trends
+   - Relevance Scoring: Ranks potential prefetch candidates
 
-- True async implementation
-- Optimized context generation
-- Efficient retrieval handling
-- Minimal overhead
+2. **Prefetch Strategy**: Multiple strategies for different scenarios
+   - Semantic Similarity: Based on content similarity to recent items
+   - Temporal Patterns: Based on historical access timing
+   - User Behavior: Based on user-specific access patterns
+   - Session Context: Based on current session activity
+
+3. **Cache Management**: Intelligent cache with eviction policies
+   - LRU with Prediction Boost: Recently predicted items get priority
+   - Relevance-based Eviction: Lower relevance items evicted first
+   - Adaptive Sizing: Cache size adapts to prediction accuracy
+
+4. **Integration Points**:
+   - WriteBuffer Observer: Monitors write activity for context
+   - QueryBuffer Coordinator: Coordinates with query patterns
+   - MemoryService Interface: Retrieves prefetch candidates
+
+CURRENT STATUS: PLACEHOLDER IMPLEMENTATION
+==========================================
+This is a placeholder implementation that defines the interface and basic structure.
+Full implementation will be added in future iterations.
 """
 
 import asyncio
@@ -24,258 +41,174 @@ from ..interfaces import BufferComponentInterface
 
 
 class SpeculativeBuffer(BufferComponentInterface):
-    """Speculative buffer for prefetching likely-to-be-accessed items.
-
-    Maintains all original functionality while optimizing for performance:
-    - True async operations
-    - Efficient context generation
-    - Optimized retrieval handling
-    - Minimal latency overhead
+    """Speculative buffer for predictive prefetching (PLACEHOLDER).
+    
+    This is a placeholder implementation that defines the architecture and interface
+    for the SpeculativeBuffer. The full prediction and prefetching logic will be
+    implemented in future iterations.
+    
+    DESIGN PRINCIPLES:
+    - Async-first: All operations are non-blocking
+    - Minimal Overhead: Prediction should not impact main data flow
+    - Adaptive: Learns from access patterns to improve predictions
+    - Configurable: Multiple strategies and parameters
     """
 
     def __init__(
         self,
         max_size: int = 10,
         context_window: int = 3,
-        retrieval_handler: Optional[Callable] = None
+        retrieval_handler: Optional[Callable] = None,
+        prediction_strategy: str = "semantic_similarity",
+        enable_learning: bool = True
     ):
         """Initialize the SpeculativeBuffer.
 
         Args:
-            max_size: Maximum number of items in the buffer
-            context_window: Number of recent items to use for prediction
-            retrieval_handler: Async callback function to retrieve items
+            max_size: Maximum number of items in the prefetch cache
+            context_window: Number of recent items to use for prediction context
+            retrieval_handler: Async callback function to retrieve prefetch candidates
+            prediction_strategy: Strategy for prediction ("semantic_similarity", "temporal", "hybrid")
+            enable_learning: Whether to enable adaptive learning from access patterns
         """
         self._max_size = max_size
         self.context_window = context_window
         self.retrieval_handler = retrieval_handler
-        self._items: List[Any] = []
+        self.prediction_strategy = prediction_strategy
+        self.enable_learning = enable_learning
+        
+        # Placeholder data structures
+        self._prefetch_cache: List[Any] = []
+        self._access_history: List[Dict[str, Any]] = []
+        self._prediction_accuracy: Dict[str, float] = {}
         self._lock = asyncio.Lock()
-        self.total_updates = 0
-        self.total_items_processed = 0
-
+        
+        # Statistics
+        self.total_predictions = 0
+        self.total_hits = 0
+        self.total_misses = 0
+        
         logger.info(
-            f"SpeculativeBuffer: Initialized with max_size={max_size}, "
-            f"context_window={context_window}")
+            f"SpeculativeBuffer: Initialized (PLACEHOLDER) with max_size={max_size}, "
+            f"context_window={context_window}, strategy={prediction_strategy}")
 
     async def update(self, recent_items: List[Any]) -> None:
-        """Update buffer based on recent items with optimized processing.
+        """Update buffer based on recent items (PLACEHOLDER).
+        
+        This method will analyze recent access patterns and update the prefetch cache
+        with predicted items that are likely to be accessed next.
 
         Args:
-            recent_items: List of recently accessed items
+            recent_items: List of recently accessed items for context analysis
         """
-        if not self.retrieval_handler or not recent_items:
-            return
+        # PLACEHOLDER: Record access for future learning
+        async with self._lock:
+            self._access_history.extend(recent_items[-self.context_window:])
+            if len(self._access_history) > self.context_window * 10:
+                self._access_history = self._access_history[-self.context_window * 5:]
+        
+        logger.debug(f"SpeculativeBuffer: Recorded {len(recent_items)} recent items for future prediction")
+        
+        # TODO: Implement prediction logic
+        # - Analyze recent_items for semantic context
+        # - Generate prediction queries based on strategy
+        # - Retrieve and cache predicted items
+        # - Update prediction accuracy metrics
 
-        # Optimized context generation
-        context = self._generate_context(recent_items)
-        if not context:
-            return
+    async def predict_and_prefetch(self, context: Dict[str, Any]) -> List[Any]:
+        """Predict and prefetch items based on context (PLACEHOLDER).
+        
+        Args:
+            context: Context information for prediction (session, user, recent activity)
+            
+        Returns:
+            List of prefetched items
+        """
+        # PLACEHOLDER: Return empty list
+        logger.debug("SpeculativeBuffer: Prediction not yet implemented")
+        return []
+        
+        # TODO: Implement prediction strategies
+        # - semantic_similarity: Use embeddings to find similar content
+        # - temporal: Predict based on time-based patterns
+        # - hybrid: Combine multiple strategies
 
-        try:
-            # Direct async retrieval (no task creation)
-            speculative_items = await self.retrieval_handler(context, self._max_size)
+    async def get_prefetched(self, query_context: str) -> List[Any]:
+        """Get prefetched items that match query context (PLACEHOLDER).
+        
+        Args:
+            query_context: Query context to match against prefetched items
+            
+        Returns:
+            List of matching prefetched items
+        """
+        async with self._lock:
+            # PLACEHOLDER: Return cached items
+            return self._prefetch_cache.copy()
+        
+        # TODO: Implement smart matching
+        # - Semantic similarity matching
+        # - Relevance scoring
+        # - Cache hit tracking
 
-            if speculative_items:
-                async with self._lock:
-                    self._items = speculative_items[:self._max_size]
-                    self.total_updates += 1
-                    self.total_items_processed += len(speculative_items)
+    async def clear(self) -> None:
+        """Clear the speculative buffer (PLACEHOLDER)."""
+        async with self._lock:
+            self._prefetch_cache.clear()
+            self._access_history.clear()
+            self._prediction_accuracy.clear()
+        
+        logger.debug("SpeculativeBuffer: Buffer cleared")
 
-                logger.debug(f"SpeculativeBuffer: Updated with {len(self._items)} items")
+    def get_stats(self) -> Dict[str, Any]:
+        """Get buffer statistics (PLACEHOLDER).
+        
+        Returns:
+            Dictionary with buffer statistics
+        """
+        hit_rate = (self.total_hits / max(self.total_predictions, 1)) * 100
+        
+        return {
+            "type": "SpeculativeBuffer",
+            "status": "placeholder",
+            "cache_size": len(self._prefetch_cache),
+            "max_size": self._max_size,
+            "context_window": self.context_window,
+            "prediction_strategy": self.prediction_strategy,
+            "total_predictions": self.total_predictions,
+            "total_hits": self.total_hits,
+            "total_misses": self.total_misses,
+            "hit_rate_percent": round(hit_rate, 2),
+            "access_history_size": len(self._access_history),
+            "learning_enabled": self.enable_learning
+        }
 
-        except Exception as e:
-            logger.error(f"SpeculativeBuffer: Update error: {e}")
+    # Interface compliance methods (PLACEHOLDER)
+    async def add(self, items: List[Any]) -> bool:
+        """Add items to buffer (not applicable for SpeculativeBuffer)."""
+        logger.warning("SpeculativeBuffer: add() not applicable - use update() instead")
+        return False
 
-    def _generate_context(self, recent_items: List[Any]) -> str:
-        """Generate context string efficiently from recent items."""
-        try:
-            # Use only the most recent items within context window
-            context_items = recent_items[-self.context_window:] if recent_items else []
+    async def query(self, query: str, top_k: int = 10) -> List[Any]:
+        """Query prefetched items (PLACEHOLDER)."""
+        return await self.get_prefetched(query)
 
-            if not context_items:
-                return ""
+    def size(self) -> int:
+        """Get current cache size."""
+        return len(self._prefetch_cache)
 
-            # Optimized content extraction
-            contents = []
-            for item in context_items:
-                content = self._extract_content(item)
-                if content:
-                    contents.append(content)
-
-            return " ".join(contents) if contents else ""
-
-        except Exception as e:
-            logger.error(f"SpeculativeBuffer: Context generation error: {e}")
-            return ""
-
-    def _extract_content(self, item: Any) -> str:
-        """Extract content from item efficiently."""
-        if isinstance(item, dict):
-            return item.get('content', '')
-        elif hasattr(item, 'content'):
-            return getattr(item, 'content', '')
-        else:
-            return str(item)
-
-    async def update_from_items(self, items: List[Any]) -> None:
-        """Update buffer based on a list of items."""
-        logger.info(f"SpeculativeBuffer.update_from_items: Called with {len(items) if items else 0} items")
-        if items:
-            await self.update(items)
-        else:
-            logger.debug("SpeculativeBuffer.update_from_items: No items provided")
-
-    async def update_from_write_buffer(self, write_buffer) -> None:
-        """Update buffer based on items in write buffer."""
-        try:
-            # Handle different write buffer types efficiently
-            if isinstance(write_buffer, list):
-                items = write_buffer
-            elif hasattr(write_buffer, 'items'):
-                items = write_buffer.items
-            elif hasattr(write_buffer, 'get_items'):
-                items = await write_buffer.get_items()
-            else:
-                logger.warning("SpeculativeBuffer: Invalid write buffer type")
-                return
-
-            await self.update_from_items(items)
-
-        except Exception as e:
-            logger.error(f"SpeculativeBuffer: Write buffer update error: {e}")
-
+    # Abstract method implementations for BufferComponentInterface
     @property
     def items(self) -> List[Any]:
-        """Get all items in the buffer."""
-        return self._items
+        """Get all items in the buffer (interface compliance)."""
+        return self._prefetch_cache
 
     @property
     def max_size(self) -> int:
-        """Get the maximum size of the buffer."""
+        """Get the maximum size of the buffer (interface compliance)."""
         return self._max_size
 
-    async def get_items(self) -> List[Dict[str, Any]]:
-        """Get all items in the buffer (async version)."""
+    async def get_items(self) -> List[Any]:
+        """Get all items in the buffer (async version, interface compliance)."""
         async with self._lock:
-            return self._items.copy()
-
-    async def clear(self) -> None:
-        """Clear all items from the buffer."""
-        async with self._lock:
-            self._items.clear()
-            logger.debug("SpeculativeBuffer: Buffer cleared")
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get statistics about the buffer."""
-        return {
-            "size": len(self._items),
-            "max_size": self._max_size,
-            "context_window": self.context_window,
-            "total_updates": self.total_updates,
-            "total_items_processed": self.total_items_processed,
-            "has_retrieval_handler": self.retrieval_handler is not None,
-            "optimization": "true_async_implementation"
-        }
-
-    # Additional optimization methods
-
-    async def prefetch_for_query(self, query_text: str) -> List[Any]:
-        """Prefetch items that might be relevant to a query.
-
-        This is an optimization that can be called before actual query
-        to warm up the speculative buffer.
-        """
-        if not self.retrieval_handler:
-            return []
-
-        try:
-            # Use query text directly as context for prefetching
-            prefetch_items = await self.retrieval_handler(query_text, self._max_size)
-
-            if prefetch_items:
-                async with self._lock:
-                    # Merge with existing items, avoiding duplicates
-                    existing_ids = set()
-                    for item in self._items:
-                        if isinstance(item, dict) and 'id' in item:
-                            existing_ids.add(item['id'])
-
-                    new_items = []
-                    for item in prefetch_items:
-                        if isinstance(item, dict) and 'id' in item:
-                            if item['id'] not in existing_ids:
-                                new_items.append(item)
-                        else:
-                            new_items.append(item)
-
-                    # Add new items up to max_size
-                    available_space = self._max_size - len(self._items)
-                    if available_space > 0:
-                        self._items.extend(new_items[:available_space])
-
-                logger.debug(f"SpeculativeBuffer: Prefetched {len(new_items)} new items")
-                return new_items
-
-            return []
-
-        except Exception as e:
-            logger.error(f"SpeculativeBuffer: Prefetch error: {e}")
-            return []
-
-    async def get_relevant_items(self, query_text: str, max_results: int = 5) -> List[Any]:
-        """Get items from buffer that are relevant to a query.
-
-        This provides a fast lookup in the speculative buffer before
-        going to the main storage.
-        """
-        async with self._lock:
-            if not self._items:
-                return []
-
-            # Simple relevance scoring based on content similarity
-            relevant_items = []
-            query_lower = query_text.lower()
-
-            for item in self._items:
-                content = self._extract_content(item).lower()
-                if query_lower in content or any(word in content for word in query_lower.split()):
-                    relevant_items.append(item)
-
-                if len(relevant_items) >= max_results:
-                    break
-
-            return relevant_items
-
-    def is_empty(self) -> bool:
-        """Check if buffer is empty."""
-        return len(self._items) == 0
-
-    def get_size(self) -> int:
-        """Get current buffer size."""
-        return len(self._items)
-
-    async def optimize_for_pattern(self, access_pattern: List[str]) -> None:
-        """Optimize buffer based on access patterns.
-
-        This can be used to pre-populate the buffer based on
-        observed access patterns.
-        """
-        if not self.retrieval_handler or not access_pattern:
-            return
-
-        try:
-            # Create context from access pattern
-            pattern_context = " ".join(access_pattern)
-
-            # Retrieve items based on pattern
-            pattern_items = await self.retrieval_handler(pattern_context, self._max_size)
-
-            if pattern_items:
-                async with self._lock:
-                    self._items = pattern_items[:self._max_size]
-
-                logger.debug(f"SpeculativeBuffer: Optimized for pattern with {len(self._items)} items")
-
-        except Exception as e:
-            logger.error(f"SpeculativeBuffer: Pattern optimization error: {e}")
+            return self._prefetch_cache.copy()
