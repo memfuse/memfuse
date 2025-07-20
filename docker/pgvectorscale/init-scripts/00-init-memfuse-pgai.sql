@@ -53,11 +53,11 @@ SELECT pg_reload_conf();
 ALTER DATABASE memfuse SET search_path TO public, timescaledb_information;
 
 -- =============================================================================
--- SECTION 2: M0 Episodic Memory Schema
+-- SECTION 2: M0 Raw Data Memory Schema
 -- =============================================================================
 
--- Create the M0 episodic memory table with immediate trigger support
-CREATE TABLE IF NOT EXISTS m0_episodic (
+-- Create the M0 raw data memory table with immediate trigger support
+CREATE TABLE IF NOT EXISTS m0_raw (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     metadata JSONB DEFAULT '{}',

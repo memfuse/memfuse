@@ -239,13 +239,13 @@ The M0 layer represents the **episodic memory** component of MemFuse's three-tie
 
 | Layer | Table Name | Purpose | Status |
 |-------|------------|---------|--------|
-| **M0** | `m0_episodic` | Raw episodic memory storage | ✅ Implemented |
-| **M1** | `m1_semantic` | Semantic knowledge extraction | ✅ **Implemented** |
-| **M2** | `m2_relational` | Relationship mapping | 🚧 Future |
+| **M0** | `m0_raw` | Raw data memory storage | ✅ Implemented |
+| **M1** | `m1_episodic` | Episodic memory formation | ✅ **Implemented** |
+| **M2** | `m2_semantic` | Semantic knowledge extraction | 🚧 Future |
 
-**Important**: The `m0_episodic` table is **separate** from the traditional `messages` table:
+**Important**: The `m0_raw` table is **separate** from the traditional `messages` table:
 - `messages`: Traditional conversation storage (both PostgreSQL and SQLite)
-- `m0_episodic`: M0 memory layer storage (PostgreSQL only, with vector support)
+- `m0_raw`: M0 memory layer storage (PostgreSQL only, with vector support)
 
 ## 🆕 Multi-Layer Architecture (M0 + M1)
 

@@ -101,12 +101,12 @@ class SchemaManager:
             return False
     
     async def _initialize_m0_schema(self) -> bool:
-        """Initialize M0 episodic memory schema."""
+        """Initialize M0 raw data memory schema."""
         try:
             async with self.pool.connection() as conn:
                 # Create M0 table with basic structure
                 await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS m0_episodic (
+                    CREATE TABLE IF NOT EXISTS m0_raw (
                         id TEXT PRIMARY KEY,
                         content TEXT NOT NULL,
                         embedding VECTOR(384),

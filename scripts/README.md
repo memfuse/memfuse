@@ -155,7 +155,7 @@ poetry run python scripts/database_manager.py status
 poetry run python scripts/database_manager.py validate
 ```
 
-- Validates m0_episodic table structure
+- Validates m0_raw table structure
 - Checks immediate trigger configuration
 - Verifies notification functions
 - Confirms vector extension installation
@@ -166,7 +166,7 @@ poetry run python scripts/database_manager.py validate
 poetry run python scripts/database_manager.py reset
 ```
 
-- ⚠️ **Clears all data from m0_episodic table**
+- ⚠️ **Clears all data from m0_raw table**
 - ✅ **Preserves table structure and triggers**
 - ✅ **Safe for development data reset**
 

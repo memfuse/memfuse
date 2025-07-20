@@ -33,9 +33,9 @@ execute_sql "SELECT extname, extversion FROM pg_extension WHERE extname IN ('vec
 # Create MemFuse schema
 echo "🏗️ Creating MemFuse database schema..."
 
-# Create m0_episodic table
+# Create m0_raw table
 execute_sql "
-CREATE TABLE IF NOT EXISTS m0_episodic (
+CREATE TABLE IF NOT EXISTS m0_raw (
     id              TEXT PRIMARY KEY,
     content         TEXT NOT NULL,
     metadata        JSONB DEFAULT '{}'::jsonb,

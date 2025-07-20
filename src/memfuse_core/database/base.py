@@ -862,18 +862,18 @@ class Database:
         from datetime import datetime
         
         try:
-            # Get all messages from m0_episodic table
-            all_m0_episodic = self.backend.select('m0_episodic')
-            
+            # Get all messages from m0_raw table
+            all_m0_raw = self.backend.select('m0_raw')
+
             session_messages = []
-            for message in all_m0_episodic:
+            for message in all_m0_raw:
                 try:
                     # Parse metadata JSON to check for session_id
                     metadata_str = message.get('metadata', '{}')
                     if metadata_str:
                         metadata = json.loads(metadata_str) if isinstance(metadata_str, str) else metadata_str
                         if metadata.get('session_id') == session_id:
-                            # Convert m0_episodic format to standard message format
+                            # Convert m0_raw format to standard message format
                             formatted_message = {
                                 'id': message['id'],
                                 'role': metadata.get('role', 'user'),  # Default to 'user' if no role
