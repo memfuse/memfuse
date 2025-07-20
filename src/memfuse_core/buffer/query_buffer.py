@@ -23,47 +23,55 @@ class QueryBuffer(BufferComponentInterface):
     def __init__(
         self,
         retrieval_handler: Optional[Callable] = None,
+        rerank_handler: Optional[Callable] = None,
         max_size: int = 15,
         cache_size: int = 100,
         default_sort_by: str = "score",
         default_order: str = "desc"
     ):
         """Initialize the QueryBuffer.
-        
+
         Args:
             retrieval_handler: Async callback for storage retrieval
+            rerank_handler: Async callback for result reranking
             max_size: Maximum number of items to return from a query
             cache_size: Maximum number of queries to cache
             default_sort_by: Default sort field ('score' or 'timestamp')
             default_order: Default sort order ('asc' or 'desc')
         """
         self.retrieval_handler = retrieval_handler
+        self.rerank_handler = rerank_handler
         self._max_size = max_size
         self.cache_size = cache_size
         self.default_sort_by = default_sort_by
         self.default_order = default_order
-        
+
         # Cache for query results
         self.query_cache: Dict[str, List[Any]] = {}
         self._cache_order: List[str] = []  # LRU tracking
-        
+
+        # Rerank cache for performance
+        self.rerank_cache: Dict[str, List[Any]] = {}
+
         # Buffer state
         self._items: List[Any] = []
-        
+
         # Async lock for thread safety
         self._lock = asyncio.Lock()
-        
+
         # Statistics
         self.total_queries = 0
+        self.total_session_queries = 0
         self.cache_hits = 0
         self.cache_misses = 0
         self.total_hybrid_results = 0
         self.total_storage_results = 0
+        self.rerank_operations = 0
 
         # HybridBuffer reference
         self.hybrid_buffer = None
 
-        logger.info(f"QueryBuffer: Initialized with max_size={max_size}, default_sort={default_sort_by}")
+        logger.info(f"QueryBuffer: Initialized with max_size={max_size}, default_sort={default_sort_by}, rerank_enabled={rerank_handler is not None}")
 
     def set_hybrid_buffer(self, hybrid_buffer):
         """Set the HybridBuffer instance for queries.
@@ -80,19 +88,21 @@ class QueryBuffer(BufferComponentInterface):
         top_k: Optional[int] = None,
         sort_by: Optional[str] = None,
         order: Optional[str] = None,
-        hybrid_buffer=None
+        hybrid_buffer=None,
+        use_rerank: bool = True
     ) -> List[Any]:
-        """Query with unified results from HybridBuffer and storage.
-        
+        """Enhanced query with internal reranking and optimization.
+
         Args:
             query_text: Query text
             top_k: Maximum number of results (uses max_size if None)
             sort_by: Sort field ('score' or 'timestamp', uses default if None)
             order: Sort order ('asc' or 'desc', uses default if None)
             hybrid_buffer: HybridBuffer instance to include results from
-            
+            use_rerank: Whether to apply internal reranking (default: True)
+
         Returns:
-            List of query results sorted according to parameters
+            List of query results sorted and optionally reranked
         """
         # Set defaults
         if top_k is None:
@@ -143,18 +153,22 @@ class QueryBuffer(BufferComponentInterface):
                 sort_by,
                 order
             )
-            
+
+            # Apply internal reranking if enabled and handler available
+            if use_rerank and self.rerank_handler and all_results:
+                all_results = await self._internal_rerank(all_results, query_text)
+
             # Limit results
             final_results = all_results[:top_k]
-            
+
             # Update cache
             await self._update_cache(cache_key, final_results)
-            
+
             # Update buffer items
             async with self._lock:
                 self._items = final_results.copy()
-            
-            logger.info(f"QueryBuffer: Returning {len(final_results)} sorted results")
+
+            logger.info(f"QueryBuffer: Returning {len(final_results)} results (reranked: {use_rerank and self.rerank_handler is not None})")
             return final_results
 
         except Exception as e:
@@ -394,12 +408,299 @@ class QueryBuffer(BufferComponentInterface):
             "cache_size": self.cache_size,
             "cache_entries": len(self.query_cache),
             "total_queries": self.total_queries,
+            "total_session_queries": self.total_session_queries,
             "cache_hits": self.cache_hits,
             "cache_misses": self.cache_misses,
             "cache_hit_rate": f"{cache_hit_rate:.1f}%",
             "total_hybrid_results": self.total_hybrid_results,
             "total_storage_results": self.total_storage_results,
+            "rerank_operations": self.rerank_operations,
             "default_sort_by": self.default_sort_by,
             "default_order": self.default_order,
-            "has_retrieval_handler": self.retrieval_handler is not None
+            "has_retrieval_handler": self.retrieval_handler is not None,
+            "has_rerank_handler": self.rerank_handler is not None
         }
+
+    # Enhanced QueryBuffer methods
+
+    async def query_by_session(self, session_id: str, limit: Optional[int] = None,
+                              sort_by: str = 'timestamp', order: str = 'desc') -> List[Dict[str, Any]]:
+        """Session-specific query with multi-source coordination.
+
+        Args:
+            session_id: Session ID to query for
+            limit: Maximum number of results (uses max_size if None)
+            sort_by: Sort field ('timestamp' or 'id')
+            order: Sort order ('asc' or 'desc')
+
+        Returns:
+            List of messages for the specified session
+        """
+        logger.info(f"QueryBuffer: Session query for {session_id}")
+        self.total_session_queries += 1
+
+        if limit is None:
+            limit = self._max_size
+
+        # 1. Parallel data collection from multiple sources
+        hybrid_data, storage_data = await asyncio.gather(
+            self._get_session_from_hybrid(session_id, limit, sort_by, order),
+            self._get_session_from_storage(session_id, limit, sort_by, order),
+            return_exceptions=True
+        )
+
+        # Handle exceptions
+        if isinstance(hybrid_data, Exception):
+            logger.warning(f"QueryBuffer: Hybrid buffer query failed: {hybrid_data}")
+            hybrid_data = []
+        if isinstance(storage_data, Exception):
+            logger.warning(f"QueryBuffer: Storage query failed: {storage_data}")
+            storage_data = []
+
+        # 2. Intelligent data merging with deduplication
+        merged_data = self._merge_session_data(hybrid_data, storage_data, session_id)
+
+        # 3. Apply session-specific sorting and filtering
+        filtered_data = self._apply_session_filters(merged_data, sort_by, order)
+
+        # 4. Apply limit
+        if limit and limit > 0:
+            filtered_data = filtered_data[:limit]
+
+        logger.info(f"QueryBuffer: Session query returned {len(filtered_data)} messages")
+        return filtered_data
+
+    async def _internal_rerank(self, results: List[Any], query_text: str) -> List[Any]:
+        """Internal reranking with caching.
+
+        Args:
+            results: List of results to rerank
+            query_text: Original query text
+
+        Returns:
+            Reranked results
+        """
+        if not self.rerank_handler or not results:
+            return results
+
+        # 1. Check rerank cache
+        cache_key = self._generate_rerank_cache_key(results, query_text)
+        cached_rerank = self._check_rerank_cache(cache_key)
+
+        if cached_rerank:
+            logger.debug("QueryBuffer: Rerank cache hit")
+            return cached_rerank
+
+        # 2. Execute reranking
+        try:
+            reranked = await self.rerank_handler(query_text, results)
+            self.rerank_operations += 1
+
+            # 3. Cache results
+            self._cache_rerank_results(cache_key, reranked)
+
+            logger.debug(f"QueryBuffer: Reranked {len(results)} results")
+            return reranked
+        except Exception as e:
+            logger.error(f"QueryBuffer: Reranking failed: {e}")
+            return results
+
+    async def _get_session_from_hybrid(self, session_id: str, limit: Optional[int],
+                                      sort_by: str, order: str) -> List[Dict[str, Any]]:
+        """Get session data from HybridBuffer.
+
+        Args:
+            session_id: Session ID to search for
+            limit: Maximum number of results
+            sort_by: Sort field
+            order: Sort order
+
+        Returns:
+            List of messages from HybridBuffer for the session
+        """
+        if not self.hybrid_buffer or not hasattr(self.hybrid_buffer, 'chunks'):
+            return []
+
+        # Search through HybridBuffer chunks for session data
+        session_messages = []
+
+        try:
+            for chunk in self.hybrid_buffer.chunks:
+                if hasattr(chunk, 'metadata') and chunk.metadata.get('session_id') == session_id:
+                    # Extract messages from chunk
+                    if hasattr(chunk, 'messages'):
+                        session_messages.extend(chunk.messages)
+                    elif hasattr(chunk, 'content'):
+                        # If chunk has content but no messages, create a message-like structure
+                        session_messages.append({
+                            'id': getattr(chunk, 'id', f'chunk_{id(chunk)}'),
+                            'content': chunk.content,
+                            'metadata': getattr(chunk, 'metadata', {}),
+                            'created_at': getattr(chunk, 'created_at', None)
+                        })
+        except Exception as e:
+            logger.error(f"QueryBuffer: Error querying HybridBuffer for session {session_id}: {e}")
+
+        return self._sort_messages(session_messages, sort_by, order)
+
+    async def _get_session_from_storage(self, session_id: str, limit: Optional[int],
+                                       sort_by: str, order: str) -> List[Dict[str, Any]]:
+        """Get session data from persistent storage.
+
+        Args:
+            session_id: Session ID to search for
+            limit: Maximum number of results
+            sort_by: Sort field
+            order: Sort order
+
+        Returns:
+            List of messages from storage for the session
+        """
+        if not self.retrieval_handler:
+            return []
+
+        try:
+            # Use session-specific query
+            query_text = f"session_id:{session_id}"
+            results = await self.retrieval_handler(query_text, limit or 100)
+
+            # Filter and sort results
+            session_results = [
+                result for result in results
+                if isinstance(result, dict) and
+                result.get('metadata', {}).get('session_id') == session_id
+            ]
+
+            return self._sort_messages(session_results, sort_by, order)
+        except Exception as e:
+            logger.error(f"QueryBuffer: Storage session query failed: {e}")
+            return []
+
+    def _merge_session_data(self, hybrid_data: List, storage_data: List, session_id: str) -> List[Dict[str, Any]]:
+        """Merge session data from multiple sources with deduplication.
+
+        Args:
+            hybrid_data: Data from HybridBuffer
+            storage_data: Data from storage
+            session_id: Session ID for context
+
+        Returns:
+            Merged and deduplicated data
+        """
+        # Create lookup for deduplication
+        seen_ids = set()
+        merged_data = []
+
+        # Process hybrid data first (more recent)
+        for message in hybrid_data:
+            if isinstance(message, dict):
+                msg_id = message.get('id')
+                if msg_id and msg_id not in seen_ids:
+                    seen_ids.add(msg_id)
+                    merged_data.append(message)
+
+        # Process storage data (avoid duplicates)
+        for message in storage_data:
+            if isinstance(message, dict):
+                msg_id = message.get('id')
+                if msg_id and msg_id not in seen_ids:
+                    seen_ids.add(msg_id)
+                    merged_data.append(message)
+
+        return merged_data
+
+    def _apply_session_filters(self, merged_data: List, sort_by: str, order: str) -> List[Dict[str, Any]]:
+        """Apply session-specific filtering and sorting.
+
+        Args:
+            merged_data: Merged data from multiple sources
+            sort_by: Sort field
+            order: Sort order
+
+        Returns:
+            Filtered and sorted data
+        """
+        # Additional session-specific filtering can be added here
+        filtered_data = [
+            msg for msg in merged_data
+            if isinstance(msg, dict) and msg.get('content')  # Basic content filter
+        ]
+
+        # Apply sorting
+        return self._sort_messages(filtered_data, sort_by, order)
+
+    def _sort_messages(self, messages: List[Dict[str, Any]], sort_by: str, order: str) -> List[Dict[str, Any]]:
+        """Sort messages by specified criteria.
+
+        Args:
+            messages: List of messages to sort
+            sort_by: Sort field ('timestamp', 'id', or 'created_at')
+            order: Sort order ('asc' or 'desc')
+
+        Returns:
+            Sorted messages
+        """
+        if not messages:
+            return messages
+
+        reverse = (order.lower() == 'desc')
+
+        if sort_by == 'timestamp' or sort_by == 'created_at':
+            return sorted(
+                messages,
+                key=lambda x: x.get('created_at', ''),
+                reverse=reverse
+            )
+        elif sort_by == 'id':
+            return sorted(
+                messages,
+                key=lambda x: x.get('id', ''),
+                reverse=reverse
+            )
+        else:
+            # Default to timestamp
+            return sorted(
+                messages,
+                key=lambda x: x.get('created_at', ''),
+                reverse=reverse
+            )
+
+    def _generate_rerank_cache_key(self, results: List[Any], query_text: str) -> str:
+        """Generate cache key for rerank results.
+
+        Args:
+            results: Results to rerank
+            query_text: Query text
+
+        Returns:
+            Cache key string
+        """
+        # Create a simple hash based on query and result count
+        result_hash = hash(tuple(str(r.get('id', '')) for r in results if isinstance(r, dict)))
+        return f"rerank_{hash(query_text)}_{result_hash}_{len(results)}"
+
+    def _check_rerank_cache(self, cache_key: str) -> Optional[List[Any]]:
+        """Check rerank cache for cached results.
+
+        Args:
+            cache_key: Cache key to check
+
+        Returns:
+            Cached results if found, None otherwise
+        """
+        return self.rerank_cache.get(cache_key)
+
+    def _cache_rerank_results(self, cache_key: str, results: List[Any]) -> None:
+        """Cache rerank results.
+
+        Args:
+            cache_key: Cache key
+            results: Results to cache
+        """
+        # Simple cache with size limit
+        if len(self.rerank_cache) >= 50:  # Limit cache size
+            # Remove oldest entry
+            oldest_key = next(iter(self.rerank_cache))
+            del self.rerank_cache[oldest_key]
+
+        self.rerank_cache[cache_key] = results

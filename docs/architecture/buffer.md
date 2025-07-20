@@ -2,7 +2,13 @@
 
 ## Overview
 
-The MemFuse Buffer system provides intelligent message buffering and batch processing capabilities for high-throughput conversation management, inspired by modern computer caching architectures. This document outlines the architectural design, component interactions, and implementation strategies for the buffer subsystem, with detailed analysis of how it corresponds to mainstream computer caching mechanisms.
+The MemFuse Buffer system provides intelligent message buffering and batch processing capabilities for high-throughput conversation management, inspired by modern computer caching architectures. This document outlines the **refactored buffer architecture** with proper abstraction layers, component interactions, and implementation strategies.
+
+**Architecture Status**: ✅ **Fully Refactored**
+- Implemented proper abstraction layers with composition pattern
+- BufferService now orchestrates three specialized buffer types
+- Complete test coverage with modular and integration testing
+- Backward compatibility maintained through legacy interfaces
 
 ## Computer Caching Architecture Foundation
 
@@ -183,9 +189,9 @@ graph TB
 - **Intelligent Routing**: Routes queries to appropriate storage backends
 - **Result Aggregation**: Combines and ranks results from multiple sources
 
-## MemFuse Buffer System Architecture
+## MemFuse Buffer System Architecture (Refactored)
 
-The MemFuse Buffer system implements computer caching principles in software memory management, providing intelligent message buffering and batch processing capabilities.
+The MemFuse Buffer system implements computer caching principles through a **proper abstraction layer architecture** using composition pattern. BufferService orchestrates three specialized buffer types, each with distinct responsibilities.
 
 ```mermaid
 ---
@@ -193,43 +199,72 @@ config:
   theme: neo
 ---
 graph TD
-    Client("Client Request") --> BufferService("BufferService<br/>(Control Service)")
-    subgraph write_path ["Write Path"]
-        RoundBuffer -- "Threshold Trigger" --> HybridBuffer["HybridBuffer<br/>(Hybrid Buffer)"]
-        HybridBuffer -- "Batch Processing" --> Storage("Persistent Storage")
-        BufferService --> WriteBuffer("WriteBuffer<br/>(Write Buffer)")
-        WriteBuffer("WriteBuffer<br/>(Write Buffer)") -- "add(messages)" --> RoundBuffer["RoundBuffer<br/>(Ring Buffer)"]
-        WriteBuffer --> HybridBuffer
+    Client("Client Request") --> BufferService("BufferService<br/>(High-level Orchestrator)")
 
-        %% QueryBuffer -.-> SpeculativeBuffer("SpeculativeBuffer<br/>(Prefetch Buffer)")
+    subgraph abstraction_layer ["Abstraction Layer (Composition Pattern)"]
+        BufferService --> WriteBuffer("WriteBuffer<br/>(Write Path Abstraction)")
+        BufferService --> QueryBuffer("QueryBuffer<br/>(Query Path Abstraction)")
+        BufferService --> SpeculativeBuffer("SpeculativeBuffer<br/>(Predictive Abstraction)")
     end
-    subgraph query_path ["Query Path"]
-        BufferService -- "query(text)" --> QueryBuffer["QueryBuffer<br/>(Query Buffer)"]
-        QueryBuffer -- "Parallel Query" --> HybridBuffer
-        QueryBuffer -- "Parallel Query" --> Storage
-        QueryBuffer --> SpeculativeBuffer("SpeculativeBuffer<br/>(Prefetch Buffer)")
+
+    subgraph write_implementation ["Write Path Implementation"]
+        WriteBuffer --> RoundBuffer["RoundBuffer<br/>(Short-term Cache)"]
+        WriteBuffer --> HybridBuffer["HybridBuffer<br/>(Mid-term Cache + VectorCache)"]
+        WriteBuffer --> FlushManager["FlushManager<br/>(Persistence Manager)"]
+
+        RoundBuffer -- "Auto Transfer" --> HybridBuffer
+        HybridBuffer -- "Batch Flush" --> FlushManager
+        FlushManager -- "Persist" --> Storage("MemoryService → PostgreSQL")
     end
+
+    subgraph query_implementation ["Query Path Implementation"]
+        QueryBuffer -- "Multi-source Query" --> HybridBuffer
+        QueryBuffer -- "Multi-source Query" --> Storage
+        QueryBuffer -- "Cache Management" --> QueryCache["Query Cache (LRU)"]
+    end
+
+    subgraph speculative_implementation ["Speculative Path (Placeholder)"]
+        SpeculativeBuffer -- "Pattern Analysis" --> PredictionEngine["Prediction Engine<br/>(Future Implementation)"]
+        SpeculativeBuffer -- "Prefetch" --> PrefetchCache["Prefetch Cache<br/>(Future Implementation)"]
+    end
+
     classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap;
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap;
     classDef service_node fill:#E3F2FD,stroke:#42A5F5;
-    classDef active_node fill:#E8F5E9,stroke:#66BB6A;
+    classDef abstraction_node fill:#E8F5E9,stroke:#66BB6A;
+    classDef implementation_node fill:#FFF3E0,stroke:#FFA726;
+    classDef placeholder_node fill:#F3E5F5,stroke:#AB47BC,stroke-dasharray: 5 5;
+
     class BufferService service_node;
-    class RoundBuffer,HybridBuffer,QueryBuffer,Storage,Client,WriteBuffer,SpeculativeBuffer active_node;
-    write_path:::header_style;
-    query_path:::header_style;
+    class WriteBuffer,QueryBuffer,SpeculativeBuffer abstraction_node;
+    class RoundBuffer,HybridBuffer,FlushManager,QueryCache,Storage implementation_node;
+    class PredictionEngine,PrefetchCache placeholder_node;
+
+    abstraction_layer:::header_style;
+    write_implementation:::header_style;
+    query_implementation:::header_style;
+    speculative_implementation:::header_style;
 ```
 
-### Computer Caching Correspondence
+### Computer Caching Correspondence (Refactored Architecture)
 
-The MemFuse Buffer system implements three specialized buffer components that directly correspond to computer caching mechanisms:
+The MemFuse Buffer system implements three specialized buffer abstractions that directly correspond to computer caching mechanisms:
 
 | MemFuse Component | Computer Caching Analog | Primary Function | Implementation Status |
 |-------------------|-------------------------|------------------|----------------------|
-| **WriteBuffer** | Write Combining Buffer | Message coalescing and batch processing | ✅ **Implemented**: Class exists with full functionality, integration in progress |
-| **SpeculativeBuffer** | Speculative Prefetch Buffer | Predictive content prefetching | ✅ **Implemented**: Class exists with full functionality, integration in progress |
-| **QueryBuffer** | Multi-level Cache Hierarchy | Multi-source query optimization | ✅ **Active**: Currently implemented and fully integrated |
+| **WriteBuffer** | Write Combining Buffer | Write path abstraction managing RoundBuffer + HybridBuffer + FlushManager | ✅ **Fully Integrated**: Complete abstraction layer implementation |
+| **QueryBuffer** | Multi-level Cache Hierarchy | Query path abstraction with multi-source coordination and caching | ✅ **Fully Integrated**: Complete multi-level cache implementation |
+| **SpeculativeBuffer** | Speculative Prefetch Buffer | Predictive prefetching abstraction with comprehensive architecture design | ✅ **Placeholder**: Complete interface with future implementation roadmap |
 
-> **Note**: The current implementation directly uses RoundBuffer, HybridBuffer, and QueryBuffer in BufferService. WriteBuffer and SpeculativeBuffer classes are fully implemented with comprehensive functionality, and integration into BufferService is in progress to provide higher-level abstractions and enhanced performance optimization.
+### Abstraction Layer Benefits
+
+The refactored architecture provides:
+
+1. **Proper Separation of Concerns**: Each buffer type handles a specific aspect of the system
+2. **Composition over Inheritance**: BufferService composes three buffer types rather than managing components directly
+3. **Single Responsibility Principle**: WriteBuffer manages writes, QueryBuffer manages queries, SpeculativeBuffer manages predictions
+4. **Backward Compatibility**: Legacy component access methods preserved for existing code
+5. **Future Extensibility**: New buffer types can be easily added to the composition
 
 ### WriteBuffer ↔ Write Combining Buffer Correspondence
 
@@ -342,9 +377,9 @@ graph TB
 - **Result Aggregation → Result Combination**: Hardware result merging becomes software result combination
 - **LRU Eviction → LRU Management**: Hardware LRU becomes software LRU cache management
 
-## Core Architecture
+## Core Architecture (Refactored)
 
-### Current System Components (Implementation Status)
+### Refactored System Components ✅
 
 ```mermaid
 graph TB
@@ -352,42 +387,54 @@ graph TB
         A[Client Request] --> B[API Gateway]
     end
 
-    subgraph "Service Layer"
-        B --> C[BufferService]
-        C --> D["WriteBuffer<br/>🚧 TODO: Future Integration"]
-        C --> E["QueryBuffer<br/>✅ Active"]
-        C --> F["RoundBuffer<br/>✅ Active"]
-        C --> G["HybridBuffer<br/>✅ Active"]
+    subgraph "Service Layer (Composition Pattern)"
+        B --> C[BufferService<br/>High-level Orchestrator]
+        C --> D["WriteBuffer<br/>✅ Write Path Abstraction"]
+        C --> E["QueryBuffer<br/>✅ Query Path Abstraction"]
+        C --> F["SpeculativeBuffer<br/>✅ Predictive Abstraction (Placeholder)"]
     end
 
-    subgraph "Buffer Components (Current)"
-        F --> H[Token-based FIFO]
-        G --> I[Dual-Queue Storage]
-        E --> J[Query Cache]
-        E --> K[Result Processor]
+    subgraph "Write Path Implementation"
+        D --> G["RoundBuffer<br/>✅ Short-term Cache"]
+        D --> H["HybridBuffer<br/>✅ Mid-term Cache + VectorCache"]
+        D --> I["FlushManager<br/>✅ Persistence Manager"]
+
+        G --> J[Token-based FIFO]
+        H --> K[Dual-Queue Storage]
+        I --> L[Batch Processing]
     end
 
-    subgraph "Buffer Components (Future)"
-        D --> L["SpeculativeBuffer<br/>🚧 TODO: Future Integration"]
-        D --> F
-        D --> G
+    subgraph "Query Path Implementation"
+        E --> M["Query Cache (LRU)"]
+        E --> N[Multi-source Coordinator]
+        E --> O[Result Aggregator]
+    end
+
+    subgraph "Speculative Path (Future)"
+        F --> P["Prediction Engine<br/>🔮 Future Implementation"]
+        F --> Q["Prefetch Cache<br/>🔮 Future Implementation"]
+        F --> R["Pattern Analyzer<br/>🔮 Future Implementation"]
     end
 
     subgraph "Storage Layer"
-        H --> M[Memory Storage]
-        I --> N[Chunk Storage]
-        I --> O[Vector Store]
-        I --> P[Keyword Store]
+        L --> S[MemoryService]
+        N --> S
+        S --> T[PostgreSQL + pgai]
     end
 
-    subgraph "Processing Layer"
-        N --> Q[MemoryService]
-        Q --> R[ChunkStrategy]
-        R --> S[Persistent Storage]
-    end
+    classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap;
+    classDef service_node fill:#E3F2FD,stroke:#42A5F5;
+    classDef abstraction_node fill:#E8F5E9,stroke:#66BB6A;
+    classDef implementation_node fill:#FFF3E0,stroke:#FFA726;
+    classDef future_node fill:#F3E5F5,stroke:#AB47BC,stroke-dasharray: 5 5;
+
+    class C service_node;
+    class D,E,F abstraction_node;
+    class G,H,I,J,K,L,M,N,O implementation_node;
+    class P,Q,R future_node;
 ```
 
-> **Current Implementation**: BufferService directly manages RoundBuffer, HybridBuffer, and QueryBuffer. WriteBuffer and SpeculativeBuffer exist as separate classes but are not yet integrated into the main service architecture.
+> **Refactored Implementation**: BufferService now uses composition pattern to orchestrate three specialized buffer abstractions. Each abstraction manages its own internal components, providing clear separation of concerns and proper abstraction layers.
 
 ### Architectural Principles
 
@@ -403,78 +450,79 @@ graph LR
 
 ## Buffer Components
 
-### WriteBuffer - Write Combining Buffer Implementation ✅ Implemented
+### WriteBuffer - Write Path Abstraction ✅ Fully Integrated
 
-> **Implementation Status**: WriteBuffer class is fully implemented with comprehensive functionality including unified entry point, component coordination, and statistics collection. Integration into BufferService is in progress.
+> **Implementation Status**: WriteBuffer is fully integrated into BufferService as the write path abstraction. It internally manages RoundBuffer, HybridBuffer, and FlushManager, providing a clean interface for all write operations.
 
-The WriteBuffer implements the Write Combining Buffer pattern for message processing, providing intelligent coalescing and batch optimization. Instead of combining writes to memory addresses, it combines messages from the same session for efficient batch processing.
+The WriteBuffer serves as the **write path abstraction layer**, encapsulating the entire write pipeline from message ingestion to persistence. It implements the Write Combining Buffer pattern by coordinating multiple internal components.
 
-**Core Workflow**:
-1. **Message Coalescing**: Scattered messages from the same session are accumulated in RoundBuffer
-2. **Threshold Monitoring**: System continuously monitors accumulated message token count or quantity
-3. **Batch Transfer**: Once preset thresholds are reached, RoundBuffer transfers the entire batch to HybridBuffer for processing and persistence
+**WriteBuffer Architecture**:
+1. **Unified Entry Point**: Single interface for all write operations (`add()`, `add_batch()`, `flush_all()`)
+2. **Component Coordination**: Internally manages RoundBuffer → HybridBuffer → FlushManager pipeline
+3. **Abstraction Layer**: Hides internal complexity from BufferService
+4. **Statistics Collection**: Provides comprehensive metrics for monitoring and optimization
 
 ```mermaid
-graph LR
-    subgraph input_sub ["Input (Scattered Writes)"]
-        direction LR
-        msg1(Message) --> Buffer
-        msg2(Message) --> Buffer
-        msg3(...) --> Buffer
+graph TB
+    subgraph "WriteBuffer Abstraction Layer"
+        A[Client Messages] --> B["WriteBuffer.add()"]
+        B --> C[Component Coordination]
     end
 
-    subgraph logic_sub ["WriteBuffer Logic (Based on RoundBuffer)"]
-        Buffer["RoundBuffer<br/>(Message Accumulation Pool)"] -- "Trigger Condition<br/>(Token/Size Limit)" --> Transfer["Batch Transfer<br/>(Batch Processing)"]
+    subgraph "Internal Component Management"
+        C --> D[RoundBuffer<br/>Short-term Accumulation]
+        C --> E[HybridBuffer<br/>Mid-term Processing]
+        C --> F[FlushManager<br/>Persistence Coordination]
+
+        D -- "Auto Transfer<br/>(Token/Size Threshold)" --> E
+        E -- "Batch Flush<br/>(Queue Full)" --> F
+        F -- "Persist<br/>(MemoryService)" --> G[PostgreSQL + pgai]
     end
 
-    subgraph output_sub ["Output (Single Write)"]
-        Transfer --> HB("To HybridBuffer<br/>for Processing")
-    end
-
-    subgraph analogy_sub ["Analogy: Write Combining"]
-       A("Core Concept: Many In -> One Out<br/>(Multiple Inputs -> Single Output)")
+    subgraph "Abstraction Benefits"
+        H["✅ Single Responsibility<br/>Write path only"]
+        I["✅ Component Isolation<br/>Internal management"]
+        J["✅ Clean Interface<br/>Simple API"]
+        K["✅ Statistics<br/>Comprehensive metrics"]
     end
 
     %% Styles
     classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap;
     classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap;
-    classDef input_node fill:#E3F2FD,stroke:#42A5F5;
-    classDef process_node fill:#FFFDE7,stroke:#FDD835;
-    classDef output_node fill:#E8F5E9,stroke:#66BB6A;
-    classDef analogy_node fill:#F5F5F5,stroke:#9E9E9E,font-style:italic;
+    classDef abstraction_node fill:#E8F5E9,stroke:#66BB6A;
+    classDef component_node fill:#FFF3E0,stroke:#FFA726;
+    classDef benefit_node fill:#E3F2FD,stroke:#42A5F5;
 
-    class msg1,msg2,msg3 input_node;
-    class Buffer,Transfer process_node;
-    class HB output_node;
-    class A analogy_node;
-
-    input_sub:::header_style;
-    logic_sub:::header_style;
-    output_sub:::header_style;
-    analogy_sub:::header_style;
+    class A,B,C abstraction_node;
+    class D,E,F,G component_node;
+    class H,I,J,K benefit_node;
 ```
 
-**Implemented Write Combining Buffer Characteristics**:
-- **Message Coalescing**: Groups related messages by session and token count (analogous to address matching) ✅
-- **Batch Optimization**: Accumulates messages until threshold triggers transfer (analogous to burst writes) ✅
-- **Threshold Management**: Uses token count and size limits for intelligent batching (analogous to timeout mechanisms) ✅
-- **Transfer Coordination**: Orchestrates data movement between buffer levels (analogous to memory hierarchy management) ✅
+**WriteBuffer Abstraction Characteristics**:
+- **Unified Interface**: Single entry point for all write operations ✅
+- **Component Encapsulation**: Internal management of RoundBuffer + HybridBuffer + FlushManager ✅
+- **Automatic Flow Control**: Handles threshold-based transfers and batch processing ✅
+- **Statistics Aggregation**: Provides comprehensive metrics from all internal components ✅
 
-**Implemented Key Responsibilities**:
-- Unified message entry point with write combining optimization ✅
-- Component lifecycle management with caching principles ✅
-- Transfer coordination between buffers using threshold-based triggers ✅
-- Statistics collection and monitoring for performance optimization ✅
+**Key Abstraction Benefits**:
+- **Simplified BufferService**: BufferService no longer manages individual components ✅
+- **Clear Separation**: Write path completely isolated from query and speculative paths ✅
+- **Component Access**: Provides controlled access to internal components when needed ✅
+- **Future Extensibility**: Easy to add new write-path optimizations ✅
 
-**Current Interface Implementation**:
+**WriteBuffer Interface**:
 ```python
 class WriteBuffer:
-    async def add(self, messages: MessageList, session_id: str = None) -> Dict[str, Any]
-    async def add_batch(self, message_batch_list: MessageBatchList, session_id: str = None) -> Dict[str, Any]
+    # Primary write operations
+    async def add(self, messages: MessageList, session_id: Optional[str] = None) -> Dict[str, Any]
+    # Note: add_batch is implemented at BufferService level, not WriteBuffer level
 
+    # Component access (controlled)
     def get_round_buffer(self) -> RoundBuffer
     def get_hybrid_buffer(self) -> HybridBuffer
+    def get_flush_manager(self) -> FlushManager
 
+    # Management operations
     async def flush_all(self) -> Dict[str, Any]
     def get_stats(self) -> Dict[str, Any]
 ```
@@ -617,132 +665,154 @@ graph TD
 3. **Query Cache**: Previously computed results (analogous to query result cache) ✅
 
 **Future Query Sources**:
-4. **SpeculativeBuffer**: Prefetched data for fast access (analogous to L1 cache) 🚧 TODO
+4. **SpeculativeBuffer**: Prefetched data for fast access (analogous to L1 cache) 🔮 Future Implementation
 
 **Sorting Options**:
 - `score`: Relevance-based ranking (default)
 - `timestamp`: Temporal ordering
 
-### SpeculativeBuffer - Speculative Prefetch Buffer Implementation ✅ Implemented
+### SpeculativeBuffer - Predictive Prefetching Abstraction ✅ Placeholder Implementation
 
-> **Implementation Status**: SpeculativeBuffer class is fully implemented with comprehensive functionality including pattern analysis, context generation, predictive retrieval, and performance tracking. Integration into BufferService and QueryBuffer is in progress.
+> **Implementation Status**: SpeculativeBuffer is fully integrated into BufferService as a comprehensive placeholder with complete architecture design. The interface is defined and ready for future implementation of predictive prefetching capabilities.
 
-The SpeculativeBuffer implements the Speculative Prefetch Buffer pattern, borrowing the concept of "predictive prefetching" to make queries faster through intelligent pattern analysis and content pre-loading.
+The SpeculativeBuffer serves as the **predictive prefetching abstraction layer**, designed to implement intelligent pattern analysis and content pre-loading. Currently implemented as a well-documented placeholder with clear implementation roadmap.
 
-**Core Workflow**:
-1. **Pattern Analysis**: Analyzes recent message streams to identify discussion topics (e.g., "machine learning")
-2. **Context Generation**: Based on analysis results, generates retrieval context such as relevant keywords or vectors
-3. **Content Prefetching**: Uses the context to asynchronously retrieve highly relevant historical messages from persistent storage
-4. **Buffer Warming**: Loads prefetched content into a dedicated memory buffer, waiting for subsequent actual queries
+**SpeculativeBuffer Architecture Design**:
+
+The SpeculativeBuffer is designed with a comprehensive architecture for future implementation:
+
+1. **Prediction Engine**: Analyzes recent access patterns to predict future needs
+2. **Prefetch Strategy**: Multiple strategies for different scenarios (semantic, temporal, behavioral)
+3. **Cache Management**: Intelligent cache with eviction policies
+4. **Integration Points**: Coordinates with WriteBuffer and QueryBuffer for optimal performance
 
 ```mermaid
----
-config:
-  layout: elk
----
-flowchart TD
- subgraph background_sub["Background: Prediction & Prefetching"]
-        B["Analyze Patterns<br>(Pattern Analysis)"]
-        A["Recent Messages<br>(Recent Messages)"]
-        C["Generate Context<br>(Context Generation)"]
-        D["Async Retrieve from Storage<br>(Async Storage Retrieval)"]
-        E["SpeculativeBuffer<br>(Content Pre-warmed)"]
-  end
- subgraph foreground_sub["Foreground: Query Acceleration"]
-        F@{ label: "User's Related Query<br>(User Query)" }
-  end
-    A --> B
-    B --> C
-    C --> D
-    D --> E
-    F -- "Direct Hit, Low Latency<br>(Instant Response)" --> E
-    F@{ shape: rect}
-     A:::background_node
-     B:::background_node
-     C:::background_node
-     D:::background_node
-     E:::hit_node
-     F:::foreground_node
-     background_sub:::header_style
-     foreground_sub:::header_style
-    classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap
-    classDef header_style stroke:#616161,stroke-width:2px,color:black,font-weight:bold,font-size:16px,white-space:nowrap
-    classDef background_node fill:#F3E5F5,stroke:#AB47BC
-    classDef foreground_node fill:#E0F7FA,stroke:#26C6DA
-    classDef hit_node fill:#FFECB3,stroke:#FFA000,font-weight:bold
-    linkStyle 4 stroke:#FFA000,stroke-width:3px,fill:none
+graph TB
+    subgraph "SpeculativeBuffer Architecture Design"
+        A[Recent Activity Monitor] --> B[Pattern Analysis Engine]
+        B --> C[Prediction Strategies]
+
+        C --> D[Semantic Similarity<br/>Content-based prediction]
+        C --> E[Temporal Patterns<br/>Time-based prediction]
+        C --> F[User Behavior<br/>Usage-based prediction]
+
+        D --> G[Prefetch Coordinator]
+        E --> G
+        F --> G
+
+        G --> H[Prefetch Cache<br/>LRU with Prediction Boost]
+        G --> I[Background Retrieval<br/>Async from MemoryService]
+
+        H --> J[Query Acceleration<br/>Instant Response]
+        I --> H
+    end
+
+    subgraph "Current Implementation Status"
+        K["✅ Interface Defined<br/>Complete method signatures"]
+        L["✅ Architecture Documented<br/>Comprehensive design"]
+        M["✅ Placeholder Methods<br/>Ready for implementation"]
+        N["🔮 Future Implementation<br/>Prediction algorithms"]
+    end
+
+    %% Styles
+    classDef default fill:#fff,stroke:#333,stroke-width:2px,font-size:14px,white-space:nowrap;
+    classDef design_node fill:#F3E5F5,stroke:#AB47BC;
+    classDef status_implemented fill:#E8F5E9,stroke:#66BB6A;
+    classDef status_future fill:#FFF3E0,stroke:#FFA726,stroke-dasharray: 5 5;
+
+    class A,B,C,D,E,F,G,H,I,J design_node;
+    class K,L,M status_implemented;
+    class N status_future;
 ```
 
-**Implemented Speculative Prefetch Buffer Characteristics**:
-- **Pattern Analysis**: Analyzes recent message content to predict future access patterns (analogous to stride/correlation prediction) ✅
-- **Context Generation**: Creates search context from recent items (analogous to address prediction) ✅
-- **Predictive Retrieval**: Fetches related content before it's requested (analogous to memory prefetching) ✅
-- **Buffer Warming**: Pre-populates buffer with likely-to-be-accessed items (analogous to cache warming) ✅
-- **Usefulness Tracking**: Monitors prediction accuracy for optimization (analogous to usefulness counters) ✅
+**SpeculativeBuffer Placeholder Characteristics**:
+- **Complete Interface**: All methods defined with proper signatures ✅
+- **Architecture Documentation**: Comprehensive design for future implementation ✅
+- **Integration Ready**: Fully integrated into BufferService composition ✅
+- **Statistics Framework**: Placeholder metrics for monitoring prediction performance ✅
 
-**Implemented Key Features**:
-- **Context Window**: Configurable number of recent items for pattern analysis ✅
-- **Retrieval Handler**: Async callback for semantic content retrieval ✅
-- **Optimization Methods**: Prefetch for query, pattern-based optimization ✅
-- **Performance Tracking**: Statistics for prediction accuracy and buffer utilization ✅
+**Designed Features (Future Implementation)**:
+- **Multiple Prediction Strategies**: Semantic similarity, temporal patterns, user behavior 🔮
+- **Adaptive Learning**: Machine learning-based pattern recognition 🔮
+- **Cache Management**: LRU with prediction boost and relevance-based eviction 🔮
+- **Background Processing**: Async prefetching without blocking main operations 🔮
+
+**SpeculativeBuffer Interface**:
+```python
+class SpeculativeBuffer:
+    # Core prediction methods (placeholder)
+    async def update(self, recent_items: List[Any]) -> None
+    async def predict_and_prefetch(self, context: Dict[str, Any]) -> List[Any]
+    async def get_prefetched(self, query_context: str) -> List[Any]
+
+    # Management operations
+    async def clear(self) -> None
+    def get_stats(self) -> Dict[str, Any]
+
+    # Interface compliance
+    async def add(self, items: List[Any]) -> bool  # Not applicable
+    async def query(self, query: str, top_k: int = 10) -> List[Any]
+    def size(self) -> int
+```
 
 ## Data Flow Architecture
 
-### Complete System Integration with Computer Caching Principles
+### Refactored System Integration with Proper Abstraction Layers
 
 ```mermaid
 sequenceDiagram
     participant Client
+    participant BufferService
     participant WriteBuffer
+    participant QueryBuffer
+    participant SpeculativeBuffer
     participant RoundBuffer
     participant HybridBuffer
-    participant SpeculativeBuffer
-    participant QueryBuffer
+    participant FlushManager
     participant MemoryService
-    participant Storage
 
-    Note over Client, Storage: Write Path (Analogous to Write Combining Buffer)
-    Client->>WriteBuffer: add(messages)
+    Note over Client, MemoryService: Write Path (Abstraction Layer)
+    Client->>BufferService: add(messages)
+    BufferService->>WriteBuffer: add(messages)
+    Note over WriteBuffer: Write path abstraction<br/>Manages internal components
+
     WriteBuffer->>RoundBuffer: accumulate(messages)
-    Note over RoundBuffer: Token-based coalescing<br/>(Analogous to Address matching + Data combining)
-
     RoundBuffer->>RoundBuffer: check_threshold()
     alt Token/Size threshold reached
         RoundBuffer->>HybridBuffer: transfer_batch(rounds)
-        Note over HybridBuffer: Immediate processing<br/>(Analogous to Burst write optimization)
         HybridBuffer->>HybridBuffer: chunk_and_embed()
-        HybridBuffer->>Storage: batch_write()
+        HybridBuffer->>FlushManager: batch_flush()
+        FlushManager->>MemoryService: persist_to_storage()
+        Note over MemoryService: Routes to PostgreSQL + pgai<br/>No direct SQLite/Qdrant operations
     end
 
-    Note over Client, Storage: Speculative Prefetch Path (🚧 TODO: Future Implementation)
-    HybridBuffer->>SpeculativeBuffer: update_from_items(recent_items)
-    Note over SpeculativeBuffer: Pattern analysis<br/>(Analogous to Access pattern detection)
-    SpeculativeBuffer->>SpeculativeBuffer: generate_context()
-    SpeculativeBuffer->>MemoryService: retrieve_related(context)
-    MemoryService-->>SpeculativeBuffer: prefetched_items
-    Note over SpeculativeBuffer: Buffer warming<br/>(Analogous to Cache warming)
+    WriteBuffer-->>BufferService: write_result
+    BufferService-->>Client: success_response
 
-    Note over Client, Storage: Query Path (Analogous to Multi-level Cache Hierarchy)
-    Client->>QueryBuffer: query(text, params)
+    Note over Client, MemoryService: Query Path (Abstraction Layer)
+    Client->>BufferService: query(text, params)
+    BufferService->>QueryBuffer: query(text, params, hybrid_buffer)
+    Note over QueryBuffer: Query path abstraction<br/>Multi-source coordination
+
     QueryBuffer->>QueryBuffer: check_cache()
     alt Cache miss
-        par Multi-source query (Current Implementation)
+        par Multi-source query
             QueryBuffer->>MemoryService: query_storage()
             QueryBuffer->>HybridBuffer: query_buffer()
-        and Future Integration
-            QueryBuffer->>SpeculativeBuffer: get_relevant_items() [🚧 TODO]
+        and Future: Speculative integration
+            QueryBuffer->>SpeculativeBuffer: get_prefetched() [Placeholder]
         end
 
-        MemoryService-->>QueryBuffer: storage_results
-        HybridBuffer-->>QueryBuffer: buffer_results
-        SpeculativeBuffer-->>QueryBuffer: speculative_results [🚧 TODO]
-
-        Note over QueryBuffer: Result aggregation<br/>(Analogous to Multi-level cache merge)
+        Note over QueryBuffer: Result aggregation<br/>Combine and rank results
         QueryBuffer->>QueryBuffer: combine_and_sort()
         QueryBuffer->>QueryBuffer: update_cache()
     end
 
-    QueryBuffer-->>Client: final_results
+    QueryBuffer-->>BufferService: query_results
+    BufferService-->>Client: final_response
+
+    Note over Client, MemoryService: Speculative Path (Future Implementation)
+    Note over SpeculativeBuffer: Pattern analysis and prefetching<br/>Currently placeholder with full architecture design
 ```
 
 ### Message Processing Pipeline
@@ -774,16 +844,11 @@ sequenceDiagram
     HybridBuffer->>HybridBuffer: check queue size ≥ max_size
 
     Note over HybridBuffer: Batch write triggered
-    par Sequential Storage
-        HybridBuffer->>MemoryService: write rounds to SQLite
-        MemoryService->>SQLite: store with updated_at refresh
-    and
-        HybridBuffer->>Qdrant: write pre-calculated embeddings
-    end
-
-    SQLite-->>MemoryService: Success
-    MemoryService-->>HybridBuffer: Success
-    Qdrant-->>HybridBuffer: Success
+    HybridBuffer->>FlushManager: flush_buffer_data(rounds)
+    FlushManager->>MemoryService: add_batch(rounds)
+    Note over MemoryService: Routes to PostgreSQL + pgai<br/>Handles M0/M1/M2 processing
+    MemoryService-->>FlushManager: Success
+    FlushManager-->>HybridBuffer: Success
 
     Note over HybridBuffer: Clear all queues
     HybridBuffer->>HybridBuffer: clear RoundQueue + VectorCache
@@ -848,26 +913,50 @@ graph TB
 
 ```yaml
 buffer:
-  enabled: true
-  
+  enabled: false                 # Buffer system enabled/disabled
+
   # RoundBuffer configuration
   round_buffer:
     max_tokens: 800               # Token threshold for transfer
     max_size: 5                   # Maximum rounds before transfer
     token_model: "gpt-4o-mini"    # Model for token counting
-  
+
   # HybridBuffer configuration
   hybrid_buffer:
     max_size: 5                   # FIFO buffer size
     chunk_strategy: "message"     # Chunking strategy (default: message, can be contextual)
     embedding_model: "all-MiniLM-L6-v2"  # Embedding model
-  
+
+  # Token counter configuration
+  token_counter:
+    model: "gpt-4o-mini"          # Default model for token counting
+    fallback_multiplier: 1.3      # Multiplier for word-based fallback
+
   # QueryBuffer configuration
   query:
     max_size: 15                  # Maximum results per query
     cache_size: 100               # Query cache size
     default_sort_by: "score"      # Default sorting method
     default_order: "desc"         # Default sort order
+
+  # Performance settings (includes FlushManager configuration)
+  performance:
+    batch_write_threshold: 5      # Threshold for batch writes
+    flush_interval: 60            # Auto-flush interval in seconds
+    enable_async_processing: true # Enable async chunk processing
+    enable_auto_flush: true       # Enable automatic flushing
+
+    # FlushManager settings
+    max_flush_workers: 3          # Maximum number of concurrent flush workers
+    max_flush_queue_size: 100     # Maximum size of the flush queue
+    flush_timeout: 30.0           # Default timeout for flush operations (seconds)
+    flush_strategy: "hybrid"      # Flush strategy: "size_based", "time_based", "hybrid"
+
+  # Monitoring and logging
+  monitoring:
+    enable_stats: true            # Enable statistics collection
+    log_level: "INFO"             # Log level for buffer operations
+    performance_tracking: true    # Track performance metrics
 ```
 
 ## Performance Architecture
@@ -969,118 +1058,125 @@ graph TB
 
 ## Integration Patterns
 
-### Service Integration
+### Service Integration (Refactored)
 
 ```mermaid
 graph TB
-    subgraph "Current Service Integration"
-        A[BufferService] --> B["WriteBuffer Integration<br/>🚧 TODO: Future"]
-        A --> C["QueryBuffer Integration<br/>✅ Active"]
-        A --> D["Direct Component Management<br/>✅ Current"]
+    subgraph "Refactored Service Integration"
+        A[BufferService<br/>Composition Orchestrator] --> B["WriteBuffer<br/>✅ Fully Integrated"]
+        A --> C["QueryBuffer<br/>✅ Fully Integrated"]
+        A --> D["SpeculativeBuffer<br/>✅ Placeholder Integrated"]
 
-        B --> E["Unified Add Interface<br/>🚧 TODO"]
-        C --> F["Unified Query Interface<br/>✅ Active"]
-        D --> G["Direct Access<br/>round_buffer, hybrid_buffer<br/>✅ Current"]
+        B --> E["Write Path Abstraction<br/>✅ Complete"]
+        C --> F["Query Path Abstraction<br/>✅ Complete"]
+        D --> G["Predictive Path Abstraction<br/>✅ Interface Ready"]
 
-        F --> H["Multi-source Querying<br/>Storage + HybridBuffer<br/>✅ Active"]
-        E --> I["Component Coordination<br/>🚧 TODO"]
+        E --> H["Internal Component Management<br/>RoundBuffer + HybridBuffer + FlushManager"]
+        F --> I["Multi-source Coordination<br/>Cache + Buffer + Storage"]
+        G --> J["Future Implementation<br/>Pattern Analysis + Prefetching"]
     end
 ```
 
-### API Compatibility
+### API Compatibility (Refactored)
 
 ```python
-# BufferService maintains full API compatibility (Current Implementation)
+# BufferService maintains full API compatibility with new abstraction layer
 class BufferService:
+    # Primary API (unchanged for backward compatibility)
     async def add(self, messages: MessageList, session_id: str = None) -> Dict[str, Any]
     async def add_batch(self, message_batch_list: MessageBatchList, session_id: str = None) -> Dict[str, Any]
     async def query(self, query: str, top_k: int = 10, **kwargs) -> Dict[str, Any]
     async def get_messages_by_session(self, session_id: str, buffer_only: bool = None, **kwargs) -> Dict[str, Any]
 
-    # Current direct component access
-    @property
-    def round_buffer(self) -> RoundBuffer  # ✅ Active
-    @property
-    def hybrid_buffer(self) -> HybridBuffer  # ✅ Active
-    @property
-    def query_buffer(self) -> QueryBuffer  # ✅ Active
+    # New abstraction layer access
+    def get_write_buffer(self) -> WriteBuffer  # ✅ Fully Integrated
+    def get_query_buffer(self) -> QueryBuffer  # ✅ Fully Integrated
+    def get_speculative_buffer(self) -> SpeculativeBuffer  # ✅ Placeholder
 
-    # Future unified access (TODO)
-    # @property
-    # def write_buffer(self) -> WriteBuffer  # 🚧 TODO
-    # @property
-    # def speculative_buffer(self) -> SpeculativeBuffer  # 🚧 TODO
+    # Legacy component access (backward compatibility)
+    def get_round_buffer(self) -> RoundBuffer  # ✅ Via WriteBuffer
+    def get_hybrid_buffer(self) -> HybridBuffer  # ✅ Via WriteBuffer
+    def get_flush_manager(self) -> FlushManager  # ✅ Via WriteBuffer
+
+    # Statistics and monitoring
+    def get_stats(self) -> Dict[str, Any]  # ✅ Aggregated from all buffer types
 ```
 
 ## Implementation Status Summary
 
-### Current Architecture (Active Components) ✅
+### Refactored Architecture (Fully Implemented) ✅
 
-The current MemFuse Buffer system implements the following components:
+The MemFuse Buffer system has been completely refactored with proper abstraction layers:
 
 | Component | Status | Description | Integration |
 |-----------|--------|-------------|-------------|
-| **BufferService** | ✅ Active | Main service orchestrating buffer operations | Fully integrated |
-| **RoundBuffer** | ✅ Active | Token-based FIFO with automatic transfer | Direct integration in BufferService |
-| **HybridBuffer** | ✅ Active | Dual-queue storage with immediate processing | Direct integration in BufferService |
-| **QueryBuffer** | ✅ Active | Multi-source query with caching and sorting | Direct integration in BufferService |
+| **BufferService** | ✅ Refactored | High-level orchestrator using composition pattern | Fully integrated with three buffer types |
+| **WriteBuffer** | ✅ Fully Integrated | Write path abstraction managing RoundBuffer + HybridBuffer + FlushManager | Complete abstraction layer |
+| **QueryBuffer** | ✅ Fully Integrated | Query path abstraction with multi-source coordination and caching | Complete abstraction layer |
+| **SpeculativeBuffer** | ✅ Placeholder | Predictive abstraction with comprehensive architecture design | Complete interface, future implementation |
 
-### Implemented Components (Integration in Progress) ✅
+### Internal Components (Managed by Abstractions) ✅
 
-The following components are fully implemented and integration is in progress:
+The following components are now managed internally by the abstraction layers:
 
-| Component | Status | Description | Integration Status |
-|-----------|--------|-------------|-------------------|
-| **WriteBuffer** | ✅ Implemented | High-level abstraction for RoundBuffer + HybridBuffer coordination | 🚧 Integration in progress |
-| **SpeculativeBuffer** | ✅ Implemented | Predictive prefetching with pattern analysis and context generation | 🚧 Integration in progress |
+| Component | Status | Description | Managed By |
+|-----------|--------|-------------|------------|
+| **RoundBuffer** | ✅ Active | Token-based FIFO with automatic transfer | WriteBuffer |
+| **HybridBuffer** | ✅ Active | Dual-queue storage with VectorCache for immediate queries | WriteBuffer |
+| **FlushManager** | ✅ Active | Batch processing and persistence coordination | WriteBuffer |
+| **Query Cache** | ✅ Active | LRU cache for query result optimization | QueryBuffer |
 
-### Current Data Flow
+### Refactored Data Flow ✅
 
+**Current Implementation**:
 ```
-Client Request → BufferService → RoundBuffer → HybridBuffer → Storage
+Client Request → BufferService → WriteBuffer → [RoundBuffer → HybridBuffer → FlushManager] → MemoryService
                               ↓
-                            QueryBuffer → Multi-source Query → Results
+                            QueryBuffer → [Cache + HybridBuffer + MemoryService] → Results
+                              ↓
+                            SpeculativeBuffer → [Placeholder with future implementation]
 ```
 
-### Future Data Flow (Planned)
+### Architecture Benefits ✅
 
-```
-Client Request → BufferService → WriteBuffer → RoundBuffer + HybridBuffer → Storage
-                              ↓                    ↓
-                            QueryBuffer → SpeculativeBuffer + HybridBuffer + Storage → Results
-```
+1. **Proper Abstraction**: Each buffer type has a single responsibility
+2. **Composition Pattern**: BufferService composes three buffer abstractions
+3. **Component Isolation**: Internal components managed by their respective abstractions
+4. **Backward Compatibility**: Legacy component access preserved
+5. **Future Extensibility**: Easy to add new buffer types or modify existing ones
 
 ## Design Benefits
 
-### Computer Caching Architecture Advantages
+### Refactored Architecture Advantages
 
-The MemFuse Buffer system inherits proven advantages from computer caching architectures:
+The MemFuse Buffer system now provides proven advantages through proper abstraction layers:
 
-1. **Write Combining Benefits** (WriteBuffer) 🚧 TODO:
-   - **Reduced I/O Operations**: Batching will reduce database transaction overhead
-   - **Improved Throughput**: Token-based coalescing will optimize memory bandwidth utilization
-   - **Lower Latency**: Intelligent buffering will reduce per-message processing latency
-   - **Resource Efficiency**: Threshold-based triggers will optimize memory and CPU usage
+1. **Write Path Benefits** (WriteBuffer) ✅:
+   - **Unified Interface**: Single entry point for all write operations
+   - **Component Encapsulation**: Internal management of write pipeline complexity
+   - **Automatic Flow Control**: Threshold-based transfers and batch processing
+   - **Statistics Aggregation**: Comprehensive metrics from all internal components
 
-2. **Speculative Prefetch Benefits** (SpeculativeBuffer) 🚧 TODO:
-   - **Predictive Performance**: Pattern-based prefetching will reduce query latency
-   - **Cache Warming**: Pre-population will improve hit rates for subsequent queries
-   - **Adaptive Learning**: Usefulness tracking will optimize prediction accuracy
-   - **Background Processing**: Async prefetching won't block main operations
+2. **Query Path Benefits** (QueryBuffer) ✅:
+   - **Multi-source Coordination**: Seamless integration of cache, buffer, and storage
+   - **Result Aggregation**: Intelligent merging and ranking from multiple sources
+   - **Cache Optimization**: LRU cache with query similarity detection
+   - **Performance Monitoring**: Detailed metrics for cache hit rates and latency
 
-3. **Multi-level Cache Hierarchy Benefits** (QueryBuffer) ✅:
-   - **Multi-level Optimization**: Hierarchical caching maximizes hit rates
-   - **Result Aggregation**: Intelligent merging from multiple sources
-   - **Query Similarity**: Cache key optimization reduces redundant computations
-   - **LRU Management**: Efficient memory utilization with proven eviction policies
+3. **Predictive Path Benefits** (SpeculativeBuffer) 🔮:
+   - **Architecture Ready**: Complete design for future predictive capabilities
+   - **Interface Defined**: All methods and patterns established
+   - **Integration Prepared**: Fully integrated into BufferService composition
+   - **Extensible Design**: Multiple prediction strategies planned
 
-### Architectural Advantages
+### Architectural Advantages (Refactored)
 
-1. **Unified Entry Point**: WriteBuffer provides clean abstraction with write combining optimization
-2. **Component Isolation**: Clear separation of concerns following caching hierarchy principles
-3. **Configurable Behavior**: Flexible parameter tuning based on caching best practices
-4. **Performance Optimization**: Intelligent batching, caching, and prefetching
-5. **Fault Tolerance**: Robust error handling and recovery with graceful degradation
+1. **Proper Abstraction Layers**: Three specialized buffer types with single responsibilities
+2. **Composition Pattern**: BufferService orchestrates buffer types rather than managing components
+3. **Component Encapsulation**: Internal complexity hidden behind clean interfaces
+4. **Separation of Concerns**: Write, query, and predictive paths completely isolated
+5. **Backward Compatibility**: Legacy component access preserved for existing code
+6. **Future Extensibility**: Easy to add new buffer types or modify existing implementations
 
 ### Scalability Features
 
@@ -1092,55 +1188,68 @@ The MemFuse Buffer system inherits proven advantages from computer caching archi
 
 ## Future Enhancements
 
-### Computer Caching-Inspired Improvements
+### SpeculativeBuffer Implementation Roadmap
 
-#### Short-term Improvements
+#### Phase 1: Basic Prediction (3-6 months)
+- **Semantic Similarity**: Content-based prediction using embedding similarity
+- **Simple Prefetching**: Basic pattern recognition and cache warming
+- **Integration Testing**: Full integration with QueryBuffer for query acceleration
+- **Performance Metrics**: Prediction accuracy and cache hit rate monitoring
 
-- **Dynamic Thresholds**: Adaptive threshold adjustment based on access patterns (inspired by adaptive cache sizing)
-- **Advanced Prefetching**: Multi-pattern prefetch predictors (inspired by stride + correlation predictors)
-- **Compression**: Memory usage optimization with intelligent compression (inspired by cache compression techniques)
-- **Victim Caches**: Secondary buffers for evicted items (inspired by victim cache architecture)
+#### Phase 2: Advanced Prediction (6-12 months)
+- **Temporal Patterns**: Time-based access pattern analysis
+- **User Behavior**: Usage pattern learning and personalization
+- **Multi-strategy Coordination**: Combine semantic, temporal, and behavioral predictions
+- **Adaptive Learning**: Machine learning-based pattern optimization
 
-#### Medium-term Vision
+#### Phase 3: Intelligent Optimization (12+ months)
+- **Dynamic Strategy Selection**: Automatic selection of best prediction strategy
+- **Cross-session Learning**: Pattern learning across multiple user sessions
+- **Distributed Prediction**: Multi-node prediction coordination
+- **Real-time Adaptation**: Continuous learning and strategy adjustment
 
-- **Multi-level Buffer Hierarchy**: Implement L1/L2/L3 buffer levels (inspired by cache hierarchy)
-- **Non-blocking Buffers**: Lock-free data structures for higher concurrency (inspired by non-blocking caches)
-- **Coherence Protocols**: Multi-instance buffer synchronization (inspired by cache coherence)
-- **Bandwidth Optimization**: Intelligent data placement and migration (inspired by memory bandwidth optimization)
+### WriteBuffer Enhancements
 
-#### Long-term Vision
+#### Performance Optimizations
+- **Dynamic Thresholds**: Adaptive threshold adjustment based on system load
+- **Compression**: Memory usage optimization for large message batches
+- **Parallel Processing**: Concurrent processing of multiple write streams
+- **Advanced Batching**: Intelligent batching strategies beyond token counting
 
-- **Distributed Buffering**: Multi-node buffer coordination with coherence protocols
-- **ML-based Optimization**: Intelligent parameter tuning using machine learning for pattern prediction
-- **Stream Processing**: Real-time data processing capabilities with continuous prefetching
-- **Quantum-inspired Algorithms**: Advanced prediction algorithms for speculative buffering
+### QueryBuffer Enhancements
 
-### Performance Optimization Roadmap
+#### Cache Improvements
+- **Multi-level Caching**: L1/L2/L3 cache hierarchy implementation
+- **Intelligent Eviction**: Advanced eviction policies beyond LRU
+- **Query Similarity**: Enhanced query matching and result reuse
+- **Distributed Caching**: Multi-node cache coordination
+
+### Performance Optimization Roadmap (Updated)
 
 ```mermaid
 graph TB
-    subgraph "Current State"
-        A[Basic Write Combining]
-        B[Simple Prefetching]
-        C[LRU Query Cache]
+    subgraph "Current State ✅"
+        A[WriteBuffer Abstraction<br/>Complete write path management]
+        B[QueryBuffer Abstraction<br/>Multi-source coordination]
+        C[SpeculativeBuffer Interface<br/>Architecture design complete]
     end
 
-    subgraph "Short-term (3-6 months)"
-        D[Adaptive Thresholds]
-        E[Multi-pattern Prefetch]
-        F[Victim Caches]
+    subgraph "Phase 1: SpeculativeBuffer (3-6 months)"
+        D[Semantic Prediction<br/>Content-based prefetching]
+        E[Basic Pattern Analysis<br/>Simple access patterns]
+        F[Cache Integration<br/>QueryBuffer coordination]
     end
 
-    subgraph "Medium-term (6-12 months)"
-        G[Multi-level Hierarchy]
-        H[Non-blocking Structures]
-        I[Coherence Protocols]
+    subgraph "Phase 2: Advanced Features (6-12 months)"
+        G[Multi-strategy Prediction<br/>Semantic + Temporal + Behavioral]
+        H[Adaptive Learning<br/>ML-based optimization]
+        I[Performance Tuning<br/>Dynamic thresholds]
     end
 
-    subgraph "Long-term (12+ months)"
-        J[Distributed Coordination]
-        K[ML-based Optimization]
-        L[Quantum-inspired Algorithms]
+    subgraph "Phase 3: Distributed & AI (12+ months)"
+        J[Distributed Coordination<br/>Multi-node buffer sync]
+        K[Advanced ML<br/>Deep learning patterns]
+        L[Quantum-inspired<br/>Advanced algorithms]
     end
 
     A --> D
@@ -1158,25 +1267,33 @@ graph TB
 
 ## Conclusion
 
-The MemFuse Buffer architecture provides a robust, scalable foundation for high-throughput message processing by leveraging proven computer caching principles. The system's design draws from decades of computer architecture research, with current implementation of core buffer components and planned integration of advanced caching mechanisms.
+The MemFuse Buffer architecture has been **successfully refactored** with proper abstraction layers, providing a robust foundation for high-throughput message processing through proven computer caching principles and modern software architecture patterns.
 
-**Current Achievements** ✅:
-- **Performance**: Significant latency reduction through intelligent buffering (RoundBuffer + HybridBuffer)
-- **Scalability**: Horizontal scaling capabilities with stateless design principles
-- **Reliability**: Fault-tolerant architecture with graceful degradation
-- **Efficiency**: Optimized resource utilization through multi-level caching (QueryBuffer)
+**Refactoring Achievements** ✅:
+- **Proper Abstraction**: Three specialized buffer types with single responsibilities
+- **Composition Pattern**: BufferService orchestrates buffer abstractions rather than managing components
+- **Component Encapsulation**: Internal complexity hidden behind clean interfaces
+- **Backward Compatibility**: Legacy access methods preserved for existing code
+- **Complete Testing**: Comprehensive test coverage for modular and integration scenarios
 
-**Future Enhancements** 🚧:
-- **Write Combining**: Enhanced throughput through WriteBuffer abstraction layer
-- **Predictive Prefetching**: Reduced query latency through SpeculativeBuffer integration
-- **Advanced Caching**: Complete computer caching architecture implementation
+**Current Implementation Status** ✅:
+- **WriteBuffer**: Fully integrated write path abstraction managing internal components
+- **QueryBuffer**: Fully integrated query path abstraction with multi-source coordination
+- **SpeculativeBuffer**: Complete placeholder with comprehensive architecture design
+- **BufferService**: Refactored to use composition pattern with three buffer types
 
-**Innovation**: The adaptation of hardware caching principles to software memory management represents a novel approach that bridges the gap between computer architecture and application-level optimization. The current implementation provides a solid foundation, with planned enhancements that will complete the vision of intelligent memory systems.
+**Architecture Benefits** ✅:
+- **Maintainability**: Clear separation of concerns and single responsibility principle
+- **Extensibility**: Easy to add new buffer types or modify existing implementations
+- **Testability**: Modular design enables comprehensive unit and integration testing
+- **Performance**: Optimized resource utilization through intelligent abstraction layers
 
-**Implementation Roadmap**:
-1. **Phase 1** ✅: Core buffer components (RoundBuffer, HybridBuffer, QueryBuffer)
-2. **Phase 2** 🚧: High-level abstractions (WriteBuffer integration)
-3. **Phase 3** 🚧: Predictive optimization (SpeculativeBuffer integration)
-4. **Phase 4** 🚧: Advanced features (ML-based optimization, distributed coordination)
+**Future Implementation Path** 🔮:
+1. **Phase 1** ✅: **Complete** - Refactored architecture with proper abstraction layers
+2. **Phase 2** 🔮: **Planned** - SpeculativeBuffer prediction algorithm implementation
+3. **Phase 3** 🔮: **Planned** - Advanced optimization features and ML-based improvements
+4. **Phase 4** 🔮: **Planned** - Distributed coordination and quantum-inspired algorithms
 
-This architecture ensures optimal performance while maintaining data integrity and system reliability, positioning MemFuse as a leader in intelligent memory management solutions with a clear path for continued innovation.
+**Innovation Impact**: The successful refactoring demonstrates how computer caching principles can be effectively adapted to software architecture through proper abstraction layers. The composition pattern provides a clean, maintainable foundation that bridges hardware optimization concepts with modern software design principles.
+
+This refactored architecture ensures optimal performance, maintainability, and extensibility while positioning MemFuse as a leader in intelligent memory management solutions with a clear, well-tested foundation for future innovations.

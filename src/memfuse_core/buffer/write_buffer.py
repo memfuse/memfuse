@@ -5,6 +5,8 @@ providing a clean abstraction layer and maintaining the original architecture de
 """
 
 import asyncio
+import time
+import uuid
 from typing import Any, Dict, List, Optional, Callable
 from loguru import logger
 
@@ -103,37 +105,46 @@ class WriteBuffer:
         }
     
     async def add_batch(self, message_batch_list: MessageBatchList, session_id: Optional[str] = None) -> Dict[str, Any]:
-        """Add a batch of message lists to the buffer.
-        
+        """Optimized batch processing with intelligent coordination.
+
         Args:
             message_batch_list: List of lists of messages
             session_id: Session ID for context
-            
+
         Returns:
             Dictionary with batch operation status and metadata
         """
         if not message_batch_list:
             return {"status": "success", "message": "No message lists to add"}
-        
-        results = []
-        total_transfers = 0
-        
-        for i, messages in enumerate(message_batch_list):
-            if not messages:
-                continue
-                
-            result = await self.add(messages, session_id)
-            results.append(result)
-            
-            if result.get("transfer_triggered"):
-                total_transfers += 1
-        
+
+        start_time = time.time()
+
+        # 1. Batch preprocessing and validation
+        processed_batch = await self._preprocess_batch(message_batch_list, session_id)
+
+        # 2. Batch token calculation (single operation)
+        total_tokens = await self._calculate_batch_tokens(processed_batch)
+
+        # 3. Intelligent session and transfer management
+        session_changes = self._detect_session_changes(processed_batch)
+        transfer_strategy = self._plan_transfer_strategy(total_tokens, session_changes)
+
+        # 4. Execute optimized batch strategy
+        execution_result = await self._execute_batch_strategy(processed_batch, transfer_strategy)
+
+        # 5. Update statistics
+        processing_time = time.time() - start_time
+        self.total_writes += 1  # Update write count
+        self._update_batch_stats(execution_result, processing_time)
+
         return {
             "status": "success",
             "batch_size": len(message_batch_list),
-            "processed": len(results),
-            "total_transfers": total_transfers,
-            "results": results
+            "total_messages": sum(len(ml) for ml in message_batch_list if ml),
+            "total_tokens": total_tokens,
+            "transfers_triggered": execution_result.get("transfers", 0),
+            "processing_time": processing_time,
+            "strategy_used": transfer_strategy["type"]
         }
     
     def get_round_buffer(self) -> RoundBuffer:
@@ -230,3 +241,249 @@ class WriteBuffer:
         except Exception as e:
             logger.error(f"WriteBuffer: Error during clear_all: {e}")
             return {"status": "error", "message": f"Clear failed: {str(e)}"}
+
+    # Batch processing optimization methods
+
+    async def _preprocess_batch(self, message_batch_list: MessageBatchList, session_id: Optional[str]) -> MessageBatchList:
+        """Batch preprocessing with field validation.
+
+        Args:
+            message_batch_list: List of lists of messages
+            session_id: Session ID for context
+
+        Returns:
+            Preprocessed message batch list
+        """
+        processed_batch = []
+
+        for message_list in message_batch_list:
+            if not message_list:
+                continue
+
+            processed_list = []
+            for message in message_list:
+                # Ensure required fields
+                self._ensure_message_fields(message)
+                processed_list.append(message)
+
+            if processed_list:  # Only add non-empty lists
+                processed_batch.append(processed_list)
+
+        return processed_batch
+
+    def _ensure_message_fields(self, message: Dict[str, Any]) -> None:
+        """Ensure message has required fields.
+
+        Args:
+            message: Message dictionary to validate
+        """
+        if not isinstance(message, dict):
+            return
+
+        # Ensure ID
+        if 'id' not in message or not message['id']:
+            message['id'] = str(uuid.uuid4())
+
+        # Ensure timestamps
+        current_time = time.time()
+        if 'created_at' not in message or not message['created_at']:
+            message['created_at'] = current_time
+
+        if 'updated_at' not in message or not message['updated_at']:
+            message['updated_at'] = message['created_at']
+
+        # Ensure metadata
+        if 'metadata' not in message:
+            message['metadata'] = {}
+
+    async def _calculate_batch_tokens(self, message_batch_list: MessageBatchList) -> int:
+        """Optimized batch token calculation.
+
+        Args:
+            message_batch_list: List of lists of messages
+
+        Returns:
+            Total token count for all messages
+        """
+        if not message_batch_list:
+            return 0
+
+        # Flatten all messages for batch calculation
+        all_messages = []
+        for message_list in message_batch_list:
+            all_messages.extend(message_list)
+
+        if not all_messages:
+            return 0
+
+        # Use RoundBuffer's token counter for consistency
+        return self.round_buffer.token_counter.count_message_tokens(all_messages)
+
+    def _detect_session_changes(self, message_batch_list: MessageBatchList) -> List[str]:
+        """Detect session changes for optimized transfer strategy.
+
+        Args:
+            message_batch_list: List of lists of messages
+
+        Returns:
+            List of session transition identifiers
+        """
+        session_sequence = []
+
+        for message_list in message_batch_list:
+            # Extract session from first message in list
+            if message_list and isinstance(message_list[0], dict):
+                session = message_list[0].get('metadata', {}).get('session_id', 'default')
+                session_sequence.append(session)
+
+        # Identify transition points
+        transitions = []
+        current_session = None
+
+        for i, session in enumerate(session_sequence):
+            if session != current_session:
+                transitions.append(f"transition_{i}_{session}")
+                current_session = session
+
+        return transitions
+
+    def _plan_transfer_strategy(self, total_tokens: int, session_changes: List[str]) -> Dict[str, Any]:
+        """Plan optimal transfer strategy based on batch characteristics.
+
+        Args:
+            total_tokens: Total token count for the batch
+            session_changes: List of session transitions
+
+        Returns:
+            Dictionary describing the optimal strategy
+        """
+        if total_tokens > self.round_buffer.max_tokens * 2:
+            return {"type": "bulk_transfer", "reason": "high_token_count"}
+        elif len(session_changes) > 3:
+            return {"type": "session_grouped", "groups": session_changes, "reason": "multiple_sessions"}
+        else:
+            return {"type": "sequential", "reason": "standard_processing"}
+
+    async def _execute_batch_strategy(self, processed_batch: MessageBatchList, strategy: Dict) -> Dict[str, Any]:
+        """Execute batch processing according to strategy.
+
+        Args:
+            processed_batch: Preprocessed message batch list
+            strategy: Strategy dictionary from _plan_transfer_strategy
+
+        Returns:
+            Dictionary with execution results
+        """
+        if strategy["type"] == "bulk_transfer":
+            return await self._bulk_transfer_strategy(processed_batch)
+        elif strategy["type"] == "session_grouped":
+            return await self._session_grouped_strategy(processed_batch, strategy["groups"])
+        else:
+            return await self._sequential_strategy(processed_batch)
+
+    async def _bulk_transfer_strategy(self, processed_batch: MessageBatchList) -> Dict[str, Any]:
+        """Process entire batch as single bulk operation.
+
+        Args:
+            processed_batch: Preprocessed message batch list
+
+        Returns:
+            Dictionary with execution results
+        """
+        transfers = 0
+
+        # Add all to RoundBuffer first
+        for message_list in processed_batch:
+            result = await self.round_buffer.add(message_list)
+            if result:
+                transfers += 1
+
+        # Force transfer if needed
+        if self.round_buffer.rounds:
+            await self.round_buffer._transfer_and_clear("bulk_strategy")
+            transfers += 1
+
+        return {"transfers": transfers, "strategy": "bulk"}
+
+    async def _session_grouped_strategy(self, processed_batch: MessageBatchList, groups: List[str]) -> Dict[str, Any]:
+        """Process batch grouped by session for optimal performance.
+
+        Args:
+            processed_batch: Preprocessed message batch list
+            groups: Session group identifiers
+
+        Returns:
+            Dictionary with execution results
+        """
+        transfers = 0
+
+        # Group messages by session
+        session_groups = self._group_by_session(processed_batch)
+
+        # Process each session group
+        for session_id, message_lists in session_groups.items():
+            for message_list in message_lists:
+                result = await self.round_buffer.add(message_list, session_id)
+                if result:
+                    transfers += 1
+
+        return {"transfers": transfers, "strategy": "session_grouped", "groups": len(session_groups)}
+
+    async def _sequential_strategy(self, processed_batch: MessageBatchList) -> Dict[str, Any]:
+        """Standard sequential processing with optimizations.
+
+        Args:
+            processed_batch: Preprocessed message batch list
+
+        Returns:
+            Dictionary with execution results
+        """
+        transfers = 0
+
+        for message_list in processed_batch:
+            result = await self.round_buffer.add(message_list)
+            if result:
+                transfers += 1
+
+        return {"transfers": transfers, "strategy": "sequential"}
+
+    def _group_by_session(self, message_batch_list: MessageBatchList) -> Dict[str, List[MessageList]]:
+        """Group message lists by session ID.
+
+        Args:
+            message_batch_list: List of lists of messages
+
+        Returns:
+            Dictionary mapping session IDs to message lists
+        """
+        session_groups = {}
+
+        for message_list in message_batch_list:
+            if not message_list:
+                continue
+
+            # Extract session from first message
+            session_id = 'default'
+            if isinstance(message_list[0], dict):
+                session_id = message_list[0].get('metadata', {}).get('session_id', 'default')
+
+            if session_id not in session_groups:
+                session_groups[session_id] = []
+            session_groups[session_id].append(message_list)
+
+        return session_groups
+
+    def _update_batch_stats(self, execution_result: Dict[str, Any], processing_time: float) -> None:
+        """Update batch processing statistics.
+
+        Args:
+            execution_result: Result from batch execution
+            processing_time: Time taken for processing
+        """
+        # Update transfer count
+        self.total_transfers += execution_result.get("transfers", 0)
+
+        # Log performance metrics
+        logger.info(f"WriteBuffer: Batch processing completed in {processing_time:.3f}s, "
+                   f"strategy: {execution_result.get('strategy', 'unknown')}, "
+                   f"transfers: {execution_result.get('transfers', 0)}")

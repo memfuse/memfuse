@@ -12,6 +12,7 @@ from ..interfaces import MemoryInterface, ServiceInterface, MessageInterface, Me
 from ..buffer.write_buffer import WriteBuffer
 from ..buffer.query_buffer import QueryBuffer
 from ..buffer.speculative_buffer import SpeculativeBuffer
+from ..buffer.config_factory import BufferConfigManager
 
 if TYPE_CHECKING:
     from .memory_service import MemoryService
@@ -46,51 +47,43 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         # Get the actual user_id (UUID) from memory_service
         self.user_id = getattr(memory_service, '_user_id', user) if memory_service else user
         
-        # Buffer configuration
-        buffer_config = self.config.get('buffer', {})
-        round_config = buffer_config.get('round_buffer', {})
-        hybrid_config = buffer_config.get('hybrid_buffer', {})
-        query_config = buffer_config.get('query', {})
-        performance_config = buffer_config.get('performance', {})
+        # Initialize configuration manager for autonomous component configuration
+        self.config_manager = BufferConfigManager(self.config)
 
-        # FlushManager configuration
-        flush_config = {
-            'max_workers': performance_config.get('max_flush_workers', 3),
-            'max_queue_size': performance_config.get('max_flush_queue_size', 100),
-            'default_timeout': performance_config.get('flush_timeout', 30.0),
-            'flush_interval': performance_config.get('flush_interval', 60.0),
-            'enable_auto_flush': performance_config.get('enable_auto_flush', True)
-        }
+        # Validate configuration
+        if not self.config_manager.validate_configuration():
+            logger.warning("BufferService: Configuration validation failed, using defaults")
+
+        # Get component configurations from factory
+        buffer_service_config = self.config_manager.get_buffer_service_config()
 
         # Create MemoryService handler for storage operations
         memory_service_handler = self._create_memory_service_handler()
 
         # Rerank configuration
-        retrieval_config = self.config.get('retrieval', {})
+        retrieval_config = buffer_service_config.get('retrieval', {})
         self.use_rerank = retrieval_config.get('use_rerank', True)
 
-        # Initialize WriteBuffer (manages RoundBuffer, HybridBuffer, FlushManager)
-        write_buffer_config = {
-            'round_buffer': round_config,
-            'hybrid_buffer': hybrid_config,
-            'flush_manager': flush_config
-        }
+        # Initialize WriteBuffer with autonomous configuration
+        write_buffer_config = buffer_service_config['write_buffer']
         self.write_buffer = WriteBuffer(
             config=write_buffer_config,
             memory_service_handler=memory_service_handler
         )
 
-        # Initialize QueryBuffer for unified querying
+        # Initialize QueryBuffer with autonomous configuration
+        query_config = buffer_service_config['query_buffer']
         self.query_buffer = QueryBuffer(
             retrieval_handler=self._create_retrieval_handler(),
+            rerank_handler=self._create_rerank_handler(),
             max_size=query_config.get('max_size', 15),
             cache_size=query_config.get('cache_size', 100),
             default_sort_by=query_config.get('default_sort_by', 'score'),
             default_order=query_config.get('default_order', 'desc')
         )
 
-        # Initialize SpeculativeBuffer for predictive prefetching
-        speculative_config = buffer_config.get('speculative_buffer', {})
+        # Initialize SpeculativeBuffer with autonomous configuration
+        speculative_config = buffer_service_config['speculative_buffer']
         self.speculative_buffer = SpeculativeBuffer(
             max_size=speculative_config.get('max_size', 10),
             context_window=speculative_config.get('context_window', 3),
@@ -135,6 +128,25 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 return []
         
         return retrieval_handler
+
+    def _create_rerank_handler(self):
+        """Create rerank handler for QueryBuffer."""
+        if not self.use_rerank:
+            return None
+
+        async def rerank_handler(query: str, results: List[Any]) -> List[Any]:
+            """Handle reranking using the same logic as BufferService."""
+            try:
+                return await self._rerank_unified_results(
+                    query=query,
+                    items=results,
+                    top_k=len(results)  # Don't limit here, let QueryBuffer handle limiting
+                )
+            except Exception as e:
+                logger.error(f"BufferService: Rerank handler error: {e}")
+                return results
+
+        return rerank_handler
 
     def _create_memory_service_handler(self):
         """Create unified MemoryService handler for FlushManager.
@@ -276,86 +288,112 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         return await self.add_batch([messages], session_id=session_id)
     
     async def add_batch(self, message_batch_list: MessageBatchList, session_id: Optional[str] = None) -> Dict[str, Any]:
-        """Add a batch of message lists.
-        
+        """Add a batch of message lists (Service layer: orchestration and response formatting only).
+
         Args:
             message_batch_list: List of lists of messages (MessageBatchList)
             session_id: Session ID for context (passed as parameter)
-            
+
         Returns:
             Dictionary with status, data, and message information
         """
         if not self.memory_service:
             return self._error_response("No memory service available")
-        
+
         if not message_batch_list:
             return self._success_response([], "No message lists to add")
-        
-        try:
-            transfer_triggered = False
-            total_messages = 0
 
+        try:
             logger.debug(f"BufferService.add_batch: Processing {len(message_batch_list)} message lists")
 
-            for i, message_list in enumerate(message_batch_list):
-                if not message_list:
-                    continue
+            # 1. Pre-processing: Service-level metadata only
+            processed_batch = self._add_service_metadata(message_batch_list, session_id)
 
-                logger.debug(f"BufferService.add_batch: Processing message_list {i} with {len(message_list)} messages")
-                logger.debug(f"BufferService.add_batch: message_list type: {type(message_list)}")
+            # 2. Delegate to WriteBuffer for all concrete processing
+            result = await self.write_buffer.add_batch(processed_batch, session_id)
 
-                total_messages += len(message_list)
+            # 3. Service-level statistics and monitoring
+            self._update_service_stats(result)
 
-                # Add metadata and required fields to messages
-                for j, message in enumerate(message_list):
-                    logger.debug(f"BufferService.add_batch: Processing message {j}: type={type(message)}")
-                    # Ensure message is a dictionary
-                    if isinstance(message, dict):
-                        # Add metadata if not present
-                        if 'metadata' not in message:
-                            message['metadata'] = {}
-                        if self.user_id and 'user_id' not in message['metadata']:
-                            message['metadata']['user_id'] = self.user_id
-                        if session_id and 'session_id' not in message['metadata']:
-                            message['metadata']['session_id'] = session_id
+            # 4. Response formatting
+            return self._format_write_response(result, len(message_batch_list))
 
-                        # Add required fields for buffer consistency (id, created_at, updated_at)
-                        self._ensure_message_fields(message)
-
-                    else:
-                        logger.warning(f"BufferService: Skipping non-dict message {j}: {type(message)} - {message}")
-
-                # Add to WriteBuffer (manages RoundBuffer → HybridBuffer flow)
-                logger.debug(f"BufferService.add_batch: Adding message_list to WriteBuffer")
-                write_result = await self.write_buffer.add(message_list, session_id)
-                if write_result.get("transfer_triggered", False):
-                    transfer_triggered = True
-                    self.total_transfers += 1
-
-            # BufferService only manages buffer data flow
-            # Data will be persisted when HybridBuffer flushes to storage
-            logger.info(f"BufferService.add_batch: Added {len(message_batch_list)} message lists to Buffer system")
-
-            # Collect message IDs from the processed messages
-            message_ids = []
-            for message_list in message_batch_list:
-                for message in message_list:
-                    if isinstance(message, dict) and message.get('id'):
-                        message_ids.append(message['id'])
-
-            self.total_items_added += total_messages
-
-            return self._success_response(
-                {"message_ids": message_ids},  # Return message IDs from buffer
-                f"Added {len(message_batch_list)} message lists to Buffer system",
-                transfer_triggered=transfer_triggered,
-                total_messages=total_messages,
-                buffer_status="success"
-            )
-            
         except Exception as e:
-            logger.error(f"BufferService.add_batch: Error adding message batch: {e}")
-            return self._error_response(f"Error adding message batch: {str(e)}")
+            logger.error(f"BufferService.add_batch: Error: {e}")
+            return self._error_response(f"Batch operation failed: {str(e)}")
+
+    def _add_service_metadata(self, message_batch_list: MessageBatchList, session_id: Optional[str]) -> MessageBatchList:
+        """Add only service-level metadata (minimal processing).
+
+        Args:
+            message_batch_list: List of lists of messages
+            session_id: Session ID for context
+
+        Returns:
+            Message batch list with service-level metadata added
+        """
+        if not self.user_id and not session_id:
+            return message_batch_list
+
+        # Only add user_id and session_id at service level
+        for message_list in message_batch_list:
+            for message in message_list:
+                if isinstance(message, dict):
+                    if 'metadata' not in message:
+                        message['metadata'] = {}
+
+                    # Add user_id if available and not present
+                    if self.user_id and 'user_id' not in message['metadata']:
+                        message['metadata']['user_id'] = self.user_id
+
+                    # Add session_id if provided and not present
+                    if session_id and 'session_id' not in message['metadata']:
+                        message['metadata']['session_id'] = session_id
+
+        return message_batch_list
+
+    def _update_service_stats(self, result: Dict[str, Any]) -> None:
+        """Update service-level statistics.
+
+        Args:
+            result: Result from WriteBuffer.add_batch()
+        """
+        # Update service-level statistics
+        self.total_batch_writes += 1
+        self.total_items_added += result.get('total_messages', 0)
+        self.total_transfers += result.get('transfers_triggered', 0)
+
+        logger.info(f"BufferService: Batch completed - messages: {result.get('total_messages', 0)}, "
+                   f"transfers: {result.get('transfers_triggered', 0)}, "
+                   f"strategy: {result.get('strategy_used', 'unknown')}")
+
+    def _format_write_response(self, result: Dict[str, Any], batch_size: int) -> Dict[str, Any]:
+        """Format WriteBuffer result into service response.
+
+        Args:
+            result: Result from WriteBuffer.add_batch()
+            batch_size: Original batch size
+
+        Returns:
+            Formatted service response
+        """
+        # Extract message IDs if available (would need to be added to WriteBuffer result)
+        message_ids = result.get('message_ids', [])
+
+        return self._success_response(
+            data={
+                "message_ids": message_ids,
+                "batch_size": batch_size,
+                "total_messages": result.get('total_messages', 0),
+                "transfers_triggered": result.get('transfers_triggered', 0),
+                "strategy_used": result.get('strategy_used', 'unknown'),
+                "processing_time": result.get('processing_time', 0)
+            },
+            message=f"Added {batch_size} message lists to Buffer system",
+            transfer_triggered=result.get('transfers_triggered', 0) > 0,
+            total_messages=result.get('total_messages', 0),
+            buffer_status="success"
+        )
 
     def _ensure_message_fields(self, message: Dict[str, Any]) -> None:
         """Ensure message has required fields (id, created_at, updated_at).
@@ -396,8 +434,8 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         sort_by: Optional[str] = None,
         order: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Query memory for relevant messages with Buffer enhancements.
-        
+        """Query memory for relevant messages (Service layer: orchestration and response formatting only).
+
         Args:
             query: Query string
             top_k: Maximum number of results to return
@@ -409,78 +447,43 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             include_chunks: Whether to include chunks in results
             sort_by: Sort field ('score' or 'timestamp')
             order: Sort order ('asc' or 'desc')
-            
+
         Returns:
             Dictionary with status, code, and query results
         """
         if not self.memory_service:
             return self._error_response("No memory service available")
-        
+
         self.total_queries += 1
-        
+
         query_preview = query[:50] + "..." if len(query) > 50 else query
         logger.info(f"BufferService.query: Processing query '{query_preview}' with top_k={top_k}")
 
         try:
-            # Log buffer states before query (through WriteBuffer)
-            write_buffer = self.get_write_buffer()
-            round_buffer_size = len(write_buffer.get_round_buffer().rounds)
-            hybrid_buffer_size = len(write_buffer.get_hybrid_buffer().chunks)
-
-            logger.info(f"BufferService.query: Buffer states - RoundBuffer: {round_buffer_size} rounds, HybridBuffer: {hybrid_buffer_size} chunks")
-
-            # Query using QueryBuffer (through WriteBuffer abstraction)
-            logger.info("BufferService.query: Calling QueryBuffer.query")
-            hybrid_buffer = write_buffer.get_hybrid_buffer()
+            # Delegate all query logic to QueryBuffer (with internal reranking)
             results = await self.query_buffer.query(
                 query_text=query,
                 top_k=top_k,
                 sort_by=sort_by or "score",
                 order=order or "desc",
-                hybrid_buffer=hybrid_buffer
+                use_rerank=self.use_rerank
             )
 
             logger.info(f"BufferService.query: QueryBuffer returned {len(results) if results else 0} results")
-            logger.info(f"BufferService.query: Results type: {type(results)}")
-            if results:
-                logger.info(f"BufferService.query: First result keys: {list(results[0].keys()) if isinstance(results[0], dict) else 'not dict'}")
-            else:
-                logger.warning("BufferService.query: QueryBuffer returned empty results!")
 
-            # Apply reranking if enabled and we have results
-            if results and self.use_rerank:
-                reranked_results = await self._rerank_unified_results(
-                    query=query,
-                    items=results,
-                    top_k=top_k
-                )
-                logger.info(f"BufferService.query: Reranked to {len(reranked_results)} results")
-                limited_results = reranked_results
-            elif results:
-                # No reranking, just limit results
-                limited_results = results[:top_k]
-                logger.info(f"BufferService.query: No reranking applied, limited to {len(limited_results)} results")
-            else:
-                limited_results = []
-                logger.info("BufferService.query: No results to process")
-
-            # Format response to match MemoryService format exactly (same as V2)
-            # MemoryService returns {"data": {"results": [...], "total": ...}}
+            # Format response to match MemoryService format
             response = {
                 "status": "success",
                 "code": 200,
                 "data": {
-                    "results": limited_results,  # This is what the test script expects
-                    "total": len(limited_results)
+                    "results": results,
+                    "total": len(results)
                 },
-                "message": f"Retrieved {len(limited_results)} results using Buffer",
+                "message": f"Retrieved {len(results)} results using Buffer",
                 "errors": None,
             }
 
-            logger.info(f"BufferService.query: Returning response with {len(limited_results)} results")
-            logger.info(f"BufferService.query: Response structure: {{'status': '{response['status']}', 'data': {{'results': {len(response['data']['results'])}, 'total': {response['data']['total']}}}}}")
-            if limited_results:
-                logger.info(f"BufferService.query: First result sample: {limited_results[0]}")
+            logger.info(f"BufferService.query: Returning response with {len(results)} results")
             return response
 
         except Exception as e:
@@ -520,50 +523,13 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     order=order
                 )
             else:
-                # Return HybridBuffer + Database data
-                # With new architecture, HybridBuffer should be mostly empty (auto-flushed)
-                # But we still check both sources for completeness
-                all_messages = []
-
-                # Get messages from HybridBuffer (should be minimal due to auto-flush)
-                hybrid_messages = await self.hybrid_buffer.get_all_messages_for_read_api(
-                    limit=None,  # Get all first, apply limit later
+                # Delegate to QueryBuffer for session querying
+                return await self.query_buffer.query_by_session(
+                    session_id=session_id,
+                    limit=limit,
                     sort_by=sort_by,
                     order=order
                 )
-
-                # Filter by session_id and add to results
-                for msg in hybrid_messages:
-                    if msg.get('metadata', {}).get('session_id') == session_id:
-                        all_messages.append(msg)
-
-                # Get messages from database via memory service (primary source)
-                if hasattr(self.memory_service, 'get_messages_by_session'):
-                    stored_messages = await self.memory_service.get_messages_by_session(
-                        session_id=session_id,
-                        limit=None,
-                        sort_by=sort_by,
-                        order=order
-                    )
-                    all_messages.extend(stored_messages)
-
-                # Sort combined messages
-                if sort_by == 'timestamp':
-                    all_messages.sort(
-                        key=lambda x: x.get('created_at', ''),
-                        reverse=(order == 'desc')
-                    )
-                elif sort_by == 'id':
-                    all_messages.sort(
-                        key=lambda x: x.get('id', ''),
-                        reverse=(order == 'desc')
-                    )
-
-                # Apply limit
-                if limit is not None and limit > 0:
-                    all_messages = all_messages[:limit]
-
-                return all_messages
                 
         except Exception as e:
             logger.error(f"BufferService.get_messages_by_session: Error: {e}")
