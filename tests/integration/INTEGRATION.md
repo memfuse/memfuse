@@ -145,14 +145,14 @@ Integration tests are designed to:
 
 ### 📋 Knowledge API Integration
 
-**Status**: Planned  
-**File**: `test_api_integration.py`
+**Status**: ✅ **Completed**  
+**File**: `test_knowledge_api_integration.py`
 
-| Test Case           | Description                                    | Priority |
-| ------------------- | ---------------------------------------------- | -------- |
-| Knowledge Storage   | Verify knowledge chunk storage with embeddings | High     |
-| Knowledge Retrieval | Test knowledge search functionality            | High     |
-| Knowledge Scoping   | Test user-specific knowledge isolation         | High     |
+| Test Case           | Description                                    | Priority | Status  |
+| ------------------- | ---------------------------------------------- | -------- | ------- |
+| Knowledge Storage   | Verify knowledge chunk storage with embeddings | High     | ✅ Done |
+| Knowledge Retrieval | Test knowledge search functionality            | High     | ✅ Done |
+| Knowledge Scoping   | Test user-specific knowledge isolation         | High     | ✅ Done |
 
 ### 📋 Memory API Integration
 

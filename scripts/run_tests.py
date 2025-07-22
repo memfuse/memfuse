@@ -361,26 +361,24 @@ def run_layer(marker: str, extra_args: list = None) -> int:
         print(f"\033[1;33m⚠  Test directory {test_dir} does not exist, skipping {marker} layer\033[0m")
         return 0
     
+    # Base command with common ignore patterns for all layers
+    base_cmd = PYTEST_CMD + [
+        "--tb=short",
+        "--ignore-glob=**/legacy/**",  # Ignore all legacy folders
+        "--ignore-glob=**/ignore/**",  # Ignore all ignore folders
+    ]
+    
     # For layers with specific directories, we can run without markers
     # For layers that might be everywhere, use markers
     if marker == "slow":
         # slow tests might be anywhere, so use marker
-        cmd = PYTEST_CMD + [
+        cmd = base_cmd + [
             "-m", marker,
-            "--tb=short",
-            str(test_path)
-        ]
-    elif marker == "integration":
-        # integration layer - exclude legacy tests
-        cmd = PYTEST_CMD + [
-            "--tb=short",
-            "--ignore=" + str(test_path / "legacy"),
             str(test_path)
         ]
     else:
         # specific directory layers - run all tests in that directory
-        cmd = PYTEST_CMD + [
-            "--tb=short",
+        cmd = base_cmd + [
             str(test_path)
         ]
     
