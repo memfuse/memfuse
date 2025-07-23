@@ -110,8 +110,8 @@ class TestConfigurationOptimization:
         
         tables = config["tables"]
         
-        # Test M0 table naming (compatibility preserved)
-        assert tables["m0"]["messages"] == "m0_episodic"
+        # Test M0 table naming (updated to reflect raw data layer)
+        assert tables["m0"]["messages"] == "m0_raw"
         
         # Test M1 table naming (new episodic memory layer)
         assert tables["m1"]["episodes"] == "m1_episodic"
@@ -217,13 +217,13 @@ class TestConfigurationOptimization:
         with open(pgai_config_file, 'r') as f:
             config = yaml.safe_load(f)
         
-        # M0 should still use m0_episodic table for compatibility
+        # M0 should use m0_raw table to reflect raw data layer
         tables = config["tables"]
-        assert tables["m0"]["messages"] == "m0_episodic"
-        
-        # Memory layer configuration should preserve table name
+        assert tables["m0"]["messages"] == "m0_raw"
+
+        # Memory layer configuration should use updated table name
         memory_layers = config["memory_layers"]
-        assert memory_layers["m0"]["table_name"] == "m0_episodic"
+        assert memory_layers["m0"]["table_name"] == "m0_raw"
 
     def test_configuration_documentation(self, config_dir):
         """Test that configuration files have proper documentation."""

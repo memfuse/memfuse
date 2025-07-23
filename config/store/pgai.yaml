@@ -102,6 +102,15 @@ tables:
     behaviors: "m3_behaviors"
     embedding_view: "m3_procedural_embedding"
     vectorizer_name: "m3_procedural_vectorizer"
+
+  # MSMG layer tables (Multi-Scale Mental Graph)
+  msmg:
+    instances: "msmg_instances"
+    ontology: "msmg_ontology"
+    relations: "msmg_relations"
+    metacognitive: "msmg_metacognitive"
+    embedding_view: "msmg_instances_embedding"
+    vectorizer_name: "msmg_instances_vectorizer"
     
 
 
@@ -254,19 +263,26 @@ memory_layers:
       max_concurrent_extractions: 2
       fallback_on_failure: true
 
-  # M3 layer configuration (Procedural Memory) - Placeholder
+  # M3 layer configuration (Procedural Memory)
   m3:
-    enabled: false  # Placeholder implementation
+    enabled: true  # Now fully implemented
     priority: 4
-    table_name: "m3_procedural"
+
+    # M3 table configuration
+    tables:
+      patterns: "m3_procedural"
+      skills: "m3_skills"
+      behaviors: "m3_behaviors"
 
     # PgAI-specific settings for M3
     pgai:
       auto_embedding: true
       immediate_trigger: true
+      embedding_model: "all-MiniLM-L6-v2"
+      embedding_dimensions: 384
 
     # Processing pipeline configuration
-    processing_pipeline: ["pattern_recognition", "storage"]  # M3 recognizes patterns then storage
+    processing_pipeline: ["pattern_recognition", "skill_learning", "behavior_adaptation", "storage"]
 
     # Pattern recognition configuration (M3's primary function)
     pattern_recognition:
@@ -278,6 +294,20 @@ memory_layers:
       batch_size: 2
       context_window: 3  # larger context for pattern detection
 
+    # Skill learning configuration
+    skill_learning:
+      enabled: true
+      proficiency_tracking: true
+      decay_modeling: true
+      learning_rate_adaptation: true
+
+    # Behavior adaptation configuration
+    behavior_adaptation:
+      enabled: true
+      reinforcement_learning: true
+      priority_adjustment: true
+      activation_threshold_tuning: true
+
     # Performance settings
     performance:
       max_retries: 3
@@ -288,6 +318,52 @@ memory_layers:
 
     # Storage backend preferences
     storage_backends: ["vector", "sql"]
+
+  # MSMG layer configuration (Multi-Scale Mental Graph)
+  msmg:
+    enabled: true
+    priority: 5
+
+    # MSMG table configuration
+    tables:
+      instances: "msmg_instances"
+      ontology: "msmg_ontology"
+      relations: "msmg_relations"
+      metacognitive: "msmg_metacognitive"
+
+    # PgAI-specific settings for MSMG
+    pgai:
+      auto_embedding: true
+      immediate_trigger: true
+      embedding_model: "all-MiniLM-L6-v2"
+      embedding_dimensions: 384
+
+    # Graph construction configuration
+    graph_construction:
+      enabled: true
+      entity_extraction: true
+      relation_detection: true
+      ontology_mapping: true
+      context_grouping: true
+
+    # Meta-cognitive configuration
+    metacognitive:
+      enabled: true
+      provenance_tracking: true
+      certainty_modeling: true
+      forgetting_mechanism: true
+      importance_weighting: true
+
+    # Performance settings
+    performance:
+      max_retries: 3
+      retry_interval: 5.0
+      worker_count: 1
+      queue_size: 100
+      batch_size: 5
+
+    # Storage backend preferences
+    storage_backends: ["vector", "graph", "sql"]
 
 
 # =============================================================================

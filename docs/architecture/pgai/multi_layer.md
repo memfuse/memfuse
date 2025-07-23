@@ -51,8 +51,8 @@ graph TB
     end
     
     subgraph "Database Layer"
-        E --> I[(m0_episodic)]
-        F --> J[(m1_semantic)]
+        E --> I[(m0_raw)]
+        F --> J[(m1_episodic)]
         
         I --> K[M0 Embedding Triggers]
         J --> L[M1 Embedding Triggers]
@@ -143,9 +143,9 @@ stats = processor.get_stats()
 
 **Database Schema**:
 
-#### M0 Episodic Table (Enhanced)
+#### M0 Raw Data Table (Enhanced)
 ```sql
-CREATE TABLE m0_episodic (
+CREATE TABLE m0_raw (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     metadata JSONB DEFAULT '{}'::jsonb,
@@ -159,19 +159,20 @@ CREATE TABLE m0_episodic (
 );
 ```
 
-#### M1 Semantic Table (New)
+#### M1 Episodic Table (New)
 ```sql
-CREATE TABLE m1_semantic (
+CREATE TABLE m1_episodic (
     id TEXT PRIMARY KEY,
-    source_id TEXT,  -- References m0_episodic.id
+    source_id TEXT,  -- References m0_raw.id
     source_session_id TEXT,
     source_user_id TEXT,
-    fact_content TEXT NOT NULL,
-    fact_type TEXT NOT NULL CHECK (fact_type IN ('personal', 'preference', 'decision', 'general', 'temporal')),
+    episode_content TEXT NOT NULL,
+    episode_type TEXT,  -- Open-ended episode type, no constraints for extensibility
+    episode_category JSONB DEFAULT '{}'::jsonb,  -- Flexible categorization system
     confidence FLOAT NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
-    entities JSONB DEFAULT '[]'::jsonb,
-    temporal_info JSONB DEFAULT '{}'::jsonb,
-    source_context TEXT,
+    entities JSONB DEFAULT '[]'::jsonb,  -- Extracted entities from episode
+    temporal_info JSONB DEFAULT '{}'::jsonb,  -- Temporal information (dates, times, etc.)
+    source_context TEXT,  -- Brief context about where episode came from
     metadata JSONB DEFAULT '{}'::jsonb,
     embedding VECTOR(384),
     needs_embedding BOOLEAN DEFAULT TRUE,
@@ -194,7 +195,7 @@ memory_layers:
   m0:
     enabled: true
     priority: 1
-    table_name: "m0_episodic"
+    table_name: "m0_raw"
     
     # PgAI-specific settings for M0
     pgai:
@@ -218,7 +219,7 @@ memory_layers:
   m1:
     enabled: true
     priority: 2
-    table_name: "m1_semantic"
+    table_name: "m1_episodic"
     
     # PgAI-specific settings for M1
     pgai:
@@ -279,14 +280,14 @@ sequenceDiagram
     
     par M0 Processing
         MultiTableStore->>M0Store: write_to_layer(M0, chunks)
-        M0Store->>Database: INSERT INTO m0_episodic
+        M0Store->>Database: INSERT INTO m0_raw
         Database->>Database: TRIGGER: NOTIFY embedding_needed
     and M1 Processing
         MultiTableStore->>FactExtractor: extract_facts_from_data(chunks)
         FactExtractor->>FactExtractor: LLM fact extraction
         FactExtractor-->>MultiTableStore: extracted_facts
         MultiTableStore->>M1Store: write_to_layer(M1, facts)
-        M1Store->>Database: INSERT INTO m1_semantic
+        M1Store->>Database: INSERT INTO m1_episodic
         Database->>Database: TRIGGER: NOTIFY embedding_needed
     end
     
@@ -316,8 +317,8 @@ graph LR
 # Configuration
 config = {
     'memory_layers': {
-        'm0': {'enabled': True, 'table_name': 'm0_episodic'},
-        'm1': {'enabled': True, 'table_name': 'm1_semantic'}
+        'm0': {'enabled': True, 'table_name': 'm0_raw'},
+        'm1': {'enabled': True, 'table_name': 'm1_episodic'}
     }
 }
 

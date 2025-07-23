@@ -116,7 +116,7 @@ graph TB
         E --> I[MiniLM Local Model]
         F --> I
 
-        H --> J[m0_episodic Table]
+        H --> J[m0_raw Table]
         I --> J
     end
 
@@ -144,7 +144,7 @@ sequenceDiagram
     Note over App,Model: Our Custom pgai Implementation
 
     App->>Store: insert_data(content)
-    Store->>DB: INSERT INTO m0_episodic
+    Store->>DB: INSERT INTO m0_raw
     DB->>DB: Custom trigger fires
     DB->>TM: NOTIFY embedding_needed
     TM->>WP: Queue processing task
@@ -267,7 +267,7 @@ MemFuse now supports **multi-layer PgAI processing** with M0 (episodic) and M1 (
 |--------|------------------------|----------------------|
 | **Data Flow** | `data → M0` | `data → M0` + `data → M1` (parallel) |
 | **Processing** | Raw episodic storage | Episodic + semantic fact extraction |
-| **Tables** | `m0_episodic` | `m0_episodic` + `m1_semantic` |
+| **Tables** | `m0_raw` | `m0_raw` + `m1_episodic` |
 | **Embedding** | M0 auto-embedding | M0 + M1 auto-embedding |
 | **Use Cases** | Conversation memory | Conversation + structured knowledge |
 
@@ -379,7 +379,7 @@ sequenceDiagram
     participant EM as EmbeddingMonitor
 
     App->>Store: insert_data(content)
-    Store->>DB: INSERT INTO m0_episodic
+    Store->>DB: INSERT INTO m0_raw
     DB->>DB: TRIGGER fires
     DB->>TM: NOTIFY embedding_needed
     TM->>WP: submit_task(record_id)
@@ -420,7 +420,7 @@ store = EventDrivenPgaiStore(
             "enable_metrics": True
         }
     },
-    table_name="m0_episodic"
+    table_name="m0_raw"
 )
 ```
 
@@ -549,10 +549,10 @@ MemFuse supports two distinct embedding generation modes, each optimized for dif
 
 ### M0 Episodic Memory Schema
 
-The `m0_episodic` table is designed for the M0 memory layer with immediate trigger support:
+The `m0_raw` table is designed for the M0 memory layer with immediate trigger support:
 
 ```sql
-CREATE TABLE m0_episodic (
+CREATE TABLE m0_raw (
     id              TEXT PRIMARY KEY,
     content         TEXT NOT NULL,
     metadata        JSONB DEFAULT '{}'::jsonb,
@@ -599,22 +599,22 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- 2. Create trigger on INSERT and UPDATE
-CREATE TRIGGER m0_episodic_embedding_trigger
-    AFTER INSERT OR UPDATE OF needs_embedding ON m0_episodic
+CREATE TRIGGER m0_raw_embedding_trigger
+    AFTER INSERT OR UPDATE OF needs_embedding ON m0_raw
     FOR EACH ROW
     EXECUTE FUNCTION notify_embedding_needed();
 
 -- 3. Create indexes for performance
-CREATE INDEX m0_episodic_needs_embedding_idx ON m0_episodic (needs_embedding) WHERE needs_embedding = TRUE;
-CREATE INDEX m0_episodic_retry_status_idx ON m0_episodic (retry_status);
-CREATE INDEX m0_episodic_retry_count_idx ON m0_episodic (retry_count);
+CREATE INDEX m0_raw_needs_embedding_idx ON m0_raw (needs_embedding) WHERE needs_embedding = TRUE;
+CREATE INDEX m0_raw_retry_status_idx ON m0_raw (retry_status);
+CREATE INDEX m0_raw_retry_count_idx ON m0_raw (retry_count);
 ```
 
 ### Indexes for Performance
 
 ```sql
 -- Primary key index (automatic)
-CREATE INDEX m0_episodic_pkey ON m0_episodic USING btree (id);
+CREATE INDEX m0_raw_pkey ON m0_raw USING btree (id);
 
 -- Auto-embedding query optimization
 CREATE INDEX idx_needs_embedding ON m0_messages(needs_embedding)
@@ -1236,10 +1236,10 @@ database:
 
 # M0 Layer Configuration
 m0:
-  messages: "m0_episodic"                # M0 episodic memory table
+  messages: "m0_raw"                # M0 raw data memory table
   metadata: "m0_metadata"                # M0 metadata table
-  embedding_view: "m0_episodic_embedding" # Embedding view name
-  vectorizer_name: "m0_episodic_vectorizer" # Vectorizer name
+  embedding_view: "m0_raw_embedding" # Embedding view name
+  vectorizer_name: "m0_raw_vectorizer" # Vectorizer name
 ```
 
 ### Configuration Parameters Explained
@@ -1451,7 +1451,7 @@ config = {
 
 store = EventDrivenPgaiStore(
     config=config,
-    table_name="m0_episodic"
+    table_name="m0_raw"
 )
 
 # Option 2: Factory-based automatic selection
@@ -2518,20 +2518,20 @@ pgai:
 
 #### 3. Database Schema Migration
 
-If you have existing `m0_messages` tables, rename them to `m0_episodic`:
+If you have existing `m0_messages` tables, rename them to `m0_raw`:
 
 ```sql
 -- Rename existing table
-ALTER TABLE m0_messages RENAME TO m0_episodic;
+ALTER TABLE m0_messages RENAME TO m0_raw;
 
 -- Add new columns for immediate trigger support
-ALTER TABLE m0_episodic ADD COLUMN retry_count INTEGER DEFAULT 0;
-ALTER TABLE m0_episodic ADD COLUMN last_retry_at TIMESTAMP;
-ALTER TABLE m0_episodic ADD COLUMN retry_status TEXT DEFAULT 'pending';
+ALTER TABLE m0_raw ADD COLUMN retry_count INTEGER DEFAULT 0;
+ALTER TABLE m0_raw ADD COLUMN last_retry_at TIMESTAMP;
+ALTER TABLE m0_raw ADD COLUMN retry_status TEXT DEFAULT 'pending';
 
 -- Create indexes
-CREATE INDEX m0_episodic_needs_embedding_idx ON m0_episodic (needs_embedding) WHERE needs_embedding = TRUE;
-CREATE INDEX m0_episodic_retry_status_idx ON m0_episodic (retry_status);
+CREATE INDEX m0_raw_needs_embedding_idx ON m0_raw (needs_embedding) WHERE needs_embedding = TRUE;
+CREATE INDEX m0_raw_retry_status_idx ON m0_raw (retry_status);
 
 -- Setup immediate trigger
 CREATE OR REPLACE FUNCTION notify_embedding_needed()
@@ -2544,8 +2544,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER m0_episodic_embedding_trigger
-    AFTER INSERT OR UPDATE OF needs_embedding ON m0_episodic
+CREATE TRIGGER m0_raw_embedding_trigger
+    AFTER INSERT OR UPDATE OF needs_embedding ON m0_raw
     FOR EACH ROW
     EXECUTE FUNCTION notify_embedding_needed();
 ```
@@ -2557,10 +2557,10 @@ CREATE TRIGGER m0_episodic_embedding_trigger
 store = EventDrivenPgaiStore(config=config, table_name="m0_messages")
 
 # New code (recommended)
-store = EventDrivenPgaiStore(config=config, table_name="m0_episodic")
+store = EventDrivenPgaiStore(config=config, table_name="m0_raw")
 
 # Or use factory for automatic selection
-store = PgaiStoreFactory.create_store(config=config, table_name="m0_episodic")
+store = PgaiStoreFactory.create_store(config=config, table_name="m0_raw")
 ```
 
 #### 5. Performance Monitoring
@@ -2581,7 +2581,7 @@ print(f"Success rate: {stats['performance']['success_rate']:.2%}")
 ### Migration Checklist
 
 - [ ] Update configuration files with immediate trigger settings
-- [ ] Rename `m0_messages` to `m0_episodic` in database
+- [ ] Rename `m0_messages` to `m0_raw` in database
 - [ ] Add retry-related columns to database schema
 - [ ] Setup database triggers for immediate notification
 - [ ] Update application imports (optional but recommended)

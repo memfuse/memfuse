@@ -56,9 +56,9 @@ def test_file_contents():
     # Test key files have expected content
     tests = [
         ("__init__.py", ["PgaiStore", "EventDrivenPgaiStore", "EventDrivenPgaiStore"]),
-        ("pgai_store.py", ["class PgaiStore", "m0_episodic"]),
+        ("pgai_store.py", ["class PgaiStore", "m0_raw"]),
         ("event_driven_store.py", ["class EventDrivenPgaiStore", "EventDrivenPgaiStore = EventDrivenPgaiStore"]),
-        ("store_factory.py", ["class PgaiStoreFactory", "m0_episodic"]),
+        ("store_factory.py", ["class PgaiStoreFactory", "m0_raw"]),
     ]
     
     results = []
@@ -86,8 +86,8 @@ def test_table_name_in_configs():
     print("=" * 50)
     
     config_files = [
-        ("config/memory/default.yaml", "m0_episodic"),
-        ("config/store/pgai.yaml", "m0_episodic"),
+        ("config/memory/default.yaml", "m0_raw"),
+        ("config/store/pgai.yaml", "m0_raw"),
     ]
     
     base_path = Path(__file__).parent.parent.parent
@@ -116,9 +116,9 @@ def test_database_schema_updates():
     print("=" * 50)
     
     schema_files = [
-        ("src/memfuse_core/database/sqlite.py", "m0_episodic"),
-        ("src/memfuse_core/database/base.py", "get_m0_episodic_by_session"),
-        ("src/memfuse_core/hierarchy/storage.py", "m0_episodic"),
+        ("src/memfuse_core/database/sqlite.py", "m0_raw"),
+        ("src/memfuse_core/database/base.py", "get_m0_raw_by_session"),
+        ("src/memfuse_core/hierarchy/storage.py", "m0_raw"),
     ]
     
     base_path = Path(__file__).parent.parent.parent
@@ -220,7 +220,7 @@ def main():
         print("\n📋 Summary of Changes:")
         print("  ✅ Created pgai_store/ directory")
         print("  ✅ Moved all pgai-related files to pgai_store/")
-        print("  ✅ Updated table name from m0_messages to m0_episodic")
+        print("  ✅ Updated table name from m0_messages to m0_raw")
         print("  ✅ Updated configuration files")
         print("  ✅ Updated database schema references")
         print("  ✅ Maintained backward compatibility")

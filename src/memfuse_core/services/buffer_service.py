@@ -46,61 +46,78 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         
         # Get the actual user_id (UUID) from memory_service
         self.user_id = getattr(memory_service, '_user_id', user) if memory_service else user
-        
-        # Initialize configuration manager for autonomous component configuration
-        self.config_manager = BufferConfigManager(self.config)
 
-        # Validate configuration
-        if not self.config_manager.validate_configuration():
-            logger.warning("BufferService: Configuration validation failed, using defaults")
+        # Check if buffer is enabled (use global config, not just buffer section)
+        buffer_config = self.config.get('buffer', {})
+        self.buffer_enabled = buffer_config.get('enabled', True)
 
-        # Get component configurations from factory
-        buffer_service_config = self.config_manager.get_buffer_service_config()
-
-        # Create MemoryService handler for storage operations
-        memory_service_handler = self._create_memory_service_handler()
-
-        # Rerank configuration
-        retrieval_config = buffer_service_config.get('retrieval', {})
-        self.use_rerank = retrieval_config.get('use_rerank', True)
-
-        # Initialize WriteBuffer with autonomous configuration
-        write_buffer_config = buffer_service_config['write_buffer']
-        self.write_buffer = WriteBuffer(
-            config=write_buffer_config,
-            memory_service_handler=memory_service_handler
-        )
-
-        # Initialize QueryBuffer with autonomous configuration
-        query_config = buffer_service_config['query_buffer']
-        self.query_buffer = QueryBuffer(
-            retrieval_handler=self._create_retrieval_handler(),
-            rerank_handler=self._create_rerank_handler(),
-            max_size=query_config.get('max_size', 15),
-            cache_size=query_config.get('cache_size', 100),
-            default_sort_by=query_config.get('default_sort_by', 'score'),
-            default_order=query_config.get('default_order', 'desc')
-        )
-
-        # Initialize SpeculativeBuffer with autonomous configuration
-        speculative_config = buffer_service_config['speculative_buffer']
-        self.speculative_buffer = SpeculativeBuffer(
-            max_size=speculative_config.get('max_size', 10),
-            context_window=speculative_config.get('context_window', 3),
-            retrieval_handler=self._create_retrieval_handler()
-        )
-
-        # Set up component connections
-        self.query_buffer.set_hybrid_buffer(self.write_buffer.get_hybrid_buffer())
-        
-        # Statistics
+        # Statistics (always available)
         self.total_items_added = 0
         self.total_queries = 0
         self.total_batch_writes = 0
         self.total_transfers = 0
-        
-        logger.info(f"BufferService: Initialized for user {user} with Buffer architecture")
-        logger.info(f"BufferService: Rerank enabled: {self.use_rerank}")
+
+        if not self.buffer_enabled:
+            # Bypass mode: Minimal initialization
+            logger.info(f"BufferService: Buffer disabled, operating in bypass mode for user {user}")
+            self.write_buffer = None
+            self.query_buffer = None
+            self.speculative_buffer = None
+            self.config_manager = None
+            self.use_rerank = False
+        else:
+            # Normal mode: Full buffer architecture
+            logger.info(f"BufferService: Buffer enabled, initializing full architecture for user {user}")
+
+            # Initialize configuration manager for autonomous component configuration
+            self.config_manager = BufferConfigManager(self.config)
+
+            # Validate configuration
+            if not self.config_manager.validate_configuration():
+                logger.warning("BufferService: Configuration validation failed, using defaults")
+
+            # Get component configurations from factory
+            buffer_service_config = self.config_manager.get_buffer_service_config()
+
+            # Create MemoryService handler for storage operations
+            memory_service_handler = self._create_memory_service_handler()
+
+            # Rerank configuration
+            retrieval_config = buffer_service_config.get('retrieval', {})
+            self.use_rerank = retrieval_config.get('use_rerank', True)
+
+            # Initialize WriteBuffer with autonomous configuration
+            write_buffer_config = buffer_service_config['write_buffer']
+            self.write_buffer = WriteBuffer(
+                config=write_buffer_config,
+                memory_service_handler=memory_service_handler
+            )
+
+            # Initialize QueryBuffer with autonomous configuration
+            query_config = buffer_service_config['query_buffer']
+            self.query_buffer = QueryBuffer(
+                retrieval_handler=self._create_retrieval_handler(),
+                rerank_handler=self._create_rerank_handler(),
+                max_size=query_config.get('max_size', 15),
+                cache_size=query_config.get('cache_size', 100),
+                default_sort_by=query_config.get('default_sort_by', 'score'),
+                default_order=query_config.get('default_order', 'desc')
+            )
+
+            # Initialize SpeculativeBuffer with autonomous configuration
+            speculative_config = buffer_service_config['speculative_buffer']
+            self.speculative_buffer = SpeculativeBuffer(
+                max_size=speculative_config.get('max_size', 10),
+                context_window=speculative_config.get('context_window', 3),
+                retrieval_handler=self._create_retrieval_handler()
+            )
+
+            # Set up component connections
+            self.query_buffer.set_hybrid_buffer(self.write_buffer.get_hybrid_buffer())
+
+        logger.info(f"BufferService: Initialized for user {user} with {'bypass' if not self.buffer_enabled else 'buffer'} mode")
+        if self.buffer_enabled:
+            logger.info(f"BufferService: Rerank enabled: {self.use_rerank}")
     
     def _create_retrieval_handler(self):
         """Create retrieval handler for QueryBuffer."""
@@ -205,34 +222,48 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             True if initialization was successful, False otherwise
         """
         try:
-            # Initialize WriteBuffer (manages FlushManager, HybridBuffer, RoundBuffer internally)
-            if hasattr(self.write_buffer, 'initialize'):
-                if not await self.write_buffer.initialize():
-                    logger.error("BufferService: Failed to initialize WriteBuffer")
-                    return False
+            if not self.buffer_enabled:
+                # Bypass mode: Only initialize MemoryService
+                logger.info("BufferService: Bypass mode - skipping buffer component initialization")
 
-            # Initialize QueryBuffer
-            if hasattr(self.query_buffer, 'initialize'):
-                if not await self.query_buffer.initialize():
-                    logger.error("BufferService: Failed to initialize QueryBuffer")
-                    return False
-
-            # Initialize SpeculativeBuffer
-            if hasattr(self.speculative_buffer, 'initialize'):
-                if not await self.speculative_buffer.initialize():
-                    logger.error("BufferService: Failed to initialize SpeculativeBuffer")
-                    return False
-
-            # Initialize memory service if needed
-            if self.memory_service:
-                if hasattr(self.memory_service, 'initialize'):
+                if self.memory_service and hasattr(self.memory_service, 'initialize'):
                     if cfg is not None:
                         await self.memory_service.initialize(cfg)
                     else:
                         await self.memory_service.initialize()
 
-            logger.info("BufferService: Initialization completed successfully")
-            return True
+                logger.info("BufferService: Bypass mode initialization completed")
+                return True
+            else:
+                # Normal mode: Full initialization
+                # Initialize WriteBuffer (manages FlushManager, HybridBuffer, RoundBuffer internally)
+                if hasattr(self.write_buffer, 'initialize'):
+                    if not await self.write_buffer.initialize():
+                        logger.error("BufferService: Failed to initialize WriteBuffer")
+                        return False
+
+                # Initialize QueryBuffer
+                if hasattr(self.query_buffer, 'initialize'):
+                    if not await self.query_buffer.initialize():
+                        logger.error("BufferService: Failed to initialize QueryBuffer")
+                        return False
+
+                # Initialize SpeculativeBuffer
+                if hasattr(self.speculative_buffer, 'initialize'):
+                    if not await self.speculative_buffer.initialize():
+                        logger.error("BufferService: Failed to initialize SpeculativeBuffer")
+                        return False
+
+                # Initialize memory service if needed
+                if self.memory_service:
+                    if hasattr(self.memory_service, 'initialize'):
+                        if cfg is not None:
+                            await self.memory_service.initialize(cfg)
+                        else:
+                            await self.memory_service.initialize()
+
+                logger.info("BufferService: Full initialization completed successfully")
+                return True
 
         except Exception as e:
             logger.error(f"BufferService: Failed to initialize: {e}")
@@ -306,17 +337,37 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         try:
             logger.debug(f"BufferService.add_batch: Processing {len(message_batch_list)} message lists")
 
-            # 1. Pre-processing: Service-level metadata only
-            processed_batch = self._add_service_metadata(message_batch_list, session_id)
+            if not self.buffer_enabled:
+                # Bypass mode: Direct MemoryService integration
+                logger.info(f"BufferService: Bypass mode - sending {len(message_batch_list)} message lists directly to MemoryService")
 
-            # 2. Delegate to WriteBuffer for all concrete processing
-            result = await self.write_buffer.add_batch(processed_batch, session_id)
+                # Add minimal service-level metadata
+                processed_batch = self._add_service_metadata(message_batch_list, session_id)
 
-            # 3. Service-level statistics and monitoring
-            self._update_service_stats(result)
+                # Direct call to MemoryService.add_batch()
+                result = await self.memory_service.add_batch(processed_batch)
 
-            # 4. Response formatting
-            return self._format_write_response(result, len(message_batch_list))
+                # Update statistics
+                self.total_batch_writes += 1
+                self.total_items_added += len(message_batch_list)
+
+                # Format response for bypass mode
+                return self._format_bypass_response(result, len(message_batch_list))
+            else:
+                # Normal mode: Full buffer processing
+                logger.debug(f"BufferService: Buffer mode - processing through WriteBuffer")
+
+                # 1. Pre-processing: Service-level metadata only
+                processed_batch = self._add_service_metadata(message_batch_list, session_id)
+
+                # 2. Delegate to WriteBuffer for all concrete processing
+                result = await self.write_buffer.add_batch(processed_batch, session_id)
+
+                # 3. Service-level statistics and monitoring
+                self._update_service_stats(result)
+
+                # 4. Response formatting
+                return self._format_write_response(result, len(message_batch_list))
 
         except Exception as e:
             logger.error(f"BufferService.add_batch: Error: {e}")
@@ -366,6 +417,54 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         logger.info(f"BufferService: Batch completed - messages: {result.get('total_messages', 0)}, "
                    f"transfers: {result.get('transfers_triggered', 0)}, "
                    f"strategy: {result.get('strategy_used', 'unknown')}")
+
+    def _format_bypass_response(self, result: Dict[str, Any], batch_size: int) -> Dict[str, Any]:
+        """Format response for bypass mode add_batch.
+
+        Args:
+            result: MemoryService result dictionary
+            batch_size: Number of message lists in the batch
+
+        Returns:
+            Formatted service response
+        """
+        if result.get("status") == "success":
+            return self._success_response(
+                data={
+                    "mode": "bypass",
+                    "batch_size": batch_size,
+                    "memory_service_result": result.get("data", {}),
+                    "message": f"Processed {batch_size} message lists via MemoryService"
+                },
+                message=f"Successfully processed {batch_size} message lists in bypass mode"
+            )
+        else:
+            return self._error_response(f"MemoryService processing failed: {result.get('message', 'Unknown error')}")
+
+    def _format_bypass_query_response(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Format response for bypass mode query.
+
+        Args:
+            result: MemoryService query result dictionary
+
+        Returns:
+            Formatted service response
+        """
+        if result.get("status") == "success":
+            return {
+                "status": "success",
+                "code": 200,
+                "data": {
+                    "mode": "bypass",
+                    "results": result.get("data", {}).get("results", []),
+                    "total": result.get("data", {}).get("total", 0),
+                    "memory_service_result": result.get("data", {})
+                },
+                "message": "Query processed via MemoryService in bypass mode",
+                "errors": None
+            }
+        else:
+            return self._error_response(f"MemoryService query failed: {result.get('message', 'Unknown error')}")
 
     def _format_write_response(self, result: Dict[str, Any], batch_size: int) -> Dict[str, Any]:
         """Format WriteBuffer result into service response.
@@ -460,31 +559,50 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         logger.info(f"BufferService.query: Processing query '{query_preview}' with top_k={top_k}")
 
         try:
-            # Delegate all query logic to QueryBuffer (with internal reranking)
-            results = await self.query_buffer.query(
-                query_text=query,
-                top_k=top_k,
-                sort_by=sort_by or "score",
-                order=order or "desc",
-                use_rerank=self.use_rerank
-            )
+            if not self.buffer_enabled:
+                # Bypass mode: Direct MemoryService query
+                logger.info(f"BufferService: Bypass mode - querying MemoryService directly")
 
-            logger.info(f"BufferService.query: QueryBuffer returned {len(results) if results else 0} results")
+                result = await self.memory_service.query(
+                    query=query,
+                    top_k=top_k,
+                    store_type=store_type,
+                    session_id=session_id,
+                    include_messages=include_messages,
+                    include_knowledge=include_knowledge,
+                    include_chunks=include_chunks
+                )
 
-            # Format response to match MemoryService format
-            response = {
-                "status": "success",
-                "code": 200,
-                "data": {
-                    "results": results,
-                    "total": len(results)
-                },
-                "message": f"Retrieved {len(results)} results using Buffer",
-                "errors": None,
-            }
+                return self._format_bypass_query_response(result)
+            else:
+                # Normal mode: QueryBuffer processing
+                logger.debug(f"BufferService: Buffer mode - processing through QueryBuffer")
 
-            logger.info(f"BufferService.query: Returning response with {len(results)} results")
-            return response
+                # Delegate all query logic to QueryBuffer (with internal reranking)
+                results = await self.query_buffer.query(
+                    query_text=query,
+                    top_k=top_k,
+                    sort_by=sort_by or "score",
+                    order=order or "desc",
+                    use_rerank=self.use_rerank
+                )
+
+                logger.info(f"BufferService.query: QueryBuffer returned {len(results) if results else 0} results")
+
+                # Format response to match MemoryService format
+                response = {
+                    "status": "success",
+                    "code": 200,
+                    "data": {
+                        "results": results,
+                        "total": len(results)
+                    },
+                    "message": f"Retrieved {len(results)} results using Buffer",
+                    "errors": None,
+                }
+
+                logger.info(f"BufferService.query: Returning response with {len(results)} results")
+                return response
 
         except Exception as e:
             logger.error(f"BufferService.query: Error querying: {e}")
@@ -514,23 +632,33 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             return []
         
         try:
-            if buffer_only:
-                # Only return RoundBuffer data (through WriteBuffer)
-                round_buffer = self.get_write_buffer().get_round_buffer()
-                return await round_buffer.get_all_messages_for_read_api(
-                    limit=limit,
-                    sort_by=sort_by,
-                    order=order
-                )
-            else:
-                # Delegate to QueryBuffer for session querying
-                return await self.query_buffer.query_by_session(
+            if not self.buffer_enabled:
+                # Bypass mode: Delegate to MemoryService
+                return await self.memory_service.get_messages_by_session(
                     session_id=session_id,
                     limit=limit,
                     sort_by=sort_by,
                     order=order
                 )
-                
+            else:
+                # Normal mode: Use buffer components
+                if buffer_only:
+                    # Only return RoundBuffer data (through WriteBuffer)
+                    round_buffer = self.get_write_buffer().get_round_buffer()
+                    return await round_buffer.get_all_messages_for_read_api(
+                        limit=limit,
+                        sort_by=sort_by,
+                        order=order
+                    )
+                else:
+                    # Delegate to QueryBuffer for session querying
+                    return await self.query_buffer.query_by_session(
+                        session_id=session_id,
+                        limit=limit,
+                        sort_by=sort_by,
+                        order=order
+                    )
+
         except Exception as e:
             logger.error(f"BufferService.get_messages_by_session: Error: {e}")
             return []

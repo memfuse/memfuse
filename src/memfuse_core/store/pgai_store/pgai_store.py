@@ -88,7 +88,7 @@ class PgaiStore(ChunkStoreInterface):
     while maintaining compatibility with existing MemFuse schema.
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None, table_name: str = "m0_episodic"):
+    def __init__(self, config: Optional[Dict[str, Any]] = None, table_name: str = "m0_raw"):
         """Initialize pgai store.
 
         Args:
@@ -368,7 +368,7 @@ class PgaiStore(ChunkStoreInterface):
         logger.debug(f"Schema needs setup for {self.table_name}, proceeding with creation...")
         async with self.pool.connection() as conn:
             try:
-                # Create table compatible with existing m0_episodic schema
+                # Create table compatible with existing m0_raw schema
                 logger.debug(f"Creating table {self.table_name} if not exists...")
                 await conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {self.table_name} (

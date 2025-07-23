@@ -28,6 +28,18 @@ class ExtractedFact:
 
 
 @dataclass
+class FormedEpisode:
+    """Represents a formed episode from raw content."""
+    episode_content: str
+    episode_type: str  # Flexible episode type, no constraints for extensibility
+    confidence: float
+    entities: Optional[List[str]] = None
+    temporal_info: Optional[Dict[str, Any]] = None
+    source_context: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass
 class ValidationResult:
     """Result of fact validation."""
     is_valid: bool

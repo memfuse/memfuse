@@ -161,7 +161,7 @@ class StoreBackendAdapter(StorageBackend):
         """Get the appropriate table name for the storage type."""
         # Map storage types to table names
         table_mapping = {
-            StorageType.SQL: "m0_episodic",  # Default table for SQL storage (M0 layer)
+            StorageType.SQL: "m0_raw",  # Default table for SQL storage (M0 layer)
             StorageType.VECTOR: "vector_data",
             StorageType.KEYWORD: "keyword_data",
             StorageType.GRAPH: "graph_data"

@@ -208,7 +208,7 @@ class TestConfigurationNaming:
     def test_table_naming_conventions(self):
         """Test that table names follow the new conventions."""
         expected_tables = {
-            "m0": "m0_episodic",  # Note: keeping existing table name for compatibility
+            "m0": "m0_raw",  # Raw data layer
             "m1": "m1_episodic",
             "m2": "m2_semantic"
         }
@@ -251,11 +251,11 @@ class TestBackwardCompatibility:
 
     def test_table_name_compatibility(self):
         """Test that critical table names are preserved for compatibility."""
-        # m0_episodic table name should be preserved for existing data
-        # This is a design decision to avoid data migration
-        
-        # In configuration, m0 should still use m0_episodic table
-        # even though it's now the "Raw Data" layer
+        # m0_raw table name reflects the new architecture
+        # M0 is now the Raw Data layer, not episodic memory
+
+        # In configuration, m0 should use m0_raw table
+        # to reflect its role as the Raw Data layer
         assert True  # Placeholder for actual compatibility tests
 
     def test_api_compatibility(self):

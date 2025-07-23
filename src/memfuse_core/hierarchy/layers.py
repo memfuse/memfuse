@@ -266,14 +266,14 @@ class M1EpisodicLayer(MemoryLayer):
     
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
         """
-        Process data through M1 layer (fact extraction).
+        Process data through M1 layer (episode formation).
 
         Args:
-            data: Data to extract facts from
+            data: Data to form episodes from
             metadata: Optional metadata
 
         Returns:
-            ProcessingResult with extracted facts
+            ProcessingResult with formed episodes
         """
         start_time = time.time()
         
@@ -281,19 +281,19 @@ class M1EpisodicLayer(MemoryLayer):
             if not self.initialized:
                 await self.initialize()
             
-            # Extract facts from data (placeholder for LLM integration)
-            facts = await self._extract_facts(data, metadata)
-            
-            # Convert facts to ChunkData objects and store
+            # Form episodes from data (placeholder for LLM integration)
+            episodes = await self._form_episodes(data, metadata)
+
+            # Convert episodes to ChunkData objects and store
             processed_items = []
-            if facts and self.storage_manager:
-                fact_chunks = self._convert_facts_to_chunks(facts, metadata)
-                for chunk in fact_chunks:
-                    fact_id = await self.storage_manager.write_to_backend(
+            if episodes and self.storage_manager:
+                episode_chunks = self._convert_episodes_to_chunks(episodes, metadata)
+                for chunk in episode_chunks:
+                    episode_id = await self.storage_manager.write_to_backend(
                         StorageType.VECTOR, chunk, metadata
                     )
-                    if fact_id:
-                        processed_items.append(fact_id)
+                    if episode_id:
+                        processed_items.append(episode_id)
             
             processing_time = time.time() - start_time
             success = len(processed_items) > 0
@@ -306,14 +306,14 @@ class M1EpisodicLayer(MemoryLayer):
                 success=success,
                 layer_type=self.layer_type,
                 processed_items=processed_items,
-                metadata={"facts_extracted": len(facts)},
+                metadata={"episodes_formed": len(episodes)},
                 processing_time=processing_time
             )
             
             # Note: Event emission for M2 processing would be handled by the parallel manager
             # No direct event bus access needed in individual layers
 
-            logger.debug(f"M1EpisodicLayer: Extracted {len(facts)} episodes")
+            logger.debug(f"M1EpisodicLayer: Formed {len(episodes)} episodes")
             return result
 
         except Exception as e:
@@ -329,14 +329,14 @@ class M1EpisodicLayer(MemoryLayer):
             )
     
     async def query(self, query: str, **kwargs) -> List[Any]:
-        """Query facts from M1 layer."""
+        """Query episodes from M1 layer."""
         try:
             if not self.initialized:
                 await self.initialize()
 
             self.total_queries += 1
 
-            # Query facts from vector store
+            # Query episodes from vector store
             results = []
             if self.storage_manager:
                 results = await self.storage_manager.read_from_backend(
@@ -354,7 +354,7 @@ class M1EpisodicLayer(MemoryLayer):
     
     async def process_new_data(self, data: Any, user_id: str, session_id: Optional[str] = None) -> ProcessingResult:
         """
-        Process new data for fact extraction (compatibility method for MemoryService).
+        Process new data for episode formation (compatibility method for MemoryService).
 
         Args:
             data: Data to process (chunks from M0)
@@ -362,7 +362,7 @@ class M1EpisodicLayer(MemoryLayer):
             session_id: Session identifier
 
         Returns:
-            ProcessingResult with extracted facts
+            ProcessingResult with formed episodes
         """
         logger.info(f"M1EpisodicLayer: Processing new data for user {user_id}, session {session_id}")
 
@@ -412,31 +412,31 @@ class M1EpisodicLayer(MemoryLayer):
         """Check if M1 layer is enabled."""
         return self.fact_extraction_enabled and self.initialized
 
-    async def _extract_facts(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Extract facts from data using LLM integration."""
+    async def _form_episodes(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Form episodes from data using LLM integration."""
         try:
-            facts = []
+            episodes = []
 
             # Handle different data types
             if isinstance(data, list):
                 # Process list of chunks
                 for item in data:
-                    item_facts = await self._extract_facts_from_item(item, metadata)
-                    facts.extend(item_facts)
+                    item_episodes = await self._form_episodes_from_item(item, metadata)
+                    episodes.extend(item_episodes)
             else:
                 # Process single item
-                item_facts = await self._extract_facts_from_item(data, metadata)
-                facts.extend(item_facts)
+                item_episodes = await self._form_episodes_from_item(data, metadata)
+                episodes.extend(item_episodes)
 
-            logger.info(f"M1EpisodicLayer: Extracted {len(facts)} episodes from data")
-            return facts
+            logger.info(f"M1EpisodicLayer: Formed {len(episodes)} episodes from data")
+            return episodes
 
         except Exception as e:
             logger.error(f"M1EpisodicLayer: Episode extraction failed: {e}")
             return []
 
-    async def _extract_facts_from_item(self, item: Any, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Extract facts from a single data item."""
+    async def _form_episodes_from_item(self, item: Any, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Form episodes from a single data item."""
         try:
             # Extract content based on item type
             content = ""
@@ -448,26 +448,54 @@ class M1EpisodicLayer(MemoryLayer):
             if not content.strip():
                 return []
 
-            # Simple fact extraction (placeholder for LLM integration)
-            # TODO: Integrate with actual LLM service for sophisticated fact extraction
-            facts = []
+            # Simple episode formation (placeholder for LLM integration)
+            # TODO: Integrate with actual LLM service for sophisticated episode formation
+            episodes = []
 
-            # Extract basic facts
-            if len(content) > 50:  # Only extract facts from substantial content
-                fact = {
-                    "content": content[:200] + "..." if len(content) > 200 else content,
-                    "type": "extracted_fact",
-                    "source": "m1_semantic_layer",
+            # Form basic episodes
+            if len(content) > 50:  # Only form episodes from substantial content
+                episode = {
+                    "episode_content": content[:200] + "..." if len(content) > 200 else content,
+                    "episode_type": "formed_episode",
+                    "source": "m1_episodic_layer",
                     "timestamp": time.time(),
                     "metadata": metadata or {}
                 }
-                facts.append(fact)
+                episodes.append(episode)
 
-            return facts
+            return episodes
 
         except Exception as e:
-            logger.error(f"M1EpisodicLayer: Failed to extract episodes from item: {e}")
+            logger.error(f"M1EpisodicLayer: Failed to form episodes from item: {e}")
             return []
+
+    def _convert_episodes_to_chunks(self, episodes: List[Dict[str, Any]], metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
+        """Convert episodes to ChunkData objects for storage."""
+        chunks = []
+        for episode in episodes:
+            try:
+                # Create chunk metadata
+                chunk_metadata = {
+                    "layer": "M1",
+                    "source": "episodic_layer",
+                    "episode_type": episode.get("episode_type", "unknown"),
+                    "timestamp": episode.get("timestamp", time.time()),
+                    **(metadata or {}),
+                    **(episode.get("metadata", {}))
+                }
+
+                # Create ChunkData object
+                chunk = ChunkData(
+                    content=episode.get("episode_content", ""),
+                    metadata=chunk_metadata
+                )
+                chunks.append(chunk)
+
+            except Exception as e:
+                logger.error(f"M1EpisodicLayer: Failed to convert episode to chunk: {e}")
+                continue
+
+        return chunks
 
     def _convert_facts_to_chunks(self, facts: List[Dict[str, Any]], metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
         """Convert extracted facts to ChunkData objects for storage."""

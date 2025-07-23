@@ -64,7 +64,7 @@ def test_basic_functionality():
             'memory_layers': {
                 'm0': {
                     'enabled': True,
-                    'table_name': 'test_m0_episodic',
+                    'table_name': 'test_m0_raw',
                     'pgai': {
                         'auto_embedding': True,
                         'immediate_trigger': False,
@@ -74,7 +74,7 @@ def test_basic_functionality():
                 },
                 'm1': {
                     'enabled': True,
-                    'table_name': 'test_m1_semantic',
+                    'table_name': 'test_m1_episodic',
                     'fact_extraction': {
                         'enabled': True,
                         'classification_strategy': 'open',
@@ -132,7 +132,7 @@ def test_schema_files():
         schema_dir = Path(__file__).parent.parent.parent / "src" / "memfuse_core" / "store" / "pgai_store" / "schemas"
         
         # Check M1 schema file
-        m1_schema_file = schema_dir / "m1_semantic.sql"
+        m1_schema_file = schema_dir / "m1_episodic.sql"
         if m1_schema_file.exists():
             content = m1_schema_file.read_text()
             # Check for flexible fact_type (should not have CHECK constraint)

@@ -16,7 +16,7 @@ class PgaiStoreFactory:
     """Factory for creating pgai store instances with appropriate configuration."""
 
     @staticmethod
-    def create_store(config: Optional[Dict[str, Any]] = None, table_name: str = "m0_episodic") -> PgaiStore:
+    def create_store(config: Optional[Dict[str, Any]] = None, table_name: str = "m0_raw") -> PgaiStore:
         """
         Create appropriate pgai store instance based on configuration.
 
@@ -251,7 +251,7 @@ class BackwardCompatibilityManager:
 
 
 # Convenience function for backward compatibility
-def create_pgai_store(config: Optional[Dict[str, Any]] = None, table_name: str = "m0_episodic") -> PgaiStore:
+def create_pgai_store(config: Optional[Dict[str, Any]] = None, table_name: str = "m0_raw") -> PgaiStore:
     """
     Create pgai store instance with automatic configuration handling.
 

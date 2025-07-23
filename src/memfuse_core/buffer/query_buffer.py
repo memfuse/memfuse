@@ -298,7 +298,7 @@ class QueryBuffer(BufferComponentInterface):
             )
         elif sort_by == "timestamp":
             all_results.sort(
-                key=lambda x: x.get("created_at", ""),
+                key=lambda x: self._normalize_timestamp_for_sorting(x.get("created_at", "")),
                 reverse=(order == "desc")
             )
         
@@ -648,7 +648,7 @@ class QueryBuffer(BufferComponentInterface):
         if sort_by == 'timestamp' or sort_by == 'created_at':
             return sorted(
                 messages,
-                key=lambda x: x.get('created_at', ''),
+                key=lambda x: self._normalize_timestamp_for_sorting(x.get('created_at', '')),
                 reverse=reverse
             )
         elif sort_by == 'id':
@@ -661,9 +661,40 @@ class QueryBuffer(BufferComponentInterface):
             # Default to timestamp
             return sorted(
                 messages,
-                key=lambda x: x.get('created_at', ''),
+                key=lambda x: self._normalize_timestamp_for_sorting(x.get('created_at', '')),
                 reverse=reverse
             )
+
+    def _normalize_timestamp_for_sorting(self, timestamp) -> str:
+        """Normalize timestamp to string for consistent sorting.
+
+        Args:
+            timestamp: Timestamp (could be datetime, float, string, or None)
+
+        Returns:
+            ISO format timestamp string for sorting (empty string if None/invalid)
+        """
+        if timestamp is None:
+            return ''
+
+        try:
+            from datetime import datetime
+
+            if isinstance(timestamp, datetime):
+                # Convert datetime object to ISO string
+                return timestamp.isoformat()
+            elif isinstance(timestamp, (int, float)):
+                # Convert from Unix timestamp
+                return datetime.fromtimestamp(timestamp).isoformat()
+            elif isinstance(timestamp, str):
+                # Already a string, return as-is
+                return timestamp
+            else:
+                # Convert to string
+                return str(timestamp)
+        except (ValueError, TypeError, OSError):
+            # Return empty string for invalid timestamps (will sort to beginning)
+            return ''
 
     def _generate_rerank_cache_key(self, results: List[Any], query_text: str) -> str:
         """Generate cache key for rerank results.

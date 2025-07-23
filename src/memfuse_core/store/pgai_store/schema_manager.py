@@ -121,10 +121,10 @@ class SchemaManager:
                 
                 # Create basic indexes
                 await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_m0_session_id ON m0_episodic (session_id);
-                    CREATE INDEX IF NOT EXISTS idx_m0_user_id ON m0_episodic (user_id);
-                    CREATE INDEX IF NOT EXISTS idx_m0_needs_embedding ON m0_episodic (needs_embedding) WHERE needs_embedding = TRUE;
-                    CREATE INDEX IF NOT EXISTS idx_m0_embedding_hnsw ON m0_episodic USING hnsw (embedding vector_cosine_ops);
+                    CREATE INDEX IF NOT EXISTS idx_m0_session_id ON m0_raw (session_id);
+                    CREATE INDEX IF NOT EXISTS idx_m0_user_id ON m0_raw (user_id);
+                    CREATE INDEX IF NOT EXISTS idx_m0_needs_embedding ON m0_raw (needs_embedding) WHERE needs_embedding = TRUE;
+                    CREATE INDEX IF NOT EXISTS idx_m0_embedding_hnsw ON m0_raw USING hnsw (embedding vector_cosine_ops);
                 """)
                 
                 # Create embedding trigger
@@ -139,9 +139,9 @@ class SchemaManager:
                     END;
                     $$ LANGUAGE plpgsql;
                     
-                    DROP TRIGGER IF EXISTS trigger_m0_embedding_notification ON m0_episodic;
+                    DROP TRIGGER IF EXISTS trigger_m0_embedding_notification ON m0_raw;
                     CREATE TRIGGER trigger_m0_embedding_notification
-                        AFTER INSERT OR UPDATE OF needs_embedding ON m0_episodic
+                        AFTER INSERT OR UPDATE OF needs_embedding ON m0_raw
                         FOR EACH ROW
                         EXECUTE FUNCTION notify_m0_embedding_needed();
                 """)
@@ -157,7 +157,7 @@ class SchemaManager:
     async def _initialize_m1_schema(self) -> bool:
         """Initialize M1 semantic memory schema."""
         try:
-            schema_file = self.schema_dir / "m1_semantic.sql"
+            schema_file = self.schema_dir / "m1_episodic.sql"
             if not schema_file.exists():
                 logger.error(f"M1 schema file not found: {schema_file}")
                 return False
@@ -212,7 +212,7 @@ class SchemaManager:
                 result = await conn.execute("""
                     SELECT EXISTS (
                         SELECT FROM information_schema.tables 
-                        WHERE table_name = 'm0_episodic'
+                        WHERE table_name = 'm0_raw'
                     );
                 """)
                 table_exists = (await result.fetchone())[0]
@@ -224,7 +224,7 @@ class SchemaManager:
                 result = await conn.execute("""
                     SELECT EXISTS (
                         SELECT FROM information_schema.columns 
-                        WHERE table_name = 'm0_episodic' AND column_name = 'embedding'
+                        WHERE table_name = 'm0_raw' AND column_name = 'embedding'
                     );
                 """)
                 embedding_exists = (await result.fetchone())[0]
@@ -243,7 +243,7 @@ class SchemaManager:
                 result = await conn.execute("""
                     SELECT EXISTS (
                         SELECT FROM information_schema.tables 
-                        WHERE table_name = 'm1_semantic'
+                        WHERE table_name = 'm1_episodic'
                     );
                 """)
                 table_exists = (await result.fetchone())[0]
@@ -254,8 +254,8 @@ class SchemaManager:
                 # Check if key columns exist
                 result = await conn.execute("""
                     SELECT COUNT(*) FROM information_schema.columns 
-                    WHERE table_name = 'm1_semantic' 
-                    AND column_name IN ('fact_content', 'embedding', 'fact_type');
+                    WHERE table_name = 'm1_episodic'
+                    AND column_name IN ('episode_content', 'embedding', 'episode_type');
                 """)
                 column_count = (await result.fetchone())[0]
                 

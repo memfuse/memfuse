@@ -1,8 +1,8 @@
 """
 Multi-layer PgAI store for multi-layer embedding system.
 
-This module provides an interface for managing M0 (episodic)
-and M1 (semantic) memory layers with automatic embedding generation.
+This module provides an interface for managing M0 (raw data)
+and M1 (episodic) memory layers with automatic embedding generation.
 """
 
 import asyncio
@@ -17,13 +17,13 @@ from .config_manager import ConfigManager
 from .stats_collector import StatsCollector
 from ...rag.chunk.base import ChunkData
 from ...hierarchy.llm_service import AdvancedLLMService, ExtractedFact
-from .fact_extraction_processor import FactExtractionProcessor
+from .episode_formation_processor import EpisodeFormationProcessor
 
 
 class LayerType(Enum):
     """Memory layer types."""
-    M0 = "m0"  # Episodic Memory
-    M1 = "m1"  # Semantic Memory
+    M0 = "m0"  # Raw Data Memory
+    M1 = "m1"  # Episodic Memory
 
 
 class MultiLayerPgaiStore:
@@ -31,7 +31,7 @@ class MultiLayerPgaiStore:
     Multi-layer PgAI store supporting M0 and M1 memory layers.
 
     This class coordinates multi-layer processing with automatic embedding
-    generation for episodic (M0) and semantic (M1) memory layers.
+    generation for raw data (M0) and episodic (M1) memory layers.
 
     Features:
     - Interface for multi-layer operations
@@ -63,8 +63,8 @@ class MultiLayerPgaiStore:
         # Schema manager
         self.schema_manager: Optional[SchemaManager] = None
 
-        # Fact extraction service (for M1)
-        self.fact_extractor: Optional[FactExtractionProcessor] = None
+        # Episode formation service (for M1)
+        self.episode_former: Optional[EpisodeFormationProcessor] = None
 
         # Unified statistics collector
         self.stats_collector = StatsCollector()
@@ -73,7 +73,7 @@ class MultiLayerPgaiStore:
         self.stats = {
             'total_operations': 0,
             'layer_operations': {layer.value: 0 for layer in LayerType},
-            'fact_extractions': 0,
+            'episode_formations': 0,
             'errors': 0
         }
         
@@ -132,9 +132,9 @@ class MultiLayerPgaiStore:
                         logger.error("Schema initialization failed")
                         return False
             
-            # Initialize fact extraction service if M1 is enabled
+            # Initialize episode formation service if M1 is enabled
             if LayerType.M1 in self.enabled_layers:
-                await self._initialize_fact_extractor()
+                await self._initialize_episode_former()
             
             self.initialized = True
             logger.info("MultiTablePgaiStore initialization completed successfully")
@@ -212,21 +212,21 @@ class MultiLayerPgaiStore:
         
         return store_config
     
-    async def _initialize_fact_extractor(self):
-        """Initialize fact extraction service for M1 layer."""
+    async def _initialize_episode_former(self):
+        """Initialize episode formation service for M1 layer."""
         try:
             m1_config = self.layer_configs.get('m1', {})
-            fact_config = m1_config.get('fact_extraction', {})
+            episode_config = m1_config.get('episode_formation', {})
 
-            if fact_config.get('enabled', True):
-                # Initialize FactExtractionProcessor
-                self.fact_extractor = FactExtractionProcessor(fact_config)
-                logger.info("Fact extraction service initialized successfully")
+            if episode_config.get('enabled', True):
+                # Initialize EpisodeFormationProcessor
+                self.episode_former = EpisodeFormationProcessor(episode_config)
+                logger.info("Episode formation service initialized successfully")
             else:
-                logger.info("Fact extraction disabled in configuration")
+                logger.info("Episode formation disabled in configuration")
 
         except Exception as e:
-            logger.error(f"Failed to initialize fact extractor: {e}")
+            logger.error(f"Failed to initialize episode former: {e}")
     
     async def write_to_layer(self, layer_type: LayerType, data: Union[List[ChunkData], ChunkData], 
                            metadata: Optional[Dict[str, Any]] = None) -> List[str]:
@@ -329,92 +329,92 @@ class MultiLayerPgaiStore:
 
     async def _write_to_m1_layer(self, data: Union[List[ChunkData], ChunkData],
                                metadata: Optional[Dict[str, Any]] = None) -> List[str]:
-        """Write data to M1 layer with fact extraction from original data."""
+        """Write data to M1 layer with episode formation from original data."""
         try:
-            # Extract facts directly from original data (not from M0)
-            m1_data = await self._extract_facts_from_original_data(data, metadata)
+            # Form episodes directly from original data (not from M0)
+            m1_data = await self._form_episodes_from_original_data(data, metadata)
             if m1_data:
                 result = await self.write_to_layer(LayerType.M1, m1_data, metadata)
-                self.stats['fact_extractions'] += len(m1_data)
+                self.stats['episode_formations'] += len(m1_data)
                 return result
             return []
         except Exception as e:
             logger.error(f"M1 layer write failed: {e}")
             return []
 
-    async def _extract_facts_from_original_data(self, data: Union[List[ChunkData], ChunkData],
+    async def _form_episodes_from_original_data(self, data: Union[List[ChunkData], ChunkData],
                                               metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
-        """Extract facts from original data for M1 storage.
+        """Form episodes from original data for M1 storage.
 
         This method processes original data directly, supporting the parallel
         data->M0 and data->M1 architecture.
 
         Args:
-            data: Original data to extract facts from
+            data: Original data to form episodes from
             metadata: Optional metadata
 
         Returns:
-            List of ChunkData objects containing extracted facts
+            List of ChunkData objects containing formed episodes
         """
         try:
-            if not self.fact_extractor:
-                logger.warning("Fact extractor not available")
+            if not self.episode_former:
+                logger.warning("Episode former not available")
                 return []
 
             # Ensure data is a list
             if not isinstance(data, list):
                 data = [data]
 
-            fact_chunks = []
+            episode_chunks = []
 
-            # Use FactExtractionProcessor to extract facts
-            extraction_results = await self.fact_extractor.extract_facts_batch(data, metadata)
+            # Use EpisodeFormationProcessor to form episodes
+            formation_results = await self.episode_former.form_episodes_batch(data, metadata)
 
-            # Extract facts from results
-            extracted_facts = []
-            for result in extraction_results:
+            # Extract episodes from results
+            formed_episodes = []
+            for result in formation_results:
                 if result.success:
-                    extracted_facts.extend(result.extracted_facts)
+                    formed_episodes.extend(result.formed_episodes)
 
-            # Convert extracted facts to ChunkData objects for M1 storage
-            for fact in extracted_facts:
-                # Handle both dict and ExtractedFact objects
-                if isinstance(fact, dict):
-                    fact_chunk = ChunkData(
-                        content=fact.get('content', ''),
+            # Convert formed episodes to ChunkData objects for M1 storage
+            for episode in formed_episodes:
+                # Handle both dict and FormedEpisode objects
+                if isinstance(episode, dict):
+                    episode_chunk = ChunkData(
+                        content=episode.get('episode_content', ''),
                         metadata={
-                            'fact_type': fact.get('type', 'general'),
-                            'fact_category': fact.get('category', {}),
-                            'confidence': fact.get('confidence', 0.5),
-                            'source_chunk_id': fact.get('source_chunk_id'),
-                            'entities': fact.get('entities', []),
-                            'temporal_info': fact.get('temporal_info', {}),
-                            'source_context': fact.get('source_context', ''),
+                            'episode_type': episode.get('episode_type', 'general'),
+                            'episode_category': episode.get('episode_category', {}),
+                            'confidence': episode.get('confidence', 0.5),
+                            'source_chunk_id': episode.get('source_chunk_id'),
+                            'entities': episode.get('entities', []),
+                            'temporal_info': episode.get('temporal_info', {}),
+                            'source_context': episode.get('source_context', ''),
                             **(metadata or {})
                         }
                     )
                 else:
-                    # ExtractedFact object
-                    fact_chunk = ChunkData(
-                        content=fact.content,
+                    # FormedEpisode object
+                    episode_chunk = ChunkData(
+                        content=episode.episode_content,
                         metadata={
-                            'fact_type': fact.type,
-                            'fact_category': fact.category,
-                            'confidence': fact.confidence,
-                            'source_chunk_id': getattr(fact, 'source_chunk_id', None),
-                            'entities': fact.entities,
-                            'temporal_info': fact.temporal_info,
-                            'source_context': fact.source_context,
+                            'episode_type': episode.episode_type,
+                            'episode_category': getattr(episode, 'episode_category', {}),
+                            'confidence': episode.confidence,
+                            'source_chunk_id': getattr(episode, 'source_chunk_id', None),
+                            'entities': episode.entities,
+                            'temporal_info': episode.temporal_info,
+                            'source_context': episode.source_context,
                             **(metadata or {})
                         }
                     )
-                fact_chunks.append(fact_chunk)
+                episode_chunks.append(episode_chunk)
 
-            logger.debug(f"Extracted {len(fact_chunks)} facts from {len(data)} original chunks")
-            return fact_chunks
+            logger.debug(f"Formed {len(episode_chunks)} episodes from {len(data)} original chunks")
+            return episode_chunks
 
         except Exception as e:
-            logger.error(f"Fact extraction from original data failed: {e}")
+            logger.error(f"Episode formation from original data failed: {e}")
             return []
 
     async def query_layer(self, layer_type: LayerType, query: str, top_k: int = 5) -> List[ChunkData]:

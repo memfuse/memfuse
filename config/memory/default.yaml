@@ -85,11 +85,13 @@ layers:
 
   # M3: Procedural Memory - Learned patterns and procedures
   m3:
-    enabled: false  # Placeholder implementation
+    enabled: true  # Now fully implemented
     priority: 4
 
     # M3-specific settings
     pattern_recognition_enabled: true
+    skill_learning_enabled: true
+    behavior_adaptation_enabled: true
     llm_model: "grok-3-mini"
     batch_size: 3
     min_confidence_threshold: 0.8
@@ -99,6 +101,27 @@ layers:
       pattern_table: "m3_procedural"
       skill_table: "m3_skills"
       behavior_table: "m3_behaviors"
+
+  # MSMG: Multi-Scale Mental Graph - Meta-structure for knowledge organization
+  msmg:
+    enabled: true
+    priority: 5
+
+    # MSMG-specific settings
+    graph_construction_enabled: true
+    ontology_mapping_enabled: true
+    metacognitive_tracking_enabled: true
+    forgetting_mechanism_enabled: true
+    llm_model: "grok-3-mini"
+    batch_size: 5
+    min_confidence_threshold: 0.7
+
+    # MSMG storage tables
+    storage:
+      instances_table: "msmg_instances"
+      ontology_table: "msmg_ontology"
+      relations_table: "msmg_relations"
+      metacognitive_table: "msmg_metacognitive"
 
 # =============================================================================
 # STORAGE BACKEND CONFIGURATION

@@ -22,11 +22,11 @@ execute_sql() {
 
 # Create notification function for immediate embedding trigger
 execute_sql "
-CREATE OR REPLACE FUNCTION notify_embedding_needed_m0_episodic()
+CREATE OR REPLACE FUNCTION notify_embedding_needed_m0_raw()
 RETURNS TRIGGER AS \$\$
 BEGIN
     -- Send notification with record ID for immediate processing
-    PERFORM pg_notify('embedding_needed_m0_episodic', NEW.id);
+    PERFORM pg_notify('embedding_needed_m0_raw', NEW.id);
     RETURN NEW;
 END;
 \$\$ LANGUAGE plpgsql;
@@ -34,22 +34,22 @@ END;
 
 # Create trigger for immediate notification on INSERT
 execute_sql "
-DROP TRIGGER IF EXISTS trigger_immediate_embedding_m0_episodic ON m0_episodic;
-CREATE TRIGGER trigger_immediate_embedding_m0_episodic
-    AFTER INSERT ON m0_episodic
+DROP TRIGGER IF EXISTS trigger_immediate_embedding_m0_raw ON m0_raw;
+CREATE TRIGGER trigger_immediate_embedding_m0_raw
+    AFTER INSERT ON m0_raw
     FOR EACH ROW
     WHEN (NEW.needs_embedding = TRUE AND NEW.content IS NOT NULL)
-    EXECUTE FUNCTION notify_embedding_needed_m0_episodic();
+    EXECUTE FUNCTION notify_embedding_needed_m0_raw();
 " "Creating immediate embedding trigger"
 
 # Create trigger for immediate notification on UPDATE (when needs_embedding becomes TRUE)
 execute_sql "
-DROP TRIGGER IF EXISTS trigger_immediate_embedding_update_m0_episodic ON m0_episodic;
-CREATE TRIGGER trigger_immediate_embedding_update_m0_episodic
-    AFTER UPDATE ON m0_episodic
+DROP TRIGGER IF EXISTS trigger_immediate_embedding_update_m0_raw ON m0_raw;
+CREATE TRIGGER trigger_immediate_embedding_update_m0_raw
+    AFTER UPDATE ON m0_raw
     FOR EACH ROW
     WHEN (OLD.needs_embedding = FALSE AND NEW.needs_embedding = TRUE AND NEW.content IS NOT NULL)
-    EXECUTE FUNCTION notify_embedding_needed_m0_episodic();
+    EXECUTE FUNCTION notify_embedding_needed_m0_raw();
 " "Creating immediate embedding update trigger"
 
 # Create helper function to manually trigger embedding for existing records
@@ -61,15 +61,15 @@ DECLARE
 BEGIN
     -- Check if record exists and needs embedding
     SELECT EXISTS(
-        SELECT 1 FROM m0_episodic 
-        WHERE id = record_id 
-        AND needs_embedding = TRUE 
+        SELECT 1 FROM m0_raw
+        WHERE id = record_id
+        AND needs_embedding = TRUE
         AND content IS NOT NULL
     ) INTO record_exists;
-    
+
     IF record_exists THEN
         -- Send notification
-        PERFORM pg_notify('embedding_needed_m0_episodic', record_id);
+        PERFORM pg_notify('embedding_needed_m0_raw', record_id);
         RETURN TRUE;
     ELSE
         RETURN FALSE;
@@ -78,52 +78,61 @@ END;
 \$\$ LANGUAGE plpgsql;
 " "Creating manual trigger helper function"
 
-# Create function to get trigger system status
+# Create function to get trigger system status for all memory layers
 execute_sql "
 CREATE OR REPLACE FUNCTION get_trigger_system_status()
 RETURNS TABLE(
     trigger_name TEXT,
     table_name TEXT,
     trigger_enabled BOOLEAN,
-    function_exists BOOLEAN
+    function_exists BOOLEAN,
+    memory_layer TEXT
 ) AS \$\$
 BEGIN
     RETURN QUERY
-    SELECT 
+    SELECT
         t.tgname::TEXT as trigger_name,
         c.relname::TEXT as table_name,
         t.tgenabled = 'O' as trigger_enabled,
-        EXISTS(SELECT 1 FROM pg_proc p WHERE p.proname = 'notify_embedding_needed_m0_episodic') as function_exists
+        EXISTS(SELECT 1 FROM pg_proc p WHERE p.proname LIKE 'notify_embedding_needed_%') as function_exists,
+        CASE
+            WHEN c.relname = 'm0_raw' THEN 'M0 Raw Data'
+            WHEN c.relname = 'm1_episodic' THEN 'M1 Episodic Memory'
+            ELSE 'Unknown'
+        END as memory_layer
     FROM pg_trigger t
     JOIN pg_class c ON t.tgrelid = c.oid
-    WHERE c.relname = 'm0_episodic'
-    AND t.tgname LIKE 'trigger_immediate_embedding%';
+    WHERE c.relname IN ('m0_raw', 'm1_episodic')
+    AND t.tgname LIKE 'trigger_immediate_embedding%'
+    ORDER BY c.relname, t.tgname;
 END;
 \$\$ LANGUAGE plpgsql;
-" "Creating trigger status function"
+" "Creating multi-layer trigger status function"
 
 # Verify trigger system setup
 echo "🔍 Verifying immediate trigger system..."
 
 execute_sql "SELECT * FROM get_trigger_system_status();" "Checking trigger system status"
 
-# Test notification system (this will send a test notification)
+# Test notification system (this will send test notifications for all layers)
 execute_sql "
 DO \$\$
 BEGIN
-    -- Send a test notification
-    PERFORM pg_notify('embedding_needed_m0_episodic', 'test-notification-' || extract(epoch from now()));
-    RAISE NOTICE 'Test notification sent successfully';
+    -- Send test notifications for all memory layers
+    PERFORM pg_notify('embedding_needed_m0_raw', 'test-m0-notification-' || extract(epoch from now()));
+    PERFORM pg_notify('embedding_needed_m1_episodic', 'test-m1-notification-' || extract(epoch from now()));
+    RAISE NOTICE 'Test notifications sent successfully for all memory layers';
 END;
 \$\$;
-" "Testing notification system"
+" "Testing notification system for all layers"
 
-echo "⚡ Immediate trigger system setup completed!"
+echo "⚡ Multi-layer immediate trigger system setup completed!"
 echo "📋 Summary:"
-echo "   ✅ Notification function created"
-echo "   ✅ INSERT trigger created"
-echo "   ✅ UPDATE trigger created"
-echo "   ✅ Helper functions created"
+echo "   ✅ M0 Raw Data Layer: Notification functions created"
+echo "   ✅ M1 Episodic Memory Layer: Notification functions created"
+echo "   ✅ INSERT triggers created for all layers"
+echo "   ✅ UPDATE triggers created for all layers"
+echo "   ✅ Helper functions created for all layers"
 echo "   ✅ System verification completed"
 echo ""
-echo "🎯 Immediate trigger system is ready for real-time embedding generation!"
+echo "🎯 Multi-layer immediate trigger system is ready for real-time embedding generation!"

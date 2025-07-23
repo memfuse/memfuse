@@ -85,7 +85,7 @@ class TestSchemaManager:
         
         # Mock M1 schema file reading
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('pathlib.Path.read_text', return_value="CREATE TABLE m1_semantic (...);"):
+             patch('pathlib.Path.read_text', return_value="CREATE TABLE m1_episodic (...);"):
             
             result = await manager.initialize_all_schemas(['m0', 'm1'])
         
@@ -177,7 +177,7 @@ class TestSchemaManager:
         mock_cursor.execute.assert_called_once()
         query_sql = mock_cursor.execute.call_args[0][0]
         assert "SELECT EXISTS" in query_sql
-        assert "table_name = 'm0_episodic'" in query_sql
+        assert "table_name = 'm0_raw'" in query_sql
     
     @pytest.mark.asyncio
     async def test_initialize_m0_schema_table_not_exists(self, mock_pool):
@@ -202,9 +202,9 @@ class TestSchemaManager:
         
         # Mock schema file exists and has content
         mock_schema_content = """
-        CREATE TABLE m1_semantic (
+        CREATE TABLE m1_episodic (
             id TEXT PRIMARY KEY,
-            fact_content TEXT NOT NULL
+            episode_content TEXT NOT NULL
         );
         """
         
@@ -255,7 +255,7 @@ class TestSchemaManager:
         mock_cursor.execute.assert_called_once()
         query_sql = mock_cursor.execute.call_args[0][0]
         assert "SELECT column_name" in query_sql
-        assert "WHERE table_name = 'm0_episodic'" in query_sql
+        assert "WHERE table_name = 'm0_raw'" in query_sql
     
     @pytest.mark.asyncio
     async def test_validate_m0_schema_missing_columns(self, mock_pool):
@@ -289,7 +289,7 @@ class TestSchemaManager:
         
         # Mock required triggers exist
         required_triggers = [
-            ('trigger_update_m1_semantic_updated_at',),
+            ('trigger_update_m1_episodic_updated_at',),
             ('trigger_m1_embedding_notification',)
         ]
         
@@ -318,7 +318,7 @@ class TestSchemaManager:
             ('retry_status',), ('created_at',), ('updated_at',)
         ]
         
-        partial_triggers = [('trigger_update_m1_semantic_updated_at',)]  # Missing one trigger
+        partial_triggers = [('trigger_update_m1_episodic_updated_at',)]  # Missing one trigger
         
         mock_cursor.fetchall.side_effect = [required_columns, partial_triggers]
         
@@ -350,7 +350,7 @@ class TestSchemaManager:
         ]
         
         m1_triggers = [
-            ('trigger_update_m1_semantic_updated_at',),
+            ('trigger_update_m1_episodic_updated_at',),
             ('trigger_m1_embedding_notification',)
         ]
         
@@ -379,8 +379,8 @@ class TestSchemaManager:
         
         # Mock table information
         mock_tables = [
-            ('m0_episodic', 10),
-            ('m1_semantic', 15)
+            ('m0_raw', 10),
+            ('m1_episodic', 15)
         ]
         
         # Setup mock to return versions first, then tables
@@ -399,7 +399,7 @@ class TestSchemaManager:
         assert m0_version['description'] == 'M0 layer schema'
         
         # Check table details
-        m0_table = next(t for t in info['tables'] if t['name'] == 'm0_episodic')
+        m0_table = next(t for t in info['tables'] if t['name'] == 'm0_raw')
         assert m0_table['columns'] == 10
     
     @pytest.mark.asyncio

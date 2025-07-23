@@ -240,44 +240,7 @@ class ServiceFactory:
         config_dict = config_manager.get_config()
         cfg = OmegaConf.create(config_dict)
 
-        # Check if Buffer is enabled
-        buffer_config = cfg.get("buffer", {})
-        if not buffer_config.get("enabled", True):
-            logger.warning("Buffer is disabled, falling back to legacy BufferService")
-            memory_service = cls.get_memory_service_for_user(user)
-            if memory_service is None:
-                logger.error(f"Cannot create BufferService for user {user}: MemoryService not available")
-                return None
-
-            # Ensure MemoryService is properly initialized
-            try:
-                if memory_service.multi_path_retrieval is None:
-                    await memory_service.initialize()
-                    logger.debug(f"MemoryService initialized for BufferService user {user}")
-            except Exception as e:
-                logger.error(f"Failed to initialize MemoryService for BufferService user {user}: {e}")
-                return None
-
-            buffer_service = BufferService(
-                memory_service=memory_service,
-                user=user,
-                config=buffer_config,
-            )
-
-            # Initialize the BufferService (critical: sets up FlushManager handlers)
-            try:
-                if not await buffer_service.initialize():
-                    logger.error(f"Failed to initialize fallback BufferService for user {user}")
-                    return None
-                logger.debug(f"Fallback BufferService initialized successfully for user {user}")
-            except Exception as e:
-                logger.error(f"Fallback BufferService initialization error for user {user}: {e}")
-                return None
-
-            cls._buffer_service_instances[user] = buffer_service
-            return buffer_service
-
-        # Get the user-specific MemoryService instance
+        # Get the user-specific MemoryService instance first
         memory_service = cls.get_memory_service_for_user(user)
         if memory_service is None:
             logger.error(f"Cannot create BufferService for user {user}: MemoryService not available")
@@ -285,24 +248,23 @@ class ServiceFactory:
 
         # Ensure MemoryService is properly initialized
         try:
-            # Check if multi_path_retrieval is None to determine if initialization is needed
             if memory_service.multi_path_retrieval is None:
                 await memory_service.initialize()
                 logger.debug(f"MemoryService initialized for BufferService user {user}")
-            else:
-                logger.debug(f"MemoryService already initialized for BufferService user {user}")
         except Exception as e:
             logger.error(f"Failed to initialize MemoryService for BufferService user {user}: {e}")
             return None
 
-        # Create a new user-level BufferService instance
+        # Create BufferService with bypass support (enabled/disabled handled in BufferService.__init__)
+        # Convert OmegaConf to dict to ensure proper config access
+        config_dict = OmegaConf.to_container(cfg, resolve=True) if hasattr(cfg, 'to_container') else cfg
         buffer_service = BufferService(
             memory_service=memory_service,
             user=user,
-            config=cfg,  # Pass full config including buffer
+            config=config_dict,  # Pass full config as dict including buffer.enabled setting
         )
 
-        # Initialize the BufferService (critical: sets up FlushManager handlers)
+        # Initialize the BufferService
         try:
             if not await buffer_service.initialize():
                 logger.error(f"Failed to initialize BufferService for user {user}")

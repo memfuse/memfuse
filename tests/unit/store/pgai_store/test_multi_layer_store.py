@@ -33,7 +33,7 @@ class TestMultiLayerPgaiStore:
             'memory_layers': {
                 'm0': {
                     'enabled': True,
-                    'table_name': 'm0_episodic',
+                    'table_name': 'm0_raw',
                     'pgai': {
                         'auto_embedding': True,
                         'immediate_trigger': True,
@@ -49,7 +49,7 @@ class TestMultiLayerPgaiStore:
                 },
                 'm1': {
                     'enabled': True,
-                    'table_name': 'm1_semantic',
+                    'table_name': 'm1_episodic',
                     'pgai': {
                         'auto_embedding': True,
                         'immediate_trigger': True,
@@ -119,8 +119,8 @@ class TestMultiLayerPgaiStore:
         """Test with only M0 layer enabled."""
         config = {
             'memory_layers': {
-                'm0': {'enabled': True, 'table_name': 'm0_episodic'},
-                'm1': {'enabled': False, 'table_name': 'm1_semantic'}
+                'm0': {'enabled': True, 'table_name': 'm0_raw'},
+                'm1': {'enabled': False, 'table_name': 'm1_episodic'}
             }
         }
         
@@ -157,8 +157,8 @@ class TestMultiLayerPgaiStore:
         """Test mock fact extraction functionality."""
         config = {
             'memory_layers': {
-                'm0': {'enabled': True, 'table_name': 'm0_episodic'},
-                'm1': {'enabled': True, 'table_name': 'm1_semantic'}
+                'm0': {'enabled': True, 'table_name': 'm0_raw'},
+                'm1': {'enabled': True, 'table_name': 'm1_episodic'}
             }
         }
         
@@ -194,8 +194,8 @@ class TestMultiLayerPgaiStore:
         """Test fact extraction from chunk data."""
         config = {
             'memory_layers': {
-                'm0': {'enabled': True, 'table_name': 'm0_episodic'},
-                'm1': {'enabled': True, 'table_name': 'm1_semantic'}
+                'm0': {'enabled': True, 'table_name': 'm0_raw'},
+                'm1': {'enabled': True, 'table_name': 'm1_episodic'}
             }
         }
         
@@ -243,8 +243,8 @@ class TestMultiLayerPgaiStore:
         """Test write with fact extraction using mocked stores."""
         config = {
             'memory_layers': {
-                'm0': {'enabled': True, 'table_name': 'm0_episodic'},
-                'm1': {'enabled': True, 'table_name': 'm1_semantic'}
+                'm0': {'enabled': True, 'table_name': 'm0_raw'},
+                'm1': {'enabled': True, 'table_name': 'm1_episodic'}
             }
         }
         
@@ -282,8 +282,8 @@ class TestMultiLayerPgaiStore:
         """Test querying all layers with mocked stores."""
         config = {
             'memory_layers': {
-                'm0': {'enabled': True, 'table_name': 'm0_episodic'},
-                'm1': {'enabled': True, 'table_name': 'm1_semantic'}
+                'm0': {'enabled': True, 'table_name': 'm0_raw'},
+                'm1': {'enabled': True, 'table_name': 'm1_episodic'}
             }
         }
         
@@ -322,8 +322,8 @@ class TestMultiLayerPgaiStore:
         """Test comprehensive statistics collection."""
         config = {
             'memory_layers': {
-                'm0': {'enabled': True, 'table_name': 'm0_episodic'},
-                'm1': {'enabled': True, 'table_name': 'm1_semantic'}
+                'm0': {'enabled': True, 'table_name': 'm0_raw'},
+                'm1': {'enabled': True, 'table_name': 'm1_episodic'}
             }
         }
         
@@ -385,7 +385,7 @@ class TestMultiLayerPgaiStore:
         """Test cleanup functionality."""
         config = {
             'memory_layers': {
-                'm0': {'enabled': True, 'table_name': 'm0_episodic'}
+                'm0': {'enabled': True, 'table_name': 'm0_raw'}
             }
         }
         

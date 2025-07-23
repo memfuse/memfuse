@@ -821,7 +821,7 @@ class Database:
         Returns:
             List of message data
         """
-        # Get messages from both traditional messages table and m0_episodic table
+        # Get messages from both traditional messages table and m0_raw table
         messages = []
 
         # First, get messages from traditional messages table (rounds-based)
@@ -831,14 +831,14 @@ class Database:
                 round_messages = self.get_messages_by_round(round_data['id'])
                 messages.extend(round_messages)
 
-        # Second, get messages from m0_episodic table (memory hierarchy)
-        m0_episodic = self.get_m0_episodic_by_session(session_id)
-        messages.extend(m0_episodic)
+        # Second, get messages from m0_raw table (memory hierarchy)
+        m0_raw = self.get_m0_raw_by_session(session_id)
+        messages.extend(m0_raw)
 
         # Sort messages based on the specified field and order
         if sort_by == 'timestamp':
-            # Sort by created_at timestamp
-            messages.sort(key=lambda x: x.get('created_at', ''), reverse=(order == 'desc'))
+            # Sort by created_at timestamp - normalize timestamps to strings for consistent comparison
+            messages.sort(key=lambda x: self._normalize_timestamp_for_sorting(x.get('created_at', '')), reverse=(order == 'desc'))
         elif sort_by == 'id':
             # Sort by message ID
             messages.sort(key=lambda x: x.get('id', ''), reverse=(order == 'desc'))
@@ -849,14 +849,14 @@ class Database:
 
         return messages
 
-    def get_m0_episodic_by_session(self, session_id: str) -> List[Dict[str, Any]]:
-        """Get messages from m0_episodic table for a specific session.
+    def get_m0_raw_by_session(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get messages from m0_raw table for a specific session.
 
         Args:
             session_id: Session ID to filter by
 
         Returns:
-            List of message data from m0_episodic table
+            List of message data from m0_raw table
         """
         import json
         from datetime import datetime
@@ -880,34 +880,34 @@ class Database:
                                 'content': message['content'],
                                 'created_at': self._convert_timestamp(message.get('created_at')),
                                 'updated_at': self._convert_timestamp(message.get('updated_at')),
-                                'round_id': None,  # m0_episodic don't have round_id
+                                'round_id': None,  # m0_raw don't have round_id
                                 'metadata': metadata
                             }
                             session_messages.append(formatted_message)
                 except (json.JSONDecodeError, TypeError) as e:
                     # Skip messages with invalid metadata
-                    logger.warning(f"Invalid metadata in m0_episodic {message.get('id')}: {e}")
+                    logger.warning(f"Invalid metadata in m0_raw {message.get('id')}: {e}")
                     continue
 
-            logger.info(f"Retrieved {len(session_messages)} messages from m0_episodic for session {session_id}")
+            logger.info(f"Retrieved {len(session_messages)} messages from m0_raw for session {session_id}")
             return session_messages
 
         except Exception as e:
-            logger.error(f"Error getting m0_episodic by session: {e}")
+            logger.error(f"Error getting m0_raw by session: {e}")
             return []
 
     def _convert_timestamp(self, timestamp) -> Optional[str]:
         """Convert timestamp to ISO format string.
-        
+
         Args:
             timestamp: Timestamp (could be float, string, or None)
-            
+
         Returns:
             ISO format timestamp string or None
         """
         if timestamp is None:
             return None
-            
+
         try:
             if isinstance(timestamp, (int, float)):
                 # Convert from Unix timestamp
@@ -920,6 +920,37 @@ class Database:
                 return str(timestamp)
         except (ValueError, TypeError, OSError):
             return None
+
+    def _normalize_timestamp_for_sorting(self, timestamp) -> str:
+        """Normalize timestamp to string for consistent sorting.
+
+        Args:
+            timestamp: Timestamp (could be datetime, float, string, or None)
+
+        Returns:
+            ISO format timestamp string for sorting (empty string if None/invalid)
+        """
+        if timestamp is None:
+            return ''
+
+        try:
+            from datetime import datetime
+
+            if isinstance(timestamp, datetime):
+                # Convert datetime object to ISO string
+                return timestamp.isoformat()
+            elif isinstance(timestamp, (int, float)):
+                # Convert from Unix timestamp
+                return datetime.fromtimestamp(timestamp).isoformat()
+            elif isinstance(timestamp, str):
+                # Already a string, return as-is
+                return timestamp
+            else:
+                # Convert to string
+                return str(timestamp)
+        except (ValueError, TypeError, OSError):
+            # Return empty string for invalid timestamps (will sort to beginning)
+            return ''
 
     # API key methods
 

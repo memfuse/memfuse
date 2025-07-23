@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class EventDrivenPgaiStore:
     """Event-driven pgai store using composition and immediate triggers."""
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None, table_name: str = "m0_episodic"):
+    def __init__(self, config: Optional[Dict[str, Any]] = None, table_name: str = "m0_raw"):
         """Initialize event-driven store with immediate triggers."""
         self.config = config or {}
         self.table_name = table_name

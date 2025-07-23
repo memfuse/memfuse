@@ -22,7 +22,7 @@ class ConfigManager:
         'memory_layers': {
             'm0': {
                 'enabled': True,
-                'table_name': 'm0_episodic',
+                'table_name': 'm0_raw',
                 'pgai': {
                     'auto_embedding': True,
                     'immediate_trigger': True,
@@ -35,7 +35,7 @@ class ConfigManager:
             },
             'm1': {
                 'enabled': False,
-                'table_name': 'm1_semantic',
+                'table_name': 'm1_episodic',
                 'pgai': {
                     'auto_embedding': True,
                     'immediate_trigger': True,

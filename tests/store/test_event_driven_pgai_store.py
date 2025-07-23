@@ -113,7 +113,7 @@ class TestEventDrivenPgaiStore:
         listener_task.cancel()
         
         # Verify LISTEN command was executed
-        conn.execute.assert_called_with("LISTEN embedding_needed_m0_episodic")
+        conn.execute.assert_called_with("LISTEN embedding_needed_m0_raw")
     
     @pytest.mark.asyncio
     async def test_embedding_worker(self, store, mock_pool):

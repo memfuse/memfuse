@@ -221,7 +221,7 @@ class StoreFactory:
 
             # Create appropriate pgai store (traditional or event-driven)
             pgai_store = PgaiStoreFactory.create_store(
-                table_name=kwargs.get('table_name', 'm0_episodic')
+                table_name=kwargs.get('table_name', 'm0_raw')
             )
             # Set encoder on pgai_store for direct access to embedding generation
             pgai_store.encoder = encoder

@@ -51,15 +51,15 @@ OPTIONAL_EXTENSIONS_SQL = [
 ]
 
 INDEXES_SQL = [
-    "CREATE INDEX IF NOT EXISTS m0_episodic_needs_embedding_idx ON m0_episodic (needs_embedding) WHERE needs_embedding = TRUE;",
-    "CREATE INDEX IF NOT EXISTS m0_episodic_retry_status_idx ON m0_episodic (retry_status);",
-    "CREATE INDEX IF NOT EXISTS m0_episodic_retry_count_idx ON m0_episodic (retry_count);",
-    "CREATE INDEX IF NOT EXISTS m0_episodic_created_at_idx ON m0_episodic (created_at);",
-    "CREATE INDEX IF NOT EXISTS m0_episodic_embedding_idx ON m0_episodic USING hnsw (embedding vector_cosine_ops);"
+    "CREATE INDEX IF NOT EXISTS m0_raw_needs_embedding_idx ON m0_raw (needs_embedding) WHERE needs_embedding = TRUE;",
+    "CREATE INDEX IF NOT EXISTS m0_raw_retry_status_idx ON m0_raw (retry_status);",
+    "CREATE INDEX IF NOT EXISTS m0_raw_retry_count_idx ON m0_raw (retry_count);",
+    "CREATE INDEX IF NOT EXISTS m0_raw_created_at_idx ON m0_raw (created_at);",
+    "CREATE INDEX IF NOT EXISTS m0_raw_embedding_idx ON m0_raw USING hnsw (embedding vector_cosine_ops);"
 ]
 
 TABLE_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS m0_episodic (
+CREATE TABLE IF NOT EXISTS m0_raw (
     id              TEXT PRIMARY KEY,
     content         TEXT NOT NULL,
     metadata        JSONB DEFAULT '{}'::jsonb,
@@ -86,8 +86,8 @@ $$ LANGUAGE plpgsql;
 """
 
 TRIGGER_SQL = """
-CREATE TRIGGER m0_episodic_embedding_trigger
-    AFTER INSERT OR UPDATE OF needs_embedding ON m0_episodic
+CREATE TRIGGER m0_raw_embedding_trigger
+    AFTER INSERT OR UPDATE OF needs_embedding ON m0_raw
     FOR EACH ROW
     EXECUTE FUNCTION notify_embedding_needed();
 """
@@ -288,21 +288,21 @@ class DatabaseManager:
             status['tables'] = {table: True for table in tables}
             print(f"Tables found: {', '.join(f'{table:<18}' for table in tables)}")
         
-        # Check m0_episodic specifically
-        if 'm0_episodic' in status['tables']:
-            count_result = self.run_sql_command("SELECT COUNT(*) FROM m0_episodic;", "tuples")
+        # Check m0_raw specifically
+        if 'm0_raw' in status['tables']:
+            count_result = self.run_sql_command("SELECT COUNT(*) FROM m0_raw;", "tuples")
             if count_result:
-                status['m0_episodic_count'] = int(count_result.strip())
-                print(f"m0_episodic records: {status['m0_episodic_count']}")
+                status['m0_raw_count'] = int(count_result.strip())
+                print(f"m0_raw records: {status['m0_raw_count']}")
         
         # Check triggers
         trigger_result = self.run_sql_command("""
             SELECT trigger_name 
             FROM information_schema.triggers 
-            WHERE trigger_name = 'm0_episodic_embedding_trigger';
+            WHERE trigger_name = 'm0_raw_embedding_trigger';
         """, "tuples")
         
-        status['triggers']['immediate_trigger'] = bool(trigger_result and 'm0_episodic_embedding_trigger' in trigger_result)
+        status['triggers']['immediate_trigger'] = bool(trigger_result and 'm0_raw_embedding_trigger' in trigger_result)
         
         # Check functions
         function_result = self.run_sql_command("""
@@ -333,26 +333,26 @@ class DatabaseManager:
         # Get current stats
         current_status = self.get_database_status()
         
-        # Clear m0_episodic table if it exists
-        if 'm0_episodic' in current_status.get('tables', {}):
-            print("Clearing m0_episodic table...")
-            result = self.run_sql_command("TRUNCATE TABLE m0_episodic RESTART IDENTITY CASCADE;")
-            
+        # Clear m0_raw table if it exists
+        if 'm0_raw' in current_status.get('tables', {}):
+            print("Clearing m0_raw table...")
+            result = self.run_sql_command("TRUNCATE TABLE m0_raw RESTART IDENTITY CASCADE;")
+
             if result is not None:
-                print("✅ m0_episodic table cleared")
-                
+                print("✅ m0_raw table cleared")
+
                 # Verify empty
-                count_result = self.run_sql_command("SELECT COUNT(*) FROM m0_episodic;", "tuples")
+                count_result = self.run_sql_command("SELECT COUNT(*) FROM m0_raw;", "tuples")
                 if count_result and int(count_result.strip()) == 0:
                     print("✅ Table is empty")
                 else:
                     print("❌ Table is not empty after reset")
                     return False
             else:
-                print("❌ Failed to clear m0_episodic table")
+                print("❌ Failed to clear m0_raw table")
                 return False
         else:
-            print("⚠️  m0_episodic table not found")
+            print("⚠️  m0_raw table not found")
         
         print("✅ Database reset completed successfully")
         return True
@@ -414,13 +414,13 @@ class DatabaseManager:
         else:
             self.print_status("No optional extensions were available", StatusLevel.INFO)
 
-        # Create m0_episodic table
-        self.print_status("Creating m0_episodic table...", StatusLevel.INFO)
+        # Create m0_raw table
+        self.print_status("Creating m0_raw table...", StatusLevel.INFO)
         result = self.run_sql_command(TABLE_SCHEMA_SQL)
         if result is not None:
-            self.print_status("m0_episodic table created successfully", StatusLevel.SUCCESS)
+            self.print_status("m0_raw table created successfully", StatusLevel.SUCCESS)
         else:
-            self.print_status("Failed to create m0_episodic table", StatusLevel.ERROR)
+            self.print_status("Failed to create m0_raw table", StatusLevel.ERROR)
             return False
 
         # Create indexes
@@ -476,19 +476,19 @@ class DatabaseManager:
         
         validation_results = []
         
-        # Check m0_episodic table
-        table_result = self.run_sql_command("\\d m0_episodic")
+        # Check m0_raw table
+        table_result = self.run_sql_command("\\d m0_raw")
         if table_result and 'needs_embedding' in table_result:
-            validation_results.append(("m0_episodic table", True))
-            print("✅ m0_episodic table exists with correct structure")
+            validation_results.append(("m0_raw table", True))
+            print("✅ m0_raw table exists with correct structure")
         else:
-            validation_results.append(("m0_episodic table", False))
-            print("❌ m0_episodic table missing or incorrect")
+            validation_results.append(("m0_raw table", False))
+            print("❌ m0_raw table missing or incorrect")
         
         # Check trigger
         trigger_result = self.run_sql_command("""
-            SELECT COUNT(*) FROM information_schema.triggers 
-            WHERE trigger_name = 'm0_episodic_embedding_trigger';
+            SELECT COUNT(*) FROM information_schema.triggers
+            WHERE trigger_name = 'm0_raw_embedding_trigger';
         """, "tuples")
         
         if trigger_result and int(trigger_result.strip()) > 0:

@@ -137,7 +137,7 @@ SELECT
     tablename,
     pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
 FROM pg_tables 
-WHERE tablename = 'm0_episodic';
+WHERE tablename = 'm0_raw';
 
 -- Check index usage
 SELECT 
@@ -146,12 +146,12 @@ SELECT
     idx_tup_read,
     idx_tup_fetch
 FROM pg_stat_user_indexes 
-WHERE relname = 'm0_episodic';
+WHERE relname = 'm0_raw';
 
 -- Check vector index performance
 EXPLAIN (ANALYZE, BUFFERS) 
 SELECT id, content, embedding <=> '[0.1,0.2,...]'::vector as distance
-FROM m0_episodic 
+FROM m0_raw
 ORDER BY embedding <=> '[0.1,0.2,...]'::vector 
 LIMIT 10;
 ```

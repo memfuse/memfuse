@@ -150,9 +150,9 @@ class SQLiteDB(DBBase):
         )
         ''')
 
-        # Create M0 episodic table for memory hierarchy storage
+        # Create M0 raw table for memory hierarchy storage
         self.execute('''
-        CREATE TABLE IF NOT EXISTS m0_episodic (
+        CREATE TABLE IF NOT EXISTS m0_raw (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             metadata TEXT,
@@ -161,9 +161,9 @@ class SQLiteDB(DBBase):
         )
         ''')
 
-        # Create M1 facts table for memory hierarchy storage
+        # Create M1 episodic table for memory hierarchy storage
         self.execute('''
-        CREATE TABLE IF NOT EXISTS m1_facts (
+        CREATE TABLE IF NOT EXISTS m1_episodic (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             metadata TEXT,
@@ -172,9 +172,9 @@ class SQLiteDB(DBBase):
         )
         ''')
 
-        # Create M2 relations table for memory hierarchy storage
+        # Create M2 semantic table for memory hierarchy storage
         self.execute('''
-        CREATE TABLE IF NOT EXISTS m2_relations (
+        CREATE TABLE IF NOT EXISTS m2_semantic (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             metadata TEXT,

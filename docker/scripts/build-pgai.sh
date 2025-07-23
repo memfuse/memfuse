@@ -220,8 +220,8 @@ test_pgai() {
     print_status "Testing pgai extension..."
     docker exec memfuse-pgai-postgres psql -U postgres -d memfuse -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'pgai';"
     
-    print_status "Testing m0_episodic table..."
-    docker exec memfuse-pgai-postgres psql -U postgres -d memfuse -c "SELECT COUNT(*) FROM m0_episodic;"
+    print_status "Testing m0_raw table..."
+    docker exec memfuse-pgai-postgres psql -U postgres -d memfuse -c "SELECT COUNT(*) FROM m0_raw;"
     
     print_status "Testing immediate trigger system..."
     docker exec memfuse-pgai-postgres psql -U postgres -d memfuse -c "SELECT * FROM get_trigger_system_status();"

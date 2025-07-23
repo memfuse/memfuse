@@ -1,4 +1,4 @@
-"""Test for table name migration from m0_episodic to m0_raw.
+"""Test for table name migration from m0_messages to m0_raw.
 
 This test validates that the table name changes have been properly applied
 across all relevant files and configurations.
@@ -24,7 +24,7 @@ def test_config_files_updated():
         if file_path.exists():
             content = file_path.read_text()
             assert "m0_raw" in content, f"m0_raw not found in {config_file}"
-            assert "m0_episodic" not in content, f"Old m0_episodic still found in {config_file}"
+            assert "m0_messages" not in content, f"Old m0_messages still found in {config_file}"
             logger.info(f"✅ {config_file}: Updated to use m0_raw")
         else:
             logger.warning(f"⚠️ {config_file}: File not found")

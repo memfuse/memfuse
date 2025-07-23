@@ -15,6 +15,7 @@ import sys
 import os
 import time
 import signal
+import psutil
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass
@@ -46,6 +47,10 @@ MEMFUSE_HEALTH_CHECK_RETRIES = 3
 MEMFUSE_HEALTH_CHECK_INTERVAL = 2  # seconds
 PROCESS_TERMINATION_TIMEOUT = 10  # seconds
 
+# Port management settings
+PORT_CHECK_TIMEOUT = 5  # seconds
+PORT_CLEANUP_TIMEOUT = 10  # seconds
+
 # Database optimization settings
 DB_OPTIMIZATIONS = [
     "ALTER SYSTEM SET lock_timeout = '30s';",
@@ -55,6 +60,129 @@ DB_OPTIMIZATIONS = [
     "ALTER SYSTEM SET max_locks_per_transaction = 256;",
     "SELECT pg_reload_conf();"
 ]
+
+
+def check_port_usage(port: int) -> List[int]:
+    """
+    Check if a port is in use and return list of process IDs using it.
+
+    Args:
+        port: Port number to check
+
+    Returns:
+        List of process IDs using the port
+    """
+    pids = []
+    try:
+        # Use lsof command to find processes using the port
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True,
+            text=True,
+            timeout=PORT_CHECK_TIMEOUT
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            pids = [int(pid.strip()) for pid in result.stdout.strip().split('\n') if pid.strip().isdigit()]
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError):
+        # Fallback to psutil if lsof fails
+        try:
+            for conn in psutil.net_connections():
+                if conn.laddr.port == port and conn.status == psutil.CONN_LISTEN:
+                    if conn.pid:
+                        pids.append(conn.pid)
+        except (psutil.Error, AttributeError):
+            pass
+
+    return pids
+
+
+def kill_processes_on_port(port: int, force: bool = False) -> bool:
+    """
+    Kill processes using a specific port.
+
+    Args:
+        port: Port number to clear
+        force: If True, use SIGKILL; if False, use SIGTERM first
+
+    Returns:
+        True if all processes were successfully terminated
+    """
+    pids = check_port_usage(port)
+    if not pids:
+        return True
+
+    print(f"🔍 Found {len(pids)} process(es) using port {port}: {pids}")
+
+    success = True
+    for pid in pids:
+        try:
+            process = psutil.Process(pid)
+            process_name = process.name()
+            print(f"🔄 Terminating process {pid} ({process_name})...")
+
+            if force:
+                process.kill()  # SIGKILL
+            else:
+                process.terminate()  # SIGTERM
+
+            # Wait for process to terminate
+            try:
+                process.wait(timeout=PORT_CLEANUP_TIMEOUT)
+                print(f"✅ Process {pid} terminated successfully")
+            except psutil.TimeoutExpired:
+                print(f"⚠️  Process {pid} didn't terminate gracefully, forcing...")
+                process.kill()
+                process.wait(timeout=5)
+                print(f"✅ Process {pid} force-killed")
+
+        except psutil.NoSuchProcess:
+            print(f"✅ Process {pid} already terminated")
+        except psutil.AccessDenied:
+            print(f"❌ Access denied when trying to terminate process {pid}")
+            success = False
+        except Exception as e:
+            print(f"❌ Error terminating process {pid}: {e}")
+            success = False
+
+    # Verify port is now free
+    remaining_pids = check_port_usage(port)
+    if remaining_pids:
+        print(f"⚠️  Port {port} still in use by processes: {remaining_pids}")
+        return False
+
+    print(f"✅ Port {port} is now free")
+    return success
+
+
+def ensure_port_available(port: int, force_cleanup: bool = True) -> bool:
+    """
+    Ensure a port is available for use, cleaning up if necessary.
+
+    Args:
+        port: Port number to ensure is available
+        force_cleanup: If True, attempt to kill processes using the port
+
+    Returns:
+        True if port is available after cleanup
+    """
+    pids = check_port_usage(port)
+    if not pids:
+        print(f"✅ Port {port} is available")
+        return True
+
+    if not force_cleanup:
+        print(f"❌ Port {port} is in use by processes: {pids}")
+        return False
+
+    print(f"🧹 Port {port} is in use, attempting cleanup...")
+
+    # First try graceful termination
+    if kill_processes_on_port(port, force=False):
+        return True
+
+    # If graceful termination failed, try force kill
+    print(f"🔨 Graceful termination failed, force-killing processes on port {port}...")
+    return kill_processes_on_port(port, force=True)
 
 
 class StatusLevel(Enum):
@@ -74,6 +202,7 @@ class LauncherConfig:
     show_logs: bool = True
     background: bool = False
     timeout: Optional[int] = None
+    port_cleanup: bool = True
 
     @classmethod
     def from_env(cls) -> 'LauncherConfig':
@@ -84,7 +213,8 @@ class LauncherConfig:
             optimize_db=os.getenv("MEMFUSE_OPTIMIZE_DB", "true").lower() != "false",
             show_logs=os.getenv("MEMFUSE_SHOW_LOGS", "true").lower() != "false",
             background=os.getenv("MEMFUSE_BACKGROUND", "false").lower() == "true",
-            timeout=int(os.getenv("MEMFUSE_TIMEOUT", "0")) if os.getenv("MEMFUSE_TIMEOUT", "").isdigit() else None
+            timeout=int(os.getenv("MEMFUSE_TIMEOUT", "0")) if os.getenv("MEMFUSE_TIMEOUT", "").isdigit() else None,
+            port_cleanup=os.getenv("MEMFUSE_PORT_CLEANUP", "true").lower() != "false"
         )
 
     @classmethod
@@ -96,7 +226,8 @@ class LauncherConfig:
             optimize_db=args.optimize_db,
             show_logs=args.show_logs,
             background=args.background,
-            timeout=args.timeout
+            timeout=args.timeout,
+            port_cleanup=True  # Default to True
         )
 
         # Handle negative flags
@@ -104,6 +235,8 @@ class LauncherConfig:
             config.start_db = False
         if args.no_optimize_db:
             config.optimize_db = False
+        if args.no_port_cleanup:
+            config.port_cleanup = False
 
         # Adjust show_logs based on background flag
         if config.background:
@@ -327,6 +460,15 @@ class MemFuseLauncher:
         """Start MemFuse server."""
         self.print_status("Starting MemFuse server...", StatusLevel.INFO)
 
+        # Check and clean up port before starting (if enabled)
+        if self.config.port_cleanup:
+            self.print_status(f"Checking port {MEMFUSE_API_PORT} availability...", StatusLevel.INFO)
+            if not ensure_port_available(MEMFUSE_API_PORT, force_cleanup=True):
+                self.print_status(f"Failed to free port {MEMFUSE_API_PORT}", StatusLevel.ERROR)
+                return False
+        else:
+            self.print_status("Port cleanup disabled, skipping port check", StatusLevel.INFO)
+
         try:
             if show_logs:
                 # Start with visible output
@@ -480,6 +622,8 @@ Examples:
                         help='Run server in background (disables logs)')
     parser.add_argument('--timeout', type=int, default=None,
                         help='Startup timeout in seconds')
+    parser.add_argument('--no-port-cleanup', action='store_true',
+                        help='Skip automatic port cleanup before starting services')
     parser.add_argument('--version', action='version', version='MemFuse Launcher 2.0')
 
     args = parser.parse_args()
