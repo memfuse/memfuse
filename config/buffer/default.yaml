@@ -2,7 +2,7 @@
 # Buffer configuration for MemFuse
 
 # Buffer system enabled
-enabled: false
+enabled: true
 
 # RoundBuffer configuration - Token-based FIFO buffer
 round_buffer:

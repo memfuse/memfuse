@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from ...rag.chunk.base import ChunkData
-from ...hierarchy.llm_service import AdvancedLLMService, FormedEpisode
+from ...hierarchy.llm_service import AdvancedLLMService, FormedEpisode, ExtractedFact
 
 
 @dataclass
