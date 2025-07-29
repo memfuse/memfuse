@@ -67,9 +67,10 @@ This repository contains the official server core services for seamless integrat
 | **Unified Cognitive Search**      | Seamlessly combines vector, graph, and keyword search with intelligent fusion and re-ranking for superior accuracy and insights   |
 | **Cognitive Memory Architecture** | Human-inspired layered memory system: M0 (raw data/episodic), M1 (structured facts/semantic), and M2 (knowledge graph/conceptual) |
 | **Local-First**                   | Run the server locally or deploy with Docker — no mandatory cloud dependencies or fees                                            |
-| **Pluggable Backends**            | Compatible with Chroma, Qdrant, pgvector, Neo4j, Redis, and custom adapters (expanding support)                                   |
+| **Pluggable Backends**            | Built on TimescaleDB with custom pgai implementation, compatible with Qdrant, Neo4j, Redis, and expanding backend support        |
 | **Multi-Tenant Support**          | Secure isolation between users, agents, and sessions with robust scoping and access controls                                      |
 | **Framework-Friendly**            | Seamless integration with LangChain, AutoGen, Vercel AI SDK, and direct OpenAI/Anthropic/Gemini/Ollama API calls                  |
+| **Production-Ready Testing**      | Comprehensive layered testing framework (smoke, integration, e2e, performance) ensuring reliability at scale                      |
 | **Apache 2.0 Licensed**           | Fully open source — fork, extend, customize, and deploy as you need                                                               |
 
 ---
@@ -96,14 +97,22 @@ To set up the MemFuse server locally:
     **Using Poetry (Recommended)**
 
     ```bash
+    # Ensure Docker daemon is running first
+    docker --version  # Verify Docker is available
+    
     poetry install
-    poetry run memfuse-core
+    # TimescaleDB database will start automatically via Docker
+    poetry run python scripts/memfuse_launcher.py
     ```
 
     **Using pip**
 
     ```bash
+    # Ensure Docker daemon is running first
+    docker --version  # Verify Docker is available
+    
     pip install -e .
+    # TimescaleDB database will start automatically via Docker
     python -m memfuse_core
     ```
 
@@ -114,6 +123,21 @@ To use MemFuse in your applications, install the Python SDK simply from PyPI
 ```bash
 pip install memfuse
 ```
+
+### Database Requirements
+
+MemFuse uses **TimescaleDB** as its primary database backend with a custom pgai-like implementation for advanced vector operations and automatic embedding generation.
+
+**Prerequisites:**
+- **Docker daemon must be running** (required for database startup)
+- Docker and Docker Compose installed
+- **TimescaleDB**: Automatically provided via `timescale/timescaledb-ha:pg17` Docker image
+- **pgvector**: Vector similarity search (included in TimescaleDB image)
+- **Custom pgai**: Event-driven embedding system (built-in, no external extension needed)
+
+> **⚠️ Important**: Make sure Docker daemon is running before starting MemFuse. The service automatically starts the TimescaleDB container.
+
+> **Note**: MemFuse implements its own pgai-like functionality and does **not** require TimescaleDB's official pgai extension.
 
 For detailed installation instructions, configuration options, and troubleshooting tips, see the online [Installation Guide](https://memfuse.vercel.app/docs/installation).
 
@@ -170,6 +194,26 @@ print(f"Follow-up: {followup_response.choices[0].message.content}")
 
 🔥 **That's it!** Every subsequent call under the same scope automatically stores notable facts to memory and retrieves them when relevant.
 
+### Database Management
+
+MemFuse provides comprehensive database management tools:
+
+```bash
+# Check database status and extensions
+poetry run python scripts/database_manager.py status
+
+# Reset data (keep schema) 
+poetry run python scripts/database_manager.py reset
+
+# Validate schema and triggers
+poetry run python scripts/database_manager.py validate
+
+# Complete schema rebuild (⚠️ destroys data)
+poetry run python scripts/database_manager.py recreate
+```
+
+For detailed database management, see the [Scripts Documentation](scripts/README.md).
+
 ---
 
 ## 📚 Documentation
@@ -188,7 +232,10 @@ print(f"Follow-up: {followup_response.choices[0].message.content}")
 - [x] **Lightning-fast performance** — Efficient buffering with write aggregation, intelligent prefetching, and query caching
 - [x] **Level 0 Memory Layer** — Raw chat history storage and retrieval
 - [x] **Multi-tenant support** — Secure user, agent, and session isolation
-- [ ] **Level 1 Memory Layer** — Semantic and episodic memory processing
+- [x] **Level 1 Memory Layer** — Semantic and episodic memory processing
+- [x] **TimescaleDB Integration** — Production-ready database backend with custom pgai implementation
+- [x] **Enhanced Memory Architecture** — M0 (raw), M1 (episodic), M2 (semantic), M3 (procedural), MSMG (graph) layers
+- [x] **Complete REST API** — Users, Agents, Sessions, Messages, and Knowledge endpoints
 - [x] **Re-ranking plugin** — LLM-powered memory relevance scoring
 - [x] **Python SDK** — Complete client library for Python applications
 - [x] **Benchmarks** — LongMemEval and MSC evaluation frameworks
