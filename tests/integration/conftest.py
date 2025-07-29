@@ -43,6 +43,9 @@ def setup_integration_environment():
     os.environ["POSTGRES_DB"] = "memfuse"
     os.environ["POSTGRES_USER"] = "postgres"
     os.environ["POSTGRES_PASSWORD"] = "postgres"
+
+    # Use default buffer configuration from config/buffer/default.yaml
+    # This allows testing both buffer enabled and disabled scenarios
     
     # Check database connectivity first
     print("🔍 Checking database connectivity...")

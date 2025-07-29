@@ -819,21 +819,22 @@ class Database:
             order: Sort order, either 'asc' or 'desc' (default: 'desc')
 
         Returns:
-            List of message data
+            List of message data from the messages table only
         """
-        # Get messages from both traditional messages table and m0_raw table
+        # Get messages from traditional messages table (rounds-based) only
+        # Note: We do NOT include m0_raw table data as that contains internal processing data
+        # that should not be exposed through the API
         messages = []
 
-        # First, get messages from traditional messages table (rounds-based)
+        # Get messages from traditional messages table (rounds-based)
         rounds = self.backend.select('rounds', {'session_id': session_id})
         if rounds:
             for round_data in rounds:
                 round_messages = self.get_messages_by_round(round_data['id'])
+                # Add session_id to each message for API compatibility
+                for message in round_messages:
+                    message['session_id'] = session_id
                 messages.extend(round_messages)
-
-        # Second, get messages from m0_raw table (memory hierarchy)
-        m0_raw = self.get_m0_raw_by_session(session_id)
-        messages.extend(m0_raw)
 
         # Sort messages based on the specified field and order
         if sort_by == 'timestamp':

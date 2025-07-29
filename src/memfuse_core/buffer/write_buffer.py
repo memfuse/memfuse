@@ -92,14 +92,19 @@ class WriteBuffer:
         
         # Delegate to RoundBuffer (which may trigger transfer to HybridBuffer)
         result = await self.round_buffer.add(messages, session_id)
-        
-        if result:  # Transfer was triggered
+
+        # Extract transfer status and message IDs from result
+        transfer_triggered = result.get("transfer_triggered", False)
+        message_ids = result.get("message_ids", [])
+
+        if transfer_triggered:
             self.total_transfers += 1
             logger.debug(f"WriteBuffer: Transfer triggered, total transfers: {self.total_transfers}")
-        
+
         return {
             "status": "success",
-            "transfer_triggered": result,
+            "transfer_triggered": transfer_triggered,
+            "message_ids": message_ids,
             "total_writes": self.total_writes,
             "total_transfers": self.total_transfers
         }
@@ -144,7 +149,8 @@ class WriteBuffer:
             "total_tokens": total_tokens,
             "transfers_triggered": execution_result.get("transfers", 0),
             "processing_time": processing_time,
-            "strategy_used": transfer_strategy["type"]
+            "strategy_used": transfer_strategy["type"],
+            "message_ids": execution_result.get("message_ids", [])
         }
     
     def get_round_buffer(self) -> RoundBuffer:
@@ -391,19 +397,26 @@ class WriteBuffer:
             Dictionary with execution results
         """
         transfers = 0
+        all_message_ids = []
 
         # Add all to RoundBuffer first
         for message_list in processed_batch:
             result = await self.round_buffer.add(message_list)
-            if result:
-                transfers += 1
+            if isinstance(result, dict):
+                if result.get("transfer_triggered", False):
+                    transfers += 1
+                all_message_ids.extend(result.get("message_ids", []))
+            else:
+                # Backward compatibility for old boolean return
+                if result:
+                    transfers += 1
 
         # Force transfer if needed
         if self.round_buffer.rounds:
             await self.round_buffer._transfer_and_clear("bulk_strategy")
             transfers += 1
 
-        return {"transfers": transfers, "strategy": "bulk"}
+        return {"transfers": transfers, "strategy": "bulk", "message_ids": all_message_ids}
 
     async def _session_grouped_strategy(self, processed_batch: MessageBatchList, groups: List[str]) -> Dict[str, Any]:
         """Process batch grouped by session for optimal performance.
@@ -416,6 +429,7 @@ class WriteBuffer:
             Dictionary with execution results
         """
         transfers = 0
+        all_message_ids = []
 
         # Group messages by session
         session_groups = self._group_by_session(processed_batch)
@@ -424,10 +438,16 @@ class WriteBuffer:
         for session_id, message_lists in session_groups.items():
             for message_list in message_lists:
                 result = await self.round_buffer.add(message_list, session_id)
-                if result:
-                    transfers += 1
+                if isinstance(result, dict):
+                    if result.get("transfer_triggered", False):
+                        transfers += 1
+                    all_message_ids.extend(result.get("message_ids", []))
+                else:
+                    # Backward compatibility for old boolean return
+                    if result:
+                        transfers += 1
 
-        return {"transfers": transfers, "strategy": "session_grouped", "groups": len(session_groups)}
+        return {"transfers": transfers, "strategy": "session_grouped", "groups": len(session_groups), "message_ids": all_message_ids}
 
     async def _sequential_strategy(self, processed_batch: MessageBatchList) -> Dict[str, Any]:
         """Standard sequential processing with optimizations.
@@ -439,13 +459,20 @@ class WriteBuffer:
             Dictionary with execution results
         """
         transfers = 0
+        all_message_ids = []
 
         for message_list in processed_batch:
             result = await self.round_buffer.add(message_list)
-            if result:
-                transfers += 1
+            if isinstance(result, dict):
+                if result.get("transfer_triggered", False):
+                    transfers += 1
+                all_message_ids.extend(result.get("message_ids", []))
+            else:
+                # Backward compatibility for old boolean return
+                if result:
+                    transfers += 1
 
-        return {"transfers": transfers, "strategy": "sequential"}
+        return {"transfers": transfers, "strategy": "sequential", "message_ids": all_message_ids}
 
     def _group_by_session(self, message_batch_list: MessageBatchList) -> Dict[str, List[MessageList]]:
         """Group message lists by session ID.

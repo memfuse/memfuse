@@ -4,6 +4,7 @@ This service implements the Buffer architecture with RoundBuffer, HybridBuffer,
 and QueryBuffer components, providing improved performance and functionality.
 """
 
+import os
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from omegaconf import DictConfig
 from loguru import logger
@@ -26,7 +27,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
     - HybridBuffer: Dual-format (chunks + rounds) medium-term storage with FIFO
     - QueryBuffer: Unified query with sorting and caching
     """
-    
+
     def __init__(
         self,
         memory_service: "MemoryService",
@@ -48,8 +49,16 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         self.user_id = getattr(memory_service, '_user_id', user) if memory_service else user
 
         # Check if buffer is enabled (use global config, not just buffer section)
+        # Environment variable can override config file setting
         buffer_config = self.config.get('buffer', {})
-        self.buffer_enabled = buffer_config.get('enabled', True)
+        config_enabled = buffer_config.get('enabled', True)
+        env_enabled = os.environ.get('MEMFUSE_BUFFER_ENABLED', '').lower()
+
+        if env_enabled in ('true', 'false'):
+            self.buffer_enabled = env_enabled == 'true'
+            logger.info(f"BufferService: Buffer enabled setting overridden by environment variable: {self.buffer_enabled}")
+        else:
+            self.buffer_enabled = config_enabled
 
         # Statistics (always available)
         self.total_items_added = 0
@@ -429,11 +438,16 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             Formatted service response
         """
         if result.get("status") == "success":
+            # Extract message_ids from MemoryService result for API compatibility
+            memory_data = result.get("data", {})
+            message_ids = memory_data.get("message_ids", [])
+
             return self._success_response(
                 data={
                     "mode": "bypass",
                     "batch_size": batch_size,
-                    "memory_service_result": result.get("data", {}),
+                    "message_ids": message_ids,  # Include message_ids at top level for API compatibility
+                    "memory_service_result": memory_data,
                     "message": f"Processed {batch_size} message lists via MemoryService"
                 },
                 message=f"Successfully processed {batch_size} message lists in bypass mode"
@@ -498,7 +512,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         """Ensure message has required fields (id, created_at, updated_at).
 
         For initial creation, created_at and updated_at use the same timestamp.
-        When storing to SQLite database, updated_at will be refreshed.
+        When storing to database, updated_at will be refreshed.
 
         Args:
             message: Message dictionary to update
@@ -510,15 +524,20 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         if 'id' not in message or not message['id']:
             message['id'] = str(uuid.uuid4())
 
-        # Add created_at if missing
-        if 'created_at' not in message or not message['created_at']:
-            now = datetime.now().isoformat()
-            message['created_at'] = now
+        # Generate timestamp once for efficiency
+        needs_timestamp = ('created_at' not in message or not message['created_at'] or
+                          'updated_at' not in message or not message['updated_at'])
 
-        # Add updated_at if missing - use same timestamp as created_at for initial creation
-        if 'updated_at' not in message or not message['updated_at']:
-            # For initial creation, use the same timestamp as created_at
-            message['updated_at'] = message['created_at']
+        if needs_timestamp:
+            now = datetime.now().isoformat()
+
+            # Add created_at if missing
+            if 'created_at' not in message or not message['created_at']:
+                message['created_at'] = now
+
+            # Add updated_at if missing - use same timestamp as created_at for initial creation
+            if 'updated_at' not in message or not message['updated_at']:
+                message['updated_at'] = message['created_at']
 
     async def query(
         self,
@@ -641,18 +660,19 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     order=order
                 )
             else:
-                # Normal mode: Use buffer components
+                # Buffer enabled mode
                 if buffer_only:
-                    # Only return RoundBuffer data (through WriteBuffer)
+                    # Only return RoundBuffer data
                     round_buffer = self.get_write_buffer().get_round_buffer()
-                    return await round_buffer.get_all_messages_for_read_api(
+                    return await round_buffer.get_messages_by_session(
+                        session_id=session_id,
                         limit=limit,
                         sort_by=sort_by,
                         order=order
                     )
                 else:
-                    # Delegate to QueryBuffer for session querying
-                    return await self.query_buffer.query_by_session(
+                    # Query all data sources: RoundBuffer + HybridBuffer + Database
+                    return await self._get_from_all_sources(
                         session_id=session_id,
                         limit=limit,
                         sort_by=sort_by,
@@ -662,7 +682,200 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         except Exception as e:
             logger.error(f"BufferService.get_messages_by_session: Error: {e}")
             return []
-    
+
+    async def _get_from_all_sources(
+        self,
+        session_id: str,
+        limit: int = 20,
+        sort_by: str = "created_at",
+        order: str = "desc"
+    ) -> List[Dict[str, Any]]:
+        """Get messages from all data sources: RoundBuffer + HybridBuffer + Database.
+
+        This method implements the correct logic for buffer_only=false:
+        1. Get messages from RoundBuffer (latest, in-memory data)
+        2. Get messages from HybridBuffer (intermediate cached data)
+        3. Get messages from Database (persisted data)
+        4. Merge and deduplicate by message ID (priority: RoundBuffer > HybridBuffer > Database)
+        5. Sort by specified criteria and apply limit
+
+        Args:
+            session_id: Session ID to query
+            limit: Maximum number of messages to return
+            sort_by: Field to sort by (created_at, updated_at, etc.)
+            order: Sort order (asc or desc)
+
+        Returns:
+            List of message dictionaries, merged and sorted from all sources
+        """
+        try:
+            logger.info(f"BufferService._get_from_all_sources: Querying all sources for session {session_id}")
+
+            # Step 1: Get messages from RoundBuffer (highest priority)
+            round_buffer_messages = []
+            if self.write_buffer:
+                round_buffer = self.write_buffer.get_round_buffer()
+                if round_buffer:
+                    round_buffer_messages = await round_buffer.get_messages_by_session(
+                        session_id=session_id,
+                        limit=limit * 3,  # Get more to account for deduplication
+                        sort_by=sort_by,
+                        order=order
+                    )
+                    logger.info(f"BufferService._get_from_all_sources: Found {len(round_buffer_messages)} messages in RoundBuffer")
+
+            # Step 2: Get messages from HybridBuffer (medium priority)
+            hybrid_buffer_messages = []
+            if self.write_buffer:
+                hybrid_buffer = self.write_buffer.get_hybrid_buffer()
+                if hybrid_buffer:
+                    # HybridBuffer doesn't have session-specific query, get all and filter
+                    all_hybrid_messages = await hybrid_buffer.get_all_messages_for_read_api(
+                        limit=limit * 3,
+                        sort_by=sort_by,
+                        order=order
+                    )
+                    # Filter by session_id
+                    hybrid_buffer_messages = [
+                        msg for msg in all_hybrid_messages
+                        if self._message_belongs_to_session(msg, session_id)
+                    ]
+                    logger.info(f"BufferService._get_from_all_sources: Found {len(hybrid_buffer_messages)} messages in HybridBuffer")
+
+            # Step 3: Get messages from Database (lowest priority)
+            database_messages = []
+            if self.memory_service:
+                database_messages = await self.memory_service.get_messages_by_session(
+                    session_id=session_id,
+                    limit=limit * 3,  # Get more to account for deduplication
+                    sort_by=sort_by,
+                    order=order
+                )
+                logger.info(f"BufferService._get_from_all_sources: Found {len(database_messages)} messages in Database")
+
+            # Step 4: Merge and deduplicate messages (priority order: RoundBuffer > HybridBuffer > Database)
+            merged_messages = self._merge_messages_from_all_sources(
+                round_buffer_messages, hybrid_buffer_messages, database_messages, sort_by, order
+            )
+
+            # Step 5: Apply final limit
+            if limit > 0:
+                merged_messages = merged_messages[:limit]
+
+            logger.info(f"BufferService._get_from_all_sources: Merged {len(round_buffer_messages)}+{len(hybrid_buffer_messages)}+{len(database_messages)} = {len(merged_messages)} messages")
+            return merged_messages
+
+        except Exception as e:
+            logger.error(f"BufferService._get_from_all_sources: Error: {e}")
+            # Fallback to database-only query
+            if self.memory_service:
+                return await self.memory_service.get_messages_by_session(
+                    session_id=session_id,
+                    limit=limit,
+                    sort_by=sort_by,
+                    order=order
+                )
+            return []
+
+    def _message_belongs_to_session(self, message: Dict[str, Any], session_id: str) -> bool:
+        """Check if a message belongs to the specified session.
+
+        Args:
+            message: Message dictionary
+            session_id: Target session ID
+
+        Returns:
+            True if message belongs to session
+        """
+        # Check session_id in metadata first
+        metadata = message.get("metadata", {})
+        message_session_id = metadata.get("session_id")
+
+        # If not in metadata, check message directly
+        if not message_session_id:
+            message_session_id = message.get("session_id")
+
+        return message_session_id == session_id
+
+    def _merge_messages_from_all_sources(
+        self,
+        round_buffer_messages: List[Dict[str, Any]],
+        hybrid_buffer_messages: List[Dict[str, Any]],
+        database_messages: List[Dict[str, Any]],
+        sort_by: str = "created_at",
+        order: str = "desc"
+    ) -> List[Dict[str, Any]]:
+        """Merge and deduplicate messages from all three sources.
+
+        Priority order: RoundBuffer > HybridBuffer > Database
+        Messages with the same ID from higher priority sources override lower priority ones.
+
+        Args:
+            round_buffer_messages: Messages from RoundBuffer (highest priority)
+            hybrid_buffer_messages: Messages from HybridBuffer (medium priority)
+            database_messages: Messages from Database (lowest priority)
+            sort_by: Field to sort by
+            order: Sort order (asc or desc)
+
+        Returns:
+            Merged and deduplicated list of messages
+        """
+        # Create a dictionary to track messages by ID
+        message_dict = {}
+
+        # Add messages in priority order (lowest to highest priority)
+        # Database messages (lowest priority)
+        for msg in database_messages:
+            msg_id = msg.get('id')
+            if msg_id:
+                message_dict[msg_id] = msg
+
+        # HybridBuffer messages (medium priority) - overwrites database if same ID
+        for msg in hybrid_buffer_messages:
+            msg_id = msg.get('id')
+            if msg_id:
+                message_dict[msg_id] = msg
+
+        # RoundBuffer messages (highest priority) - overwrites others if same ID
+        for msg in round_buffer_messages:
+            msg_id = msg.get('id')
+            if msg_id:
+                message_dict[msg_id] = msg
+
+        # Convert back to list
+        merged_messages = list(message_dict.values())
+
+        # Sort the merged messages
+        reverse_order = (order.lower() == "desc")
+
+        try:
+            if sort_by == "created_at":
+                merged_messages.sort(
+                    key=lambda x: x.get('created_at', ''),
+                    reverse=reverse_order
+                )
+            elif sort_by == "updated_at":
+                merged_messages.sort(
+                    key=lambda x: x.get('updated_at', ''),
+                    reverse=reverse_order
+                )
+            elif sort_by == "timestamp":  # Backward compatibility
+                merged_messages.sort(
+                    key=lambda x: x.get('created_at', ''),
+                    reverse=reverse_order
+                )
+            else:
+                # Default sorting by created_at if sort_by field is not recognized
+                merged_messages.sort(
+                    key=lambda x: x.get('created_at', ''),
+                    reverse=reverse_order
+                )
+        except Exception as e:
+            logger.warning(f"Error sorting messages by {sort_by}: {e}")
+            # Return unsorted if sorting fails
+
+        return merged_messages
+
     async def get_buffer_stats(self) -> Dict[str, Any]:
         """Get comprehensive statistics about the Buffer system.
         

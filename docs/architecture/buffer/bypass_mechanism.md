@@ -47,14 +47,39 @@ buffer:
   enabled: false  # Complete bypass - all other buffer config ignored
 ```
 
+### Environment Variable Override
+
+The buffer configuration can be overridden at runtime using environment variables:
+
+```bash
+# Override config file setting to disable buffer
+export MEMFUSE_BUFFER_ENABLED=false
+poetry run memfuse-core
+
+# Override config file setting to enable buffer
+export MEMFUSE_BUFFER_ENABLED=true
+poetry run memfuse-core
+```
+
+**Priority Order**:
+1. Environment variable `MEMFUSE_BUFFER_ENABLED` (highest priority)
+2. Configuration file `config/buffer/default.yaml` (fallback)
+3. Default value `true` (if neither is set)
+
 ## Component Initialization Logic
 
 ### Buffer Enabled Mode (`enabled: true`)
 
 ```python
 # BufferService.__init__() when enabled=true
-buffer_config = self.config.get('buffer', {})
-self.buffer_enabled = buffer_config.get('enabled', True)
+# Check environment variable first, then config file, then default
+import os
+env_enabled = os.getenv("MEMFUSE_BUFFER_ENABLED")
+if env_enabled is not None:
+    self.buffer_enabled = env_enabled.lower() == "true"
+else:
+    buffer_config = self.config.get('buffer', {})
+    self.buffer_enabled = buffer_config.get('enabled', True)
 
 if self.buffer_enabled:
     # Full buffer architecture initialization

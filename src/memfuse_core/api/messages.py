@@ -1,6 +1,6 @@
 """Message API endpoints."""
 
-from typing import Dict, List, Optional, Tuple, Any, cast
+from typing import Dict, List, Optional, Any, cast
 from loguru import logger
 from fastapi import APIRouter, Depends, status
 
@@ -25,7 +25,9 @@ from ..services.service_factory import ServiceFactory
 
 router = APIRouter()
 
-ENABLE_BUFFER_SERVICE = True
+# BufferService is now always used, with buffer enabled/disabled controlled by config/buffer/default.yaml
+
+
 
 # Create a dependency for API key validation
 api_key_dependency = Depends(validate_api_key)
@@ -71,24 +73,15 @@ async def get_service_for_session(
     agent_name = agent["name"]
     session_name = session.get("name", "default")
 
-    if ENABLE_BUFFER_SERVICE:
-        # If BufferService is enabled, use it
-        logger.info("Using BufferService for message operations")
-        service = await ServiceFactory.get_buffer_service(
-            user=user_name,
-            agent=agent_name,
-            session=session_name,
-            session_id=session_id,
-        )
-    else:
-        # Otherwise, get a MemoryService instance for this user
-        logger.info("BufferService disabled, using MemoryService instance")
-        service = await ServiceFactory.get_memory_service(
-            user=user_name,
-            agent=agent_name,
-            session=session_name,
-            session_id=session_id,
-        )
+    # Always use BufferService, which internally handles buffer enabled/disabled mode
+    # based on config/buffer/default.yaml settings
+    logger.info("Using BufferService for message operations")
+    service = await ServiceFactory.get_buffer_service(
+        user=user_name,
+        agent=agent_name,
+        session=session_name,
+        session_id=session_id,
+    )
 
     return service
 
@@ -151,9 +144,11 @@ async def add_messages(
 
     # Extract message IDs from result
     message_ids = []
+    logger.info(f"Messages API: Service result: {result}")
     if (result and result.get("status") == "success"
             and result.get("data") is not None):
         message_ids = result["data"].get("message_ids", [])
+        logger.info(f"Messages API: Extracted message_ids: {message_ids}")
 
     # Create response data with message IDs
     response_data = {"message_ids": message_ids}
@@ -192,7 +187,7 @@ async def list_messages(
         limit: Maximum number of messages to return (default: 20, max: 100)
         sort_by: Field to sort messages by (allowed values: timestamp, id)
         order: Sort order (allowed values: asc, desc)
-        buffer_only: Buffer parameter - if "true", only return RoundBuffer data; if "false", return HybridBuffer + SQLite data excluding RoundBuffer
+        buffer_only: Buffer parameter - if "true", only return RoundBuffer data; if "false" or omitted, return data from all sources (RoundBuffer + HybridBuffer + Database)
     """
     db = DatabaseService.get_instance()
     

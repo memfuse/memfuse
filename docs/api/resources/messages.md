@@ -35,14 +35,14 @@ Lists all messages in a specific session with optional pagination, sorting, and 
 - `limit` (integer, optional): Maximum number of messages to return (default: 20, max: 100)
 - `sort_by` (string, optional): Field to sort messages by (default: "timestamp", allowed values: "timestamp", "id")
 - `order` (string, optional): Sort order (default: "desc", allowed values: "asc", "desc")
-- `buffer_only` (string, optional): Buffer filtering - if "true", only return RoundBuffer data; if "false", return HybridBuffer + SQLite data excluding RoundBuffer
+- `buffer_only` (boolean, optional): Buffer filtering - if "true", only return RoundBuffer data; if "false" or omitted, return data from all sources (RoundBuffer + HybridBuffer + Database)
 
 **Example URLs:**
 
 - `GET /api/v1/sessions/session-456/messages` - Get latest 20 messages
 - `GET /api/v1/sessions/session-456/messages?limit=10&order=asc` - Get oldest 10 messages
 - `GET /api/v1/sessions/session-456/messages?sort_by=id&order=desc&limit=50` - Get latest 50 messages sorted by ID
-- `GET /api/v1/sessions/session-456/messages?buffer_only=true` - Get messages from buffer only
+- `GET /api/v1/sessions/session-456/messages?buffer_only=true` - Get messages from round buffer only
 
 **Response:**
 
@@ -74,6 +74,20 @@ Lists all messages in a specific session with optional pagination, sorting, and 
   "errors": null
 }
 ```
+
+**Buffer Behavior:**
+
+The `buffer_only` parameter controls which data sources are queried:
+
+- **`buffer_only=true`**: Only returns messages from RoundBuffer (latest, in-memory data)
+- **`buffer_only=false` or omitted**: Returns messages from all sources:
+  - RoundBuffer (highest priority)
+  - HybridBuffer (medium priority)
+  - Database (lowest priority)
+  - Messages are merged and deduplicated by ID, with RoundBuffer taking precedence
+
+**Buffer Disabled Mode:**
+When buffer is disabled (`MEMFUSE_BUFFER_ENABLED=false`), the `buffer_only` parameter is ignored and all requests query the database directly through MemoryService.
 
 **Error Response (Session Not Found):**
 

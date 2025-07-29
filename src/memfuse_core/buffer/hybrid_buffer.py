@@ -133,6 +133,35 @@ class HybridBuffer:
 
         logger.info("HybridBuffer: Shutdown completed")
 
+    async def wait_for_pending_flushes(self, timeout: float = 30.0) -> bool:
+        """Wait for all pending flush tasks to complete.
+
+        Args:
+            timeout: Maximum time to wait in seconds
+
+        Returns:
+            True if all tasks completed, False if timeout occurred
+        """
+        if not self.pending_flush_tasks:
+            logger.debug("HybridBuffer: No pending flush tasks to wait for")
+            return True
+
+        logger.info(f"HybridBuffer: Waiting for {len(self.pending_flush_tasks)} pending flush tasks (timeout={timeout}s)")
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*self.pending_flush_tasks.values(), return_exceptions=True),
+                timeout=timeout
+            )
+            logger.info("HybridBuffer: All pending flush tasks completed")
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(f"HybridBuffer: Timeout waiting for flush tasks after {timeout}s")
+            return False
+        except Exception as e:
+            logger.error(f"HybridBuffer: Error waiting for flush tasks: {e}")
+            return False
+
     def set_flush_manager(self, flush_manager: FlushManager) -> None:
         """Set the FlushManager instance.
 

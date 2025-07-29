@@ -6,6 +6,7 @@ when a new session starts.
 """
 
 import asyncio
+import uuid
 from typing import Any, Dict, List, Optional, Callable
 from loguru import logger
 
@@ -70,30 +71,37 @@ class RoundBuffer:
         self.transfer_handler = handler
         logger.debug("RoundBuffer: Transfer handler set")
     
-    async def add(self, messages: MessageList, session_id: Optional[str] = None) -> bool:
+    async def add(self, messages: MessageList, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Add a MessageList to the buffer.
-        
+
         Args:
             messages: List of message dictionaries
             session_id: Session ID for the messages
-            
+
         Returns:
-            True if transfer was triggered, False otherwise
+            Dictionary with transfer status and message IDs
         """
         if not messages:
-            return False
+            return {"transfer_triggered": False, "message_ids": []}
         
         async with self._lock:
             # Extract session_id from messages if not provided
             if session_id is None:
                 session_id = self._extract_session_id(messages)
-            
+
+            # Pre-generate message IDs for all messages
+            message_ids = []
+            for message in messages:
+                if 'id' not in message or not message['id']:
+                    message['id'] = str(uuid.uuid4())
+                message_ids.append(message['id'])
+
             # Check for session change
             if self.current_session_id is not None and session_id != self.current_session_id:
                 logger.info(f"RoundBuffer: Session change detected ({self.current_session_id} -> {session_id})")
                 await self._transfer_and_clear("session_change")
                 self.total_session_changes += 1
-            
+
             # Update current session
             self.current_session_id = session_id
             
@@ -114,7 +122,7 @@ class RoundBuffer:
                     await self.transfer_handler([messages])
                     self.total_transfers += 1
 
-                return True  # Transfer was triggered
+                return {"transfer_triggered": True, "message_ids": message_ids}
 
             # Check if adding new messages would exceed token limit
             transfer_triggered = False
@@ -145,7 +153,7 @@ class RoundBuffer:
             else:
                 logger.debug(f"RoundBuffer: Added round with {new_tokens} tokens, total: {self.current_tokens}")
 
-            return transfer_triggered
+            return {"transfer_triggered": transfer_triggered, "message_ids": message_ids}
     
     async def _transfer_and_clear(self, reason: str) -> None:
         """Transfer all data to HybridBuffer and clear the buffer.
@@ -246,7 +254,94 @@ class RoundBuffer:
                 all_messages = all_messages[:limit]
             
             return all_messages
-    
+
+    async def get_messages_by_session(
+        self,
+        session_id: str,
+        limit: Optional[int] = None,
+        sort_by: str = "created_at",
+        order: str = "desc"
+    ) -> List[Dict[str, Any]]:
+        """Get messages from buffer filtered by session_id.
+
+        Args:
+            session_id: Session ID to filter by
+            limit: Maximum number of messages to return
+            sort_by: Field to sort by (created_at, updated_at, etc.)
+            order: Sort order (asc or desc)
+
+        Returns:
+            List of message dictionaries for the specified session
+        """
+        async with self._lock:
+            session_messages = []
+
+            for round_messages in self.rounds:
+                for message in round_messages:
+                    # Check if message belongs to the requested session
+                    message_session_id = None
+
+                    # Try to get session_id from metadata first
+                    metadata = message.get("metadata", {})
+                    message_session_id = metadata.get("session_id")
+
+                    # If not in metadata, try to get from message directly
+                    if not message_session_id:
+                        message_session_id = message.get("session_id")
+
+                    # If still not found, check if this buffer's current session matches
+                    if not message_session_id and self.current_session_id == session_id:
+                        message_session_id = session_id
+
+                    # Include message if session matches
+                    if message_session_id == session_id:
+                        # Convert to API format
+                        api_message = {
+                            "id": message.get("id", ""),
+                            "role": message.get("role", "user"),
+                            "content": message.get("content", ""),
+                            "created_at": message.get("created_at", ""),
+                            "updated_at": message.get("updated_at", ""),
+                            "metadata": message.get("metadata", {}).copy()
+                        }
+                        # Add buffer source metadata
+                        api_message["metadata"]["source"] = "round_buffer"
+                        session_messages.append(api_message)
+
+            # Sort messages
+            reverse_order = (order.lower() == "desc")
+
+            try:
+                if sort_by == "created_at":
+                    session_messages.sort(
+                        key=lambda x: x.get("created_at", ""),
+                        reverse=reverse_order
+                    )
+                elif sort_by == "updated_at":
+                    session_messages.sort(
+                        key=lambda x: x.get("updated_at", ""),
+                        reverse=reverse_order
+                    )
+                elif sort_by == "timestamp":  # Backward compatibility
+                    session_messages.sort(
+                        key=lambda x: x.get("created_at", ""),
+                        reverse=reverse_order
+                    )
+                elif sort_by == "id":
+                    session_messages.sort(
+                        key=lambda x: x.get("id", ""),
+                        reverse=reverse_order
+                    )
+            except Exception as e:
+                logger.warning(f"Error sorting messages by {sort_by}: {e}")
+
+            # Apply limit
+            if limit is not None and limit > 0:
+                session_messages = session_messages[:limit]
+
+            logger.debug(f"RoundBuffer: Found {len(session_messages)} messages for session {session_id}")
+            return session_messages
+
     async def get_buffer_info(self) -> Dict[str, Any]:
         """Get buffer information for Query API metadata.
         
