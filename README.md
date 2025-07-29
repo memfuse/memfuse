@@ -97,16 +97,22 @@ To set up the MemFuse server locally:
     **Using Poetry (Recommended)**
 
     ```bash
+    # Ensure Docker daemon is running first
+    docker --version  # Verify Docker is available
+    
     poetry install
-    # TimescaleDB database will start automatically
+    # TimescaleDB database will start automatically via Docker
     poetry run python scripts/memfuse_launcher.py
     ```
 
     **Using pip**
 
     ```bash
+    # Ensure Docker daemon is running first
+    docker --version  # Verify Docker is available
+    
     pip install -e .
-    # TimescaleDB database will start automatically
+    # TimescaleDB database will start automatically via Docker
     python -m memfuse_core
     ```
 
@@ -123,10 +129,13 @@ pip install memfuse
 MemFuse uses **TimescaleDB** as its primary database backend with a custom pgai-like implementation for advanced vector operations and automatic embedding generation.
 
 **Prerequisites:**
-- Docker and Docker Compose (for automated database setup)
+- **Docker daemon must be running** (required for database startup)
+- Docker and Docker Compose installed
 - **TimescaleDB**: Automatically provided via `timescale/timescaledb-ha:pg17` Docker image
 - **pgvector**: Vector similarity search (included in TimescaleDB image)
 - **Custom pgai**: Event-driven embedding system (built-in, no external extension needed)
+
+> **⚠️ Important**: Make sure Docker daemon is running before starting MemFuse. The service automatically starts the TimescaleDB container.
 
 > **Note**: MemFuse implements its own pgai-like functionality and does **not** require TimescaleDB's official pgai extension.
 
