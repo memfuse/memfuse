@@ -978,7 +978,8 @@ class MemoryService(MessageInterface):
         session_id: str,
         limit: Optional[int] = None,
         sort_by: str = 'timestamp',
-        order: str = 'desc'
+        order: str = 'desc',
+        buffer_only: Optional[bool] = None
     ) -> List[Dict[str, Any]]:
         """Get messages for a session with optional limit and sorting.
 
@@ -987,6 +988,7 @@ class MemoryService(MessageInterface):
             limit: Maximum number of messages to return (optional)
             sort_by: Field to sort by, either 'timestamp' or 'id' (default: 'timestamp')
             order: Sort order, either 'asc' or 'desc' (default: 'desc')
+            buffer_only: Ignored in MemoryService (for compatibility with BufferService)
 
         Returns:
             List of message data

@@ -106,6 +106,69 @@ def convert_pydantic_to_dict(
     return result
 
 
+def normalize_messages_response(messages: Any) -> List[Dict[str, Any]]:
+    """Normalize messages response to ensure consistent format.
+
+    This function ensures that the messages response is always a List[Dict[str, Any]]
+    regardless of the underlying service implementation.
+
+    Args:
+        messages: Messages data from service (could be various formats)
+
+    Returns:
+        Normalized list of message dictionaries
+
+    Raises:
+        ValueError: If messages cannot be normalized to expected format
+    """
+    # Handle None or empty cases early
+    if messages is None:
+        return []
+
+    # If already a list, validate and return
+    if isinstance(messages, list):
+        normalized = []
+        for i, msg in enumerate(messages):
+            if isinstance(msg, dict):
+                normalized.append(msg)
+            elif hasattr(msg, 'model_dump'):
+                # Handle Pydantic models
+                normalized.append(cast(Message, msg).model_dump())
+            elif hasattr(msg, '__dict__'):
+                # Handle objects with __dict__
+                normalized.append(vars(msg))
+            else:
+                logger.warning(f"Unexpected message format at index {i}: {type(msg)}")
+                # Skip invalid items rather than failing
+                continue
+        return normalized
+
+    # If it's a dictionary, check for nested structures
+    elif isinstance(messages, dict):
+        if 'messages' in messages:
+            # Recursive call to handle nested structure
+            return normalize_messages_response(messages['messages'])
+        elif 'data' in messages and isinstance(messages['data'], dict) and 'messages' in messages['data']:
+            # Handle nested data.messages structure
+            return normalize_messages_response(messages['data']['messages'])
+        else:
+            # Single message dictionary - wrap in list
+            return [messages]
+
+    # Handle other iterables (but not strings/bytes)
+    elif hasattr(messages, '__iter__') and not isinstance(messages, (str, bytes)):
+        try:
+            return normalize_messages_response(list(messages))
+        except Exception as e:
+            logger.error(f"Failed to convert iterable to list: {e}")
+            return []
+
+    # Unexpected format
+    else:
+        logger.error(f"Unexpected messages format: {type(messages)}")
+        raise ValueError(f"Cannot normalize messages of type {type(messages)} to List[Dict[str, Any]]")
+
+
 @router.post("/", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
 # Also handle path without trailing slash
 @router.post("", response_model=ApiResponse, status_code=status.HTTP_201_CREATED)
@@ -266,43 +329,40 @@ async def list_messages(
 
     # Get the appropriate service (Buffer or Memory) for this session
     service = await get_service_for_session(session, session_id)
-    if not service:
-        error_response = ApiResponse.error(
-            message="Failed to get service",
-            code=500,
-            errors=[
-                ErrorDetail(
-                    field="general",
-                    message="Memory or buffer service unavailable"
-                )
-            ]
-        )
-        raise_api_error(error_response)
 
     # Get messages through the service (which handles both buffer and direct database access)
-    if hasattr(service, 'get_messages_by_session'):
-        # Check if service supports buffer_only parameter
-        if buffer_only_value is not None and hasattr(service, 'get_messages_by_session'):
-            # Try to call with buffer_only parameter
+    raw_messages = None
+
+    if service and hasattr(service, 'get_messages_by_session'):
+        # Always try to call with buffer_only parameter first
+        try:
+            raw_messages = await service.get_messages_by_session(
+                session_id=session_id,
+                limit=limit_value,
+                sort_by=sort_by,
+                order=order,
+                buffer_only=buffer_only_value
+            )
+        except TypeError:
+            # Service doesn't support buffer_only parameter, call without it
             try:
-                messages = await service.get_messages_by_session(
-                    session_id=session_id,
-                    limit=limit_value,
-                    sort_by=sort_by,
-                    order=order,
-                    buffer_only=buffer_only_value
-                )
-            except TypeError:
-                # Service doesn't support buffer_only parameter, call without it
-                messages = await service.get_messages_by_session(
+                raw_messages = await service.get_messages_by_session(
                     session_id=session_id,
                     limit=limit_value,
                     sort_by=sort_by,
                     order=order
                 )
-        else:
-            # Call without buffer_only parameter
-            messages = await service.get_messages_by_session(
+            except Exception as e:
+                logger.error(f"Service error, falling back to database: {e}")
+                raw_messages = db.get_messages_by_session(
+                    session_id=session_id,
+                    limit=limit_value,
+                    sort_by=sort_by,
+                    order=order
+                )
+        except Exception as e:
+            logger.error(f"Service error, falling back to database: {e}")
+            raw_messages = db.get_messages_by_session(
                 session_id=session_id,
                 limit=limit_value,
                 sort_by=sort_by,
@@ -310,15 +370,23 @@ async def list_messages(
             )
     else:
         # Fallback to direct database access if service doesn't support the method
-        messages = db.get_messages_by_session(
+        raw_messages = db.get_messages_by_session(
             session_id=session_id,
             limit=limit_value,
             sort_by=sort_by,
             order=order
         )
 
+    # Normalize the response format to ensure consistency
+    try:
+        normalized_messages = normalize_messages_response(raw_messages)
+    except ValueError as e:
+        logger.error(f"Failed to normalize messages response: {e}")
+        # Return empty list rather than failing
+        normalized_messages = []
+
     return ApiResponse.success(
-        data={"messages": messages},
+        data={"messages": normalized_messages},
         message="Messages retrieved successfully",
     )
 

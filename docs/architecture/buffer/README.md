@@ -41,6 +41,7 @@ This directory contains comprehensive documentation for the MemFuse Buffer syste
 |-------|----------|----------|
 | **Internal Components** | ✅ Integrated | Detailed in individual buffer documents |
 | **Component Communication** | ✅ Integrated | Added to write_buffer.md and query_buffer.md |
+| **Query-time Controls** | ✅ Complete | Dedicated buffer_only_parameter.md document |
 | **Performance Analysis** | ✅ Complete | Dedicated performance.md document |
 | **Computer Caching Principles** | ✅ Covered | Included in overview.md and component docs |
 
@@ -167,7 +168,8 @@ Client → BufferService → MemoryService (Direct) → M0/M1/M2
 ### For Operations
 1. **[configuration.md](configuration.md)** - Production configuration guidance
 2. **[bypass_mechanism.md](bypass_mechanism.md)** - Deployment mode selection
-3. **[performance.md](performance.md)** - Performance monitoring and optimization
+3. **[buffer_only_parameter.md](buffer_only_parameter.md)** - Query-time data source control
+4. **[performance.md](performance.md)** - Performance monitoring and optimization
 
 ## 🔧 Configuration Scenarios
 
