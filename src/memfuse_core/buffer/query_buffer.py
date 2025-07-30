@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Callable
 from loguru import logger
 
 from ..interfaces import BufferComponentInterface
+from ..rag.retrieve.buffer import BufferRetrieval
 
 
 class QueryBuffer(BufferComponentInterface):
@@ -68,8 +69,15 @@ class QueryBuffer(BufferComponentInterface):
         self.total_storage_results = 0
         self.rerank_operations = 0
 
-        # HybridBuffer reference
+        # Buffer references
         self.hybrid_buffer = None
+        self.round_buffer = None
+
+        # Initialize modular buffer retrieval system
+        self.buffer_retrieval = BufferRetrieval(
+            encoder_name="minilm",
+            similarity_threshold=0.1
+        )
 
         logger.info(f"QueryBuffer: Initialized with max_size={max_size}, default_sort={default_sort_by}, rerank_enabled={rerank_handler is not None}")
 
@@ -81,6 +89,15 @@ class QueryBuffer(BufferComponentInterface):
         """
         self.hybrid_buffer = hybrid_buffer
         logger.debug("QueryBuffer: HybridBuffer reference set")
+
+    def set_round_buffer(self, round_buffer):
+        """Set the RoundBuffer instance for queries.
+
+        Args:
+            round_buffer: RoundBuffer instance to use for queries
+        """
+        self.round_buffer = round_buffer
+        logger.debug("QueryBuffer: RoundBuffer reference set")
 
     async def query(
         self,
@@ -138,18 +155,24 @@ class QueryBuffer(BufferComponentInterface):
                 self.total_storage_results += len(storage_results or [])
                 logger.info(f"QueryBuffer: Got {len(storage_results or [])} results from storage")
 
-            # Get results from HybridBuffer (use parameter or instance variable)
-            hybrid_results = []
-            buffer_to_use = hybrid_buffer or self.hybrid_buffer
-            if buffer_to_use and hasattr(buffer_to_use, 'chunks'):
-                hybrid_results = await self._query_hybrid_buffer(query_text, buffer_to_use, top_k)
-                self.total_hybrid_results += len(hybrid_results)
-                logger.info(f"QueryBuffer: Got {len(hybrid_results)} results from HybridBuffer")
-            
-            # Combine and sort results
+            # Use modular BufferRetrieval for unified buffer querying
+            buffer_results = await self.buffer_retrieval.retrieve(
+                query=query_text,
+                user_id=None,  # QueryBuffer doesn't track user_id
+                session_id=None,  # QueryBuffer doesn't track session_id
+                top_k=top_k,
+                hybrid_buffer=hybrid_buffer or self.hybrid_buffer,
+                round_buffer=self.round_buffer
+            )
+
+            # Update statistics
+            self.total_hybrid_results += len([r for r in buffer_results if r.get('metadata', {}).get('source', '').startswith('hybrid')])
+
+            # Combine and sort results from all sources
             all_results = await self._combine_and_sort_results(
                 storage_results or [],
-                hybrid_results,
+                buffer_results,
+                [],  # round_results now included in buffer_results
                 sort_by,
                 order
             )
@@ -176,115 +199,47 @@ class QueryBuffer(BufferComponentInterface):
             import traceback
             logger.error(traceback.format_exc())
             return []
-    
-    async def _query_hybrid_buffer(
-        self,
-        query_text: str,
-        hybrid_buffer,
-        max_results: int
-    ) -> List[Dict[str, Any]]:
-        """Query HybridBuffer for relevant chunks.
-        
-        Args:
-            query_text: Query text
-            hybrid_buffer: HybridBuffer instance
-            max_results: Maximum number of results
-            
-        Returns:
-            List of relevant chunks formatted as query results
-        """
-        try:
-            # Simple text matching for now (can be enhanced with vector similarity)
-            query_lower = query_text.lower()
-            results = []
 
-            async with hybrid_buffer._data_lock:
-                logger.info(f"QueryBuffer: Searching {len(hybrid_buffer.chunks)} chunks in HybridBuffer")
-                for i, chunk in enumerate(hybrid_buffer.chunks):
-                    logger.debug(f"QueryBuffer: Chunk {i} content preview: {chunk.content[:100]}...")
-                    if len(results) >= max_results:
-                        break
-
-                    content = chunk.content.lower()
-                    # Try multiple matching strategies
-                    query_words = query_lower.split()
-                    content_words = content.split()
-
-                    # Strategy 1: Exact substring match
-                    exact_match = query_lower in content
-
-                    # Strategy 2: Word overlap (more flexible)
-                    word_overlap = len(set(query_words) & set(content_words)) / len(query_words) if query_words else 0
-
-                    # Strategy 3: Key terms match (music, artist, etc.)
-                    key_terms = ['music', 'artist', 'taylor', 'swift', 'beyonce', 'song', 'album']
-                    key_term_matches = sum(1 for term in key_terms if term in content)
-
-                    logger.debug(f"QueryBuffer: Chunk {i} - exact_match: {exact_match}, word_overlap: {word_overlap:.2f}, key_terms: {key_term_matches}")
-
-                    if exact_match or word_overlap > 0.1 or key_term_matches > 0:
-                        # Calculate relevance score based on multiple factors
-                        exact_score = content.count(query_lower) / len(content.split()) if exact_match else 0
-                        overlap_score = word_overlap * 0.5
-                        key_term_score = key_term_matches * 0.2
-                        score = exact_score + overlap_score + key_term_score
-                        
-                        result = {
-                            "id": f"hybrid_chunk_{i}",
-                            "content": chunk.content,
-                            "score": min(score, 1.0),  # Cap at 1.0
-                            "type": "message",  # Changed from "chunk" to "message" for API compatibility
-                            "role": "assistant",  # Default role for chunks
-                            "created_at": None,  # HybridBuffer chunks don't have timestamps
-                            "updated_at": None,
-                            "metadata": {
-                                **chunk.metadata,
-                                "source": "hybrid_buffer",
-                                "retrieval": {
-                                    "source": "hybrid_buffer",
-                                    "query_method": "text_matching"
-                                }
-                            }
-                        }
-                        results.append(result)
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"QueryBuffer: HybridBuffer query error: {e}")
-            return []
-    
     async def _combine_and_sort_results(
         self,
         storage_results: List[Any],
         hybrid_results: List[Any],
+        round_results: List[Any],
         sort_by: str,
         order: str
     ) -> List[Any]:
         """Combine and sort results from different sources.
-        
+
         Args:
             storage_results: Results from persistent storage
             hybrid_results: Results from HybridBuffer
+            round_results: Results from RoundBuffer
             sort_by: Sort field ('score' or 'timestamp')
             order: Sort order ('asc' or 'desc')
-            
+
         Returns:
             Combined and sorted results
         """
         # Combine results
         all_results = []
         seen_ids = set()
-        
+
         # Add storage results
         for result in storage_results:
             result_id = result.get("id", str(hash(str(result))))
             if result_id not in seen_ids:
                 all_results.append(result)
                 seen_ids.add(result_id)
-        
+
         # Add hybrid results (avoid duplicates)
         for result in hybrid_results:
+            result_id = result.get("id", str(hash(str(result))))
+            if result_id not in seen_ids:
+                all_results.append(result)
+                seen_ids.add(result_id)
+
+        # Add round results (avoid duplicates)
+        for result in round_results:
             result_id = result.get("id", str(hash(str(result))))
             if result_id not in seen_ids:
                 all_results.append(result)

@@ -412,6 +412,109 @@ class HybridBuffer:
             logger.error(f"HybridBuffer: Embedding generation failed: {e}")
             return await self._create_fallback_embedding(text)
 
+    async def vector_search(self, query_text: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Perform vector similarity search on cached chunks.
+
+        Args:
+            query_text: Query text to search for
+            top_k: Maximum number of results to return
+
+        Returns:
+            List of search results with similarity scores
+        """
+        try:
+            if not self.chunks or not self.embeddings:
+                logger.debug("HybridBuffer: No chunks or embeddings available for vector search")
+                return []
+
+            # Generate query embedding
+            if self.embedding_model is None:
+                await self._load_embedding_model()
+
+            query_embedding = await self._generate_embedding(query_text)
+            if not query_embedding:
+                logger.warning("HybridBuffer: Failed to generate query embedding")
+                return []
+
+            # Calculate cosine similarities
+            similarities = []
+            async with self._data_lock:
+                for i, (chunk, chunk_embedding) in enumerate(zip(self.chunks, self.embeddings)):
+                    if chunk_embedding:
+                        similarity = self._cosine_similarity(query_embedding, chunk_embedding)
+                        similarities.append({
+                            'index': i,
+                            'chunk': chunk,
+                            'similarity': similarity
+                        })
+
+            # Sort by similarity (descending) and take top_k
+            similarities.sort(key=lambda x: x['similarity'], reverse=True)
+            top_results = similarities[:top_k]
+
+            # Format results
+            results = []
+            for result in top_results:
+                chunk = result['chunk']
+                results.append({
+                    'id': f"hybrid_vector_{result['index']}",
+                    'content': chunk.content,
+                    'score': result['similarity'],
+                    'type': 'message',
+                    'role': 'assistant',
+                    'created_at': None,
+                    'updated_at': None,
+                    'metadata': {
+                        **chunk.metadata,
+                        'source': 'hybrid_buffer_vector',
+                        'retrieval': {
+                            'source': 'hybrid_buffer',
+                            'method': 'vector_similarity',
+                            'similarity_score': result['similarity']
+                        }
+                    }
+                })
+
+            logger.info(f"HybridBuffer: Vector search returned {len(results)} results for query: {query_text[:50]}...")
+            return results
+
+        except Exception as e:
+            logger.error(f"HybridBuffer: Vector search failed: {e}")
+            return []
+
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """Calculate cosine similarity between two vectors.
+
+        Args:
+            vec1: First vector
+            vec2: Second vector
+
+        Returns:
+            Cosine similarity score (0-1)
+        """
+        try:
+            import numpy as np
+
+            # Convert to numpy arrays
+            a = np.array(vec1)
+            b = np.array(vec2)
+
+            # Calculate cosine similarity
+            dot_product = np.dot(a, b)
+            norm_a = np.linalg.norm(a)
+            norm_b = np.linalg.norm(b)
+
+            if norm_a == 0 or norm_b == 0:
+                return 0.0
+
+            similarity = dot_product / (norm_a * norm_b)
+            # Ensure result is between 0 and 1
+            return max(0.0, min(1.0, (similarity + 1) / 2))
+
+        except Exception as e:
+            logger.error(f"HybridBuffer: Cosine similarity calculation failed: {e}")
+            return 0.0
+
     async def flush_to_storage(
         self,
         priority: FlushPriority = FlushPriority.NORMAL,
