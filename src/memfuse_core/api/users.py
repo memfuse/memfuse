@@ -240,19 +240,10 @@ async def query_memory(
     all_session_results = []
 
     for session in sessions:
-        # Create a buffer service for this session (to ensure consistency with write operations)
-        from ..api.messages import ENABLE_BUFFER_SERVICE
-
-        if ENABLE_BUFFER_SERVICE:
-            # Use BufferService for consistency with write operations
-            memory = await ServiceFactory.get_buffer_service_for_user(user["name"])
-        else:
-            # Use MemoryService directly when buffer is disabled
-            memory = await ServiceFactory.get_memory_service(
-                user=user["name"],
-                agent=db.get_agent(session["agent_id"])["name"],
-                session_id=session["id"]
-            )
+        # Always use BufferService for consistency with write operations
+        # BufferService internally handles buffer enabled/disabled mode based on config/buffer/default.yaml
+        logger.info("Using BufferService for query operations")
+        memory = await ServiceFactory.get_buffer_service_for_user(user["name"])
 
         # Query this session
         logger.info(f"🔍 API LAYER: Querying session {session['id']} with query: {request.query[:50]}...")
