@@ -123,6 +123,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
 
             # Set up component connections
             self.query_buffer.set_hybrid_buffer(self.write_buffer.get_hybrid_buffer())
+            self.query_buffer.set_round_buffer(self.write_buffer.get_round_buffer())
 
         logger.info(f"BufferService: Initialized for user {user} with {'bypass' if not self.buffer_enabled else 'buffer'} mode")
         if self.buffer_enabled:
