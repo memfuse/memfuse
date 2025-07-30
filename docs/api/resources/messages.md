@@ -46,6 +46,8 @@ Lists all messages in a specific session with optional pagination, sorting, and 
 
 **Response:**
 
+The API **always** returns a consistent response format regardless of the underlying service implementation (MemoryService, BufferService, or database fallback).
+
 ```json
 {
   "status": "success",
@@ -58,7 +60,11 @@ Lists all messages in a specific session with optional pagination, sorting, and 
         "role": "user",
         "content": "Hello, how are you?",
         "created_at": "2023-01-01T12:00:00Z",
-        "updated_at": "2023-01-01T12:00:00Z"
+        "updated_at": "2023-01-01T12:00:00Z",
+        "metadata": {
+          "user_id": "user-789",
+          "agent_id": "agent-101"
+        }
       },
       {
         "id": "message-124",
@@ -66,7 +72,11 @@ Lists all messages in a specific session with optional pagination, sorting, and 
         "role": "assistant",
         "content": "I'm doing well, thank you for asking!",
         "created_at": "2023-01-01T12:01:00Z",
-        "updated_at": "2023-01-01T12:01:00Z"
+        "updated_at": "2023-01-01T12:01:00Z",
+        "metadata": {
+          "user_id": "user-789",
+          "agent_id": "agent-101"
+        }
       }
     ]
   },
@@ -75,19 +85,71 @@ Lists all messages in a specific session with optional pagination, sorting, and 
 }
 ```
 
+**Response Format Guarantees:**
+
+- `data.messages` is **always** an array (`List[Dict[str, Any]]`)
+- Each message object **always** contains the required fields: `id`, `role`, `content`, `created_at`, `updated_at`
+- The `metadata` field may contain additional context information depending on the source
+- Empty results return `data.messages: []` (empty array), never `null` or other types
+- Response format is consistent across all service implementations and buffer configurations
+
 **Buffer Behavior:**
 
-The `buffer_only` parameter controls which data sources are queried:
+The `buffer_only` parameter controls data source selection and behaves differently based on buffer configuration:
+
+#### When Buffer is Enabled (`buffer.enabled=true`)
 
 - **`buffer_only=true`**: Only returns messages from RoundBuffer (latest, in-memory data)
-- **`buffer_only=false` or omitted**: Returns messages from all sources:
-  - RoundBuffer (highest priority)
-  - HybridBuffer (medium priority)
-  - Database (lowest priority)
-  - Messages are merged and deduplicated by ID, with RoundBuffer taking precedence
+  - Fastest response time
+  - Most recent messages only
+  - May miss older messages that have been flushed to HybridBuffer or Database
 
-**Buffer Disabled Mode:**
-When buffer is disabled (`MEMFUSE_BUFFER_ENABLED=false`), the `buffer_only` parameter is ignored and all requests query the database directly through MemoryService.
+- **`buffer_only=false` or omitted**: Returns messages from all sources with intelligent merging:
+  1. **RoundBuffer** (highest priority) - Latest, in-memory data
+  2. **HybridBuffer** (medium priority) - Intermediate cached data
+  3. **Database** (lowest priority) - Persisted data
+  4. Messages are merged and deduplicated by ID, with RoundBuffer taking precedence
+
+#### When Buffer is Disabled (`buffer.enabled=false`)
+
+- **`buffer_only` parameter is ignored** - All requests query the database directly through MemoryService
+- Provides consistent behavior regardless of buffer_only value
+- Ensures backward compatibility when switching between buffer modes
+
+## API Contract Consistency
+
+The list messages endpoint maintains strict API contract consistency to ensure reliable client integration:
+
+### Response Format Guarantees
+
+1. **Consistent Data Structure**: The response always follows the same JSON schema regardless of:
+   - Underlying service implementation (MemoryService vs BufferService)
+   - Buffer configuration (enabled/disabled)
+   - Data source (RoundBuffer, HybridBuffer, or Database)
+   - Error conditions or empty results
+
+2. **Type Safety**:
+   - `data.messages` is always an array, never a dictionary or other type
+   - Each message is always a dictionary with consistent field types
+   - Empty results return `[]`, never `null` or undefined
+
+3. **Field Consistency**:
+   - Required fields (`id`, `role`, `content`, `created_at`, `updated_at`) are always present
+   - Field types are consistent across all messages
+   - Optional fields like `metadata` may vary but maintain consistent structure when present
+
+4. **Error Handling**:
+   - Invalid service responses are normalized to empty arrays rather than propagating errors
+   - Malformed data is filtered out to maintain response integrity
+   - Client code can rely on consistent structure even in edge cases
+
+### Breaking Change Prevention
+
+This API endpoint is designed to prevent breaking changes that could affect client applications:
+
+- **No Format Variations**: Clients never need to handle different response formats
+- **Backward Compatibility**: New fields may be added but existing structure remains stable
+- **Graceful Degradation**: Service failures result in empty arrays, not broken responses
 
 **Error Response (Session Not Found):**
 

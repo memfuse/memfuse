@@ -171,8 +171,6 @@ class HybridBuffer:
         self.flush_manager = flush_manager
         logger.debug("HybridBuffer: FlushManager set")
 
-
-    
     async def add_from_rounds(self, rounds: List[MessageList]) -> None:
         """Add rounds from RoundBuffer transfer with optimized processing.
 
@@ -312,7 +310,7 @@ class HybridBuffer:
             logger.error(f"HybridBuffer: Failed to load chunk strategy: {e}")
             # Create a minimal fallback strategy
             self.chunk_strategy = self._create_fallback_strategy()
-    
+
     def _create_fallback_strategy(self):
         """Create a minimal fallback chunk strategy."""
         class FallbackStrategy:
@@ -326,9 +324,9 @@ class HybridBuffer:
                     )
                     chunks.append(chunk)
                 return chunks
-        
+
         return FallbackStrategy()
-    
+
     async def _load_embedding_model(self) -> None:
         """Lazy load the embedding model with global service priority."""
         try:
@@ -364,7 +362,7 @@ class HybridBuffer:
         except Exception as e:
             logger.error(f"HybridBuffer: Failed to load embedding model: {e}")
             self.embedding_model = None
-    
+
     async def _create_fallback_embedding(self, text: str) -> List[float]:
         """Create a fallback embedding."""
         # Simple hash-based embedding
@@ -378,7 +376,7 @@ class HybridBuffer:
             value = (hash_bytes[byte_index] / 128.0) - 1.0
             embedding.append(value)
         return embedding
-    
+
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the loaded model instance.
 
@@ -413,7 +411,7 @@ class HybridBuffer:
         except Exception as e:
             logger.error(f"HybridBuffer: Embedding generation failed: {e}")
             return await self._create_fallback_embedding(text)
-    
+
     async def flush_to_storage(
         self,
         priority: FlushPriority = FlushPriority.NORMAL,
@@ -552,8 +550,6 @@ class HybridBuffer:
 
         logger.info("HybridBuffer: Auto-flush loop stopped")
 
-
-    
     async def get_all_messages_for_read_api(
         self,
         limit: Optional[int] = None,
@@ -561,18 +557,18 @@ class HybridBuffer:
         order: str = "desc"
     ) -> List[Dict[str, Any]]:
         """Get all messages in buffer for Read API.
-        
+
         Args:
             limit: Maximum number of messages to return
             sort_by: Field to sort by ('timestamp' or 'id')
             order: Sort order ('asc' or 'desc')
-            
+
         Returns:
             List of message dictionaries formatted for API response
         """
         async with self._data_lock:
             all_messages = []
-            
+
             for round_messages in self.original_rounds:
                 for message in round_messages:
                     # Convert to API format
@@ -587,7 +583,7 @@ class HybridBuffer:
                     # Add buffer source metadata
                     api_message["metadata"]["source"] = "hybrid_buffer"
                     all_messages.append(api_message)
-            
+
             # Sort messages
             if sort_by == "timestamp":
                 all_messages.sort(
@@ -599,13 +595,95 @@ class HybridBuffer:
                     key=lambda x: x.get("id", ""),
                     reverse=(order == "desc")
                 )
-            
+
             # Apply limit
             if limit is not None and limit > 0:
                 all_messages = all_messages[:limit]
-            
+
             return all_messages
-    
+
+    async def get_messages_by_session(
+        self,
+        session_id: str,
+        limit: Optional[int] = None,
+        sort_by: str = "created_at",
+        order: str = "desc"
+    ) -> List[Dict[str, Any]]:
+        """Get messages from buffer filtered by session_id.
+
+        Args:
+            session_id: Session ID to filter by
+            limit: Maximum number of messages to return
+            sort_by: Field to sort by (created_at, updated_at, etc.)
+            order: Sort order (asc or desc)
+
+        Returns:
+            List of message dictionaries for the specified session
+        """
+        async with self._data_lock:
+            session_messages = []
+
+            for round_messages in self.original_rounds:
+                for message in round_messages:
+                    # Check if message belongs to the requested session
+                    message_session_id = None
+
+                    # Try to get session_id from metadata first
+                    metadata = message.get("metadata", {})
+                    message_session_id = metadata.get("session_id")
+
+                    # If not in metadata, try to get from message directly
+                    if not message_session_id:
+                        message_session_id = message.get("session_id")
+
+                    # If session matches, add to results
+                    if message_session_id == session_id:
+                        # Convert to API format
+                        api_message = {
+                            "id": message.get("id", ""),
+                            "role": message.get("role", "user"),
+                            "content": message.get("content", ""),
+                            "created_at": message.get("created_at", ""),
+                            "updated_at": message.get("updated_at", ""),
+                            "metadata": message.get("metadata", {}).copy()
+                        }
+                        # Add buffer source metadata
+                        api_message["metadata"]["source"] = "hybrid_buffer"
+                        session_messages.append(api_message)
+
+            # Sort messages
+            reverse_order = (order.lower() == "desc")
+
+            try:
+                if sort_by == "created_at":
+                    session_messages.sort(
+                        key=lambda x: x.get("created_at", ""),
+                        reverse=reverse_order
+                    )
+                elif sort_by == "updated_at":
+                    session_messages.sort(
+                        key=lambda x: x.get("updated_at", ""),
+                        reverse=reverse_order
+                    )
+                elif sort_by == "timestamp":  # Backward compatibility
+                    session_messages.sort(
+                        key=lambda x: x.get("created_at", ""),
+                        reverse=reverse_order
+                    )
+                elif sort_by == "id":
+                    session_messages.sort(
+                        key=lambda x: x.get("id", ""),
+                        reverse=reverse_order
+                    )
+            except Exception as e:
+                logger.warning(f"Error sorting messages by {sort_by}: {e}")
+
+            # Apply limit
+            if limit is not None and limit > 0:
+                session_messages = session_messages[:limit]
+
+            return session_messages
+
     def get_stats(self) -> Dict[str, Any]:
         """Get buffer statistics.
         

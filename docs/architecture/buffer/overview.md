@@ -127,6 +127,7 @@ This buffer architecture is documented across multiple specialized files:
 - **[overview.md](overview.md)** - This file: Architecture overview and bypass mechanism
 - **[write_buffer.md](write_buffer.md)** - WriteBuffer abstraction and write path components
 - **[query_buffer.md](query_buffer.md)** - QueryBuffer abstraction and multi-level caching
+- **[buffer_only_parameter.md](buffer_only_parameter.md)** - Query-time data source control
 - **[speculative_buffer.md](speculative_buffer.md)** - SpeculativeBuffer design and future roadmap
 
 ### Implementation Details

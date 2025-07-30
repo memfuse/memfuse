@@ -839,9 +839,49 @@ graph TB
 3. **TTL Tuning**: Adjust TTL based on data freshness requirements
 4. **Regular Cleanup**: Periodic cache cleanup prevents memory bloat
 
+## Query-time Data Source Control
+
+### buffer_only Parameter Integration
+
+The QueryBuffer supports the `buffer_only` parameter for fine-grained control over data source selection:
+
+#### Data Source Selection Logic
+```mermaid
+graph TD
+    Query[Query Request] --> BufferOnly{buffer_only=true?}
+
+    BufferOnly -->|Yes| RoundBuffer[RoundBuffer Only]
+    BufferOnly -->|No| AllSources[All Sources]
+
+    RoundBuffer --> FastResponse[Fast Response<br/>Recent Data Only]
+
+    AllSources --> Parallel[Parallel Query]
+    Parallel --> RB[RoundBuffer]
+    Parallel --> HB[HybridBuffer]
+    Parallel --> DB[Database]
+
+    RB --> Merge[Merge & Deduplicate]
+    HB --> Merge
+    DB --> Merge
+    Merge --> CompleteResponse[Complete Response<br/>Full Data History]
+```
+
+#### Performance Impact
+| buffer_only | Sources Queried | Response Time | Data Completeness |
+|-------------|----------------|---------------|-------------------|
+| `true` | RoundBuffer only | ~5ms | Recent messages only |
+| `false` | All sources | ~15ms | Complete history |
+
+#### Use Cases
+- **buffer_only=true**: Real-time chat, live updates, performance-critical queries
+- **buffer_only=false**: Full history, search, analytics, data export
+
+For detailed information, see **[Buffer Only Parameter](buffer_only_parameter.md)**.
+
 ## Related Documentation
 
 - **[Overview](overview.md)** - Buffer system overview
 - **[Write Buffer](write_buffer.md)** - Write path architecture
+- **[Buffer Only Parameter](buffer_only_parameter.md)** - Query-time data source control
 - **[Performance](performance.md)** - Performance analysis and tuning
 - **[Configuration](configuration.md)** - Complete configuration guide
