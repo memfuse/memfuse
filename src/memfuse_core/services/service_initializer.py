@@ -293,6 +293,14 @@ class ServiceInitializer:
                 except Exception as e:
                     logger.error(f"Error shutting down service {service.name}: {e}")
 
+            # Cleanup all service instances and connection pools
+            try:
+                from .service_factory import ServiceFactory
+                await ServiceFactory.cleanup_all_services()
+                logger.info("Service factory cleanup completed")
+            except Exception as e:
+                logger.error(f"Error during service factory cleanup: {e}")
+
             # Clear registry
             ServiceRegistry.clear()
             self._services.clear()

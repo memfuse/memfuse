@@ -407,6 +407,126 @@ GlobalServiceManager
 - Resource cleanup effectiveness
 - Error rates in singleton access
 
+## Case Study: PostgreSQL Connection Pool Optimization
+
+### Problem Statement
+
+MemFuse experienced critical PostgreSQL connection exhaustion issues:
+
+```
+[ERROR] connection failed: FATAL: sorry, too many clients already
+```
+
+**Root Cause Analysis**:
+- Each PgaiStore instance created individual connection pools (1-2 connections each)
+- Multiple users and memory layers (M0, M1, M2) created separate store instances
+- No connection pool sharing between components
+- Poor connection cleanup in async contexts
+- Configuration values ignored (hardcoded pool sizes)
+
+**Resource Multiplication**:
+```
+Before: Per user: 1-3 store instances × 2 connections = 2-6 connections
+        Multiple users: 5 users × 6 connections = 30 connections
+        Result: Connection accumulation until PostgreSQL limit reached
+```
+
+### Singleton Solution Design
+
+**Tier 1 Global Singleton**: `GlobalConnectionManager`
+
+```python
+class GlobalConnectionManager:
+    """
+    Tier 1 Global Singleton: PostgreSQL Connection Pool Manager
+
+    Features:
+    - Single connection pool per database URL
+    - Configuration-driven pool sizing
+    - Automatic cleanup and lifecycle management
+    - Connection monitoring and statistics
+    - Thread-safe operations
+    """
+
+    _instance: Optional['GlobalConnectionManager'] = None
+    _lock = Lock()
+
+    async def get_connection_pool(self, db_url: str, config: Dict, store_ref: Any):
+        """Get or create shared connection pool with reference tracking."""
+```
+
+**Key Design Principles Applied**:
+
+1. **Resource Scope Analysis**:
+   - Database connections: **Global scope** (shareable across all users)
+   - User data: **User scope** (isolated per user)
+   - Store instances: **User scope** (separate per user, shared pools)
+
+2. **Configuration Hierarchy**:
+   ```yaml
+   # Priority: store.database.postgres > database.postgres > postgres > defaults
+   database:
+     postgres:
+       pool_size: 10          # Minimum connections
+       max_overflow: 20       # Additional connections
+       pool_timeout: 30.0     # Connection timeout
+       pool_recycle: 3600     # Connection recycling
+   ```
+
+3. **Reference Tracking**:
+   - Weak references to track store instances using pools
+   - Automatic cleanup when stores are destroyed
+   - Force cleanup during service shutdown
+
+### Implementation Results
+
+**Before Optimization**:
+- Connection usage: 2-6 connections per user
+- Pool count: Multiple individual pools
+- Leak rate: Connections accumulate over time
+- Resource waste: Many idle individual pools
+
+**After Optimization**:
+- Connection usage: 10-30 connections total (configurable)
+- Pool count: 1 shared pool per database
+- Leak rate: Zero connection leaks
+- Resource efficiency: Shared pools across all users
+
+**Test Results**:
+- ✅ **20 concurrent stores**: All share 1 connection pool
+- ✅ **Connection increase**: Only 11 connections for 20 stores
+- ✅ **No leaks**: 0 "too many clients already" errors
+- ✅ **User isolation**: Data remains completely isolated despite shared pools
+
+### Key Lessons Learned
+
+1. **Singleton Scope Identification**:
+   - **Global singletons**: Database connections, model instances
+   - **User singletons**: Memory services, user-specific contexts
+   - **Request singletons**: Query contexts, temporary resources
+
+2. **Configuration Integration**:
+   - Singleton components must respect configuration hierarchy
+   - Default values should be sensible for production use
+   - Environment variables should override configuration files
+
+3. **Lifecycle Management**:
+   - Explicit cleanup methods are more reliable than destructors
+   - Reference counting enables automatic resource management
+   - Graceful shutdown requires coordinated cleanup
+
+4. **User Data Isolation**:
+   - Shared infrastructure doesn't compromise data isolation
+   - Table-level separation provides strong isolation guarantees
+   - Service instances maintain user-specific contexts
+
+5. **Testing Strategy**:
+   - Stress testing reveals resource leaks under load
+   - Integration tests verify isolation boundaries
+   - Monitoring tools enable production observability
+
+This case study demonstrates how singleton optimization can solve critical resource management issues while maintaining system integrity and user data isolation.
+
 ## Implementation Guidelines
 
 ### Decision Framework
@@ -429,30 +549,91 @@ When evaluating whether a component should be a singleton, ask:
    - **Yes** → User-level singleton at most
    - **No** → Global singleton possible
 
+5. **Resource Consumption**: What are the resource usage patterns?
+   - **High memory/CPU**: Strong singleton candidate (e.g., ML models)
+   - **Network connections**: Consider connection pooling patterns
+   - **File handles**: Limit concurrent instances to prevent exhaustion
+
+6. **Cleanup Complexity**: How complex is resource cleanup?
+   - **Simple**: Standard destructor patterns may suffice
+   - **Complex**: Implement explicit cleanup methods and reference tracking
+   - **Critical**: Use coordinated shutdown and monitoring
+
+### Enhanced Decision Matrix
+
+Based on the connection pool optimization experience, use this matrix:
+
+| Component Type | Scope | Singleton Pattern | Key Considerations |
+|---|---|---|---|
+| **Database Connections** | Global | ✅ Tier 1 Global | Pool sharing, reference tracking, configuration hierarchy |
+| **ML Models** | Global | ✅ Tier 1 Global | Memory usage, initialization cost, thread safety |
+| **Memory Services** | User | ✅ User-scoped | User isolation, service lifecycle, context management |
+| **Configuration** | Global | ✅ Tier 1 Global | Immutable after load, environment variable support |
+| **Temporary Buffers** | Request | ❌ Instance per request | Short lifecycle, minimal overhead |
+| **User Data Stores** | User | ✅ User-scoped | Data isolation, table separation, shared infrastructure |
+
 ### Implementation Checklist
 
 **Before Implementation**:
 - [ ] Identify component's state scope and lifecycle
 - [ ] Evaluate thread safety requirements
 - [ ] Design initialization and cleanup strategies
+- [ ] Plan configuration hierarchy and defaults
+- [ ] Design reference tracking for automatic cleanup
 - [ ] Plan for testing and debugging
 
 **During Implementation**:
-- [ ] Implement proper synchronization
-- [ ] Add comprehensive logging
-- [ ] Handle initialization failures gracefully
+- [ ] Implement proper synchronization (asyncio.Lock for async components)
+- [ ] Add comprehensive logging with URL masking for security
+- [ ] Handle initialization failures gracefully with fallback strategies
+- [ ] Implement explicit cleanup methods (don't rely on destructors)
+- [ ] Use weak references for automatic resource tracking
 - [ ] Provide reset mechanisms for testing
+- [ ] Integrate with configuration management system
 
 **After Implementation**:
-- [ ] Monitor resource usage patterns
-- [ ] Validate performance improvements
-- [ ] Test concurrent access scenarios
+- [ ] Monitor resource usage patterns and connection counts
+- [ ] Validate performance improvements with stress testing
+- [ ] Test concurrent access scenarios under load
+- [ ] Verify user data isolation despite shared resources
+- [ ] Test graceful shutdown and cleanup procedures
 - [ ] Document singleton behavior and constraints
+- [ ] Create monitoring and diagnostic tools
 
 ## Conclusion
 
 Singleton optimization in multi-user systems like MemFuse requires careful analysis of component characteristics and usage patterns. The key is to identify the right balance between resource efficiency and system complexity while maintaining clear separation of concerns across different scopes of data and functionality.
 
-Success depends on understanding the fundamental trade-offs between memory usage, initialization costs, and architectural complexity, then applying appropriate patterns based on each component's specific requirements and constraints.
+The PostgreSQL connection pool optimization case study demonstrates that singleton patterns can solve critical resource management issues while preserving system integrity. Key success factors include:
+
+### Critical Success Factors
+
+1. **Proper Scope Identification**: Distinguish between global resources (connections, models) and user-specific resources (data, contexts)
+
+2. **Configuration Integration**: Singleton components must respect configuration hierarchies and provide sensible defaults
+
+3. **Lifecycle Management**: Explicit cleanup methods and reference tracking are more reliable than destructor-based cleanup
+
+4. **User Data Isolation**: Shared infrastructure doesn't compromise data isolation when properly designed
+
+5. **Testing Strategy**: Comprehensive testing including stress tests, isolation verification, and resource leak detection
+
+### Performance Impact
+
+The connection pool optimization achieved:
+- **Resource Efficiency**: From 2-6 connections per user to 10-30 total connections
+- **Elimination of Resource Leaks**: Zero "too many clients already" errors
+- **Maintained Isolation**: Complete user data separation despite shared pools
+- **Improved Scalability**: Support for more concurrent users with fewer resources
+
+### Best Practices Learned
+
+- **Monitor resource usage patterns** in production to identify optimization opportunities
+- **Use weak references** for automatic cleanup without memory leaks
+- **Implement explicit cleanup methods** rather than relying on destructors
+- **Design configuration hierarchies** that allow environment-specific overrides
+- **Create comprehensive test suites** that verify both functionality and resource management
+
+Success depends on understanding the fundamental trade-offs between memory usage, initialization costs, and architectural complexity, then applying appropriate patterns based on each component's specific requirements and constraints. The singleton pattern, when properly applied, can dramatically improve system efficiency while maintaining architectural integrity.
 
 

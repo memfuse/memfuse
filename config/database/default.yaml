@@ -11,8 +11,11 @@ postgres:
   database: ${oc.env:POSTGRES_DB,memfuse}
   user: ${oc.env:POSTGRES_USER,postgres}
   password: ${oc.env:POSTGRES_PASSWORD,postgres}
-  pool_size: 10
-  max_overflow: 20
+  # Global connection pool settings (shared across all stores)
+  pool_size: 10          # Minimum connections in pool
+  max_overflow: 20       # Additional connections beyond pool_size
+  pool_timeout: 30.0     # Timeout for getting connection from pool
+  pool_recycle: 3600     # Recycle connections after 1 hour
   
 # SQLite configuration (fallback)
 sqlite:

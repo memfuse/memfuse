@@ -28,6 +28,9 @@ except ImportError:
 
     logger.warning("pgai dependencies not available. Install with: pip install pgai psycopg pgvector")
 
+# Import the global connection manager (Tier 1 Singleton)
+from ...services.global_connection_manager import get_global_connection_manager
+
 from ...interfaces.chunk_store import ChunkStoreInterface
 from ...rag.chunk.base import ChunkData
 from ...models.core import Query
@@ -185,47 +188,26 @@ class PgaiStore(ChunkStoreInterface):
         """Initialize pgai store and vectorizer."""
         if self.initialized:
             return True
-            
+
         try:
             logger.info(f"Initializing PgaiStore with table: {self.table_name}")
-            
+
             # Check required extensions first
             if not await self._check_required_extensions():
                 logger.error("Required extensions are not available")
                 return False
 
-            # Create connection pool with conservative settings
-            logger.debug("Creating connection pool...")
-            postgres_config = self.db_config.get("postgres", {})
+            # Use global connection manager (Tier 1 Singleton)
+            logger.debug("Getting global connection pool...")
+            connection_manager = get_global_connection_manager()
 
-            # Use minimal pool size to avoid lock conflicts
-            safe_min_size = 1  # Always start with 1 connection
-            safe_max_size = 2   # Maximum 2 connections to avoid deadlocks
-
-            # First try: Create pool without pgvector configuration
-            self.pool = AsyncConnectionPool(
-                self.db_url,
-                min_size=safe_min_size,
-                max_size=safe_max_size,
-                open=False,
-                configure=None  # No configuration initially
+            # Get shared connection pool with store reference for tracking
+            self.pool = await connection_manager.get_connection_pool(
+                db_url=self.db_url,
+                config=self.db_config,
+                store_ref=self  # Pass self for reference tracking
             )
-            logger.debug(f"Opening basic connection pool (min_size={safe_min_size}, max_size={safe_max_size})")
-
-            # Open basic pool first
-            try:
-                await asyncio.wait_for(self.pool.open(), timeout=15.0)
-                logger.debug("Basic connection pool opened successfully")
-
-                # Now configure pgvector on existing connections
-                await self._configure_pgvector_on_pool()
-
-            except asyncio.TimeoutError:
-                logger.error("Basic connection pool opening timed out, trying single connection fallback")
-                await self._fallback_single_connection()
-            except Exception as e:
-                logger.error(f"Connection pool creation failed: {e}")
-                await self._fallback_single_connection()
+            logger.info(f"Using global connection pool for {self.table_name}")
             
             # Create tables and setup vectorizer
             logger.debug("Setting up database schema...")
@@ -277,38 +259,6 @@ class PgaiStore(ChunkStoreInterface):
             logger.warning(f"Failed to configure pgvector on pool: {e}")
             # Continue anyway - basic operations should still work
 
-    async def _fallback_single_connection(self):
-        """Fallback to single connection when pool fails."""
-        logger.info("Using single connection fallback")
-
-        # Close any existing pool
-        if self.pool:
-            try:
-                await self.pool.close()
-            except:
-                pass
-
-        # Create minimal pool with single connection and no initial configuration
-        self.pool = AsyncConnectionPool(
-            self.db_url,
-            min_size=1,
-            max_size=1,
-            open=False,
-            configure=None  # Configure manually after opening
-        )
-
-        try:
-            # Open with minimal timeout
-            await asyncio.wait_for(self.pool.open(), timeout=10.0)
-            logger.info("Single connection pool opened successfully")
-
-            # Configure pgvector manually
-            await self._configure_pgvector_on_pool()
-
-        except Exception as e:
-            logger.error(f"Single connection fallback failed: {e}")
-            raise
-    
     async def _setup_pgvector_connection_safe(self, conn: psycopg.AsyncConnection):
         """Safe pgvector setup with error handling."""
         try:
@@ -1255,16 +1205,16 @@ class PgaiStore(ChunkStoreInterface):
         """Close the store and cleanup resources."""
         try:
             if self.pool:
-                logger.debug("Closing connection pool...")
-                # Cancel all pending tasks in the pool
-                if hasattr(self.pool, '_workers'):
-                    for worker in self.pool._workers:
-                        if not worker.done():
-                            worker.cancel()
+                logger.debug("Releasing connection pool reference...")
 
-                # Close the pool
-                await self.pool.close()
-                logger.debug("Connection pool closed successfully")
+                # For shared pools managed by the global pool manager,
+                # we just clear our reference. The pool manager handles
+                # actual cleanup based on reference counting.
+                # Individual pools (fallback) are also just cleared since
+                # they may be shared with other instances.
+
+                logger.debug("Clearing pool reference (pool managed by global manager)")
+                self.pool = None
 
             if self.vectorizer_worker:
                 # Stop the worker (implementation depends on pgai version)
@@ -1443,33 +1393,18 @@ class PgaiStore(ChunkStoreInterface):
     def __del__(self):
         """Cleanup when object is destroyed."""
         if hasattr(self, 'initialized') and self.initialized:
-            # Try to cleanup synchronously if possible
-            if hasattr(self, 'pool') and self.pool:
-                try:
-                    # Cancel any pending tasks
-                    if hasattr(self.pool, '_workers'):
-                        for worker in self.pool._workers:
-                            if not worker.done():
-                                worker.cancel()
+            try:
+                # Only attempt cleanup if we have a pool
+                if hasattr(self, 'pool') and self.pool is not None:
+                    logger.debug("PgaiStore destructor called, clearing pool reference")
 
-                    # Force close without waiting
-                    if hasattr(self.pool, '_closed') and not self.pool._closed:
-                        logger.debug("Force closing connection pool in destructor")
-                        # This is a synchronous close, may not be perfect but better than nothing
-                        try:
-                            import asyncio
-                            loop = asyncio.get_event_loop()
-                            if loop.is_running():
-                                # Schedule cleanup for later
-                                loop.create_task(self.close())
-                            else:
-                                # Try to run cleanup
-                                asyncio.run(self.close())
-                        except Exception:
-                            # Last resort: just mark as closed
-                            self.initialized = False
-                            logger.debug("PgaiStore destroyed with forced cleanup")
-                except Exception as e:
-                    logger.debug(f"Error in PgaiStore destructor: {e}")
+                    # For shared pools, we just clear the reference
+                    # The pool manager handles cleanup via weak references
+                    self.pool = None
+
+                    logger.debug("PgaiStore pool reference cleared in destructor")
+
+            except Exception as e:
+                logger.debug(f"Error in PgaiStore destructor: {e}")
 
             self.initialized = False

@@ -316,6 +316,59 @@ class ServiceFactory:
         logger.debug("Global memory service instance set")
 
     @classmethod
+    async def cleanup_all_services(cls) -> None:
+        """Cleanup all service instances and shared resources.
+
+        This method should be called during application shutdown to ensure
+        proper cleanup of connection pools and other shared resources.
+        """
+        logger.info("Cleaning up all service instances...")
+
+        # Close all memory services
+        for user, memory_service in cls._memory_service_instances.items():
+            try:
+                if hasattr(memory_service, 'close'):
+                    await memory_service.close()
+                logger.debug(f"Closed memory service for user {user}")
+            except Exception as e:
+                logger.error(f"Error closing memory service for user {user}: {e}")
+
+        # Close all buffer services
+        for user, buffer_service in cls._buffer_service_instances.items():
+            try:
+                if hasattr(buffer_service, 'close'):
+                    await buffer_service.close()
+                logger.debug(f"Closed buffer service for user {user}")
+            except Exception as e:
+                logger.error(f"Error closing buffer service for user {user}: {e}")
+
+        # Close all memory service proxies
+        for user, proxy in cls._memory_service_proxy_instances.items():
+            try:
+                if hasattr(proxy, 'close'):
+                    await proxy.close()
+                logger.debug(f"Closed memory service proxy for user {user}")
+            except Exception as e:
+                logger.error(f"Error closing memory service proxy for user {user}: {e}")
+
+        # Close global connection pools (Tier 1 Singleton cleanup)
+        try:
+            from .global_connection_manager import get_global_connection_manager
+            connection_manager = get_global_connection_manager()
+            await connection_manager.close_all_pools(force=True)
+            logger.info("Closed all global connection pools")
+        except Exception as e:
+            logger.error(f"Error closing global connection pools: {e}")
+
+        # Clear all cached instances
+        cls._memory_service_instances.clear()
+        cls._buffer_service_instances.clear()
+        cls._memory_service_proxy_instances.clear()
+        cls._global_memory_service = None
+
+        logger.info("Service cleanup completed")
+
+    @classmethod
     def reset(cls) -> None:
         """Reset all service instances.
 
