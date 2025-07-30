@@ -122,6 +122,10 @@ class Database:
         """Close the database connection."""
         self.backend.close()
 
+    def commit(self):
+        """Commit changes to the database."""
+        self.backend.commit()
+
     def __del__(self):
         """Close the database connection when the object is deleted."""
         self.close()
