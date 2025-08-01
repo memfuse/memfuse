@@ -12,10 +12,11 @@ postgres:
   user: ${oc.env:POSTGRES_USER,postgres}
   password: ${oc.env:POSTGRES_PASSWORD,postgres}
   # Global connection pool settings (shared across all stores)
-  pool_size: 20          # Minimum connections in pool (increased for sync+async pools)
-  max_overflow: 30       # Additional connections beyond pool_size (increased)
-  pool_timeout: 60.0     # Timeout for getting connection from pool (increased)
-  pool_recycle: 7200     # Recycle connections after 2 hours (increased)
+  # Optimized for dual-write mode (BufferService + MemoryService + pgai)
+  pool_size: 20          # Minimum connections in pool (optimized for concurrent operations)
+  max_overflow: 40       # Additional connections beyond pool_size (increased for dual-write)
+  pool_timeout: 60.0     # Timeout for getting connection from pool (increased for complex ops)
+  pool_recycle: 7200     # Recycle connections after 2 hours (prevent stale connections)
   connection_timeout: 30.0  # Connection establishment timeout
   keepalives_idle: 600   # TCP keepalive idle time (10 minutes)
   keepalives_interval: 30  # TCP keepalive interval

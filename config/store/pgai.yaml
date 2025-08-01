@@ -22,11 +22,13 @@ database:
   password: ${oc.env:POSTGRES_PASSWORD,postgres}
 
   # Global connection pool settings (shared across all pgai stores)
+  # NOTE: Inherit from database/default.yaml for consistency
   postgres:
-    pool_size: 10          # Minimum connections in pool
-    max_overflow: 20       # Additional connections beyond pool_size
-    pool_timeout: 30.0     # Timeout for getting connection from pool
-    pool_recycle: 3600     # Recycle connections after 1 hour
+    # Inherit pool_size from database config (20)
+    # Inherit max_overflow from database config (40)
+    # Inherit pool_timeout from database config (60.0)
+    # Inherit pool_recycle from database config (7200)
+    # Only override if pgai-specific tuning is needed
 
 # =============================================================================
 # PGAI-SPECIFIC SETTINGS

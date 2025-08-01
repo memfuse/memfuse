@@ -271,64 +271,6 @@ class RoundBuffer:
         self,
         session_id: str,
         limit: Optional[int] = None,
-        sort_by: str = "timestamp",
-        order: str = "desc"
-    ) -> List[Dict[str, Any]]:
-        """Get messages for a specific session from buffer.
-
-        Args:
-            session_id: Session ID to filter by
-            limit: Maximum number of messages to return
-            sort_by: Field to sort by ('timestamp' or 'id')
-            order: Sort order ('asc' or 'desc')
-
-        Returns:
-            List of message dictionaries for the session
-        """
-        async with self._lock:
-            session_messages = []
-
-            for round_messages in self.rounds:
-                for message in round_messages:
-                    # Check if message belongs to the session
-                    metadata = message.get("metadata", {})
-                    if metadata.get("session_id") == session_id:
-                        # Convert to API format
-                        api_message = {
-                            "id": message.get("id", ""),
-                            "role": message.get("role", "user"),
-                            "content": message.get("content", ""),
-                            "created_at": message.get("created_at", ""),
-                            "updated_at": message.get("updated_at", ""),
-                            "session_id": session_id,
-                            "metadata": metadata.copy()
-                        }
-                        # Add buffer source metadata
-                        api_message["metadata"]["source"] = "round_buffer"
-                        session_messages.append(api_message)
-
-            # Sort messages
-            if sort_by == "timestamp":
-                session_messages.sort(
-                    key=lambda x: x.get("created_at", ""),
-                    reverse=(order == "desc")
-                )
-            elif sort_by == "id":
-                session_messages.sort(
-                    key=lambda x: x.get("id", ""),
-                    reverse=(order == "desc")
-                )
-
-            # Apply limit
-            if limit is not None and limit > 0:
-                session_messages = session_messages[:limit]
-
-            return session_messages
-
-    async def get_messages_by_session(
-        self,
-        session_id: str,
-        limit: Optional[int] = None,
         sort_by: str = "created_at",
         order: str = "desc"
     ) -> List[Dict[str, Any]]:
@@ -365,13 +307,14 @@ class RoundBuffer:
 
                     # Include message if session matches
                     if message_session_id == session_id:
-                        # Convert to API format
+                        # Convert to API format with session_id included
                         api_message = {
                             "id": message.get("id", ""),
                             "role": message.get("role", "user"),
                             "content": message.get("content", ""),
                             "created_at": message.get("created_at", ""),
                             "updated_at": message.get("updated_at", ""),
+                            "session_id": session_id,  # Include session_id for API compatibility
                             "metadata": message.get("metadata", {}).copy()
                         }
                         # Add buffer source metadata

@@ -89,6 +89,12 @@ class MemoryService(MessageInterface):
     def _should_use_parallel_layers(self) -> bool:
         """Determine if parallel memory layers should be used based on configuration."""
         try:
+            # Check for memory_service config at top level first (new structure)
+            memory_service_config = self.config.get("memory_service", {})
+            if memory_service_config:
+                return memory_service_config.get("parallel_enabled", False)
+
+            # Fallback to old structure for backward compatibility
             memory_config = self.config.get("memory", {})
             memory_service_config = memory_config.get("memory_service", {})
             return memory_service_config.get("parallel_enabled", False)
@@ -101,9 +107,14 @@ class MemoryService(MessageInterface):
         if self._async_initialized:
             return
 
+        logger.info("MemoryService._async_init: Starting async initialization")
+        logger.info(f"MemoryService._async_init: config type={type(self.config)}, config={self.config}")
+
         # Get database instance
         from .database_service import DatabaseService
+        logger.info("MemoryService._async_init: Getting database instance")
         self.db = await DatabaseService.get_instance()
+        logger.info("MemoryService._async_init: Database instance obtained")
 
         # Ensure user exists and get user_id
         self.user_id = await self.db.get_or_create_user_by_name(self.user)
@@ -172,12 +183,16 @@ class MemoryService(MessageInterface):
 
         # Initialize store components with the pre-loaded model
         try:
+            logger.info(f"Creating vector store with data_dir={self.user_dir}, existing_model={existing_model is not None}")
             self.vector_store = await StoreFactory.create_vector_store(
                 data_dir=self.user_dir,
                 existing_model=existing_model
             )
+            logger.info("Vector store created successfully")
         except Exception as e:
             logger.error(f"Failed to create vector store: {e}")
+            import traceback
+            logger.error(f"Vector store creation traceback: {traceback.format_exc()}")
             self.vector_store = None
 
         # Only create graph store if enabled in configuration
@@ -1262,6 +1277,46 @@ class MemoryService(MessageInterface):
             }
         else:
             raise ValueError(f"message_ids must be str or List[str], got {type(message_ids)}")
+
+    async def delete_messages_by_session(self, session_id: str) -> Dict[str, Any]:
+        """Delete all messages for a specific session.
+
+        Args:
+            session_id: Session ID
+
+        Returns:
+            Dictionary with status, code, and deletion results
+        """
+        try:
+            # Get all messages for this session
+            messages = await self.get_messages_by_session(session_id)
+            if not messages:
+                return {
+                    "status": "success",
+                    "code": 200,
+                    "data": {"deleted_ids": [], "message": "No messages found for session"},
+                    "message": "No messages to delete",
+                    "errors": None,
+                }
+
+            # Extract message IDs
+            message_ids = [msg['id'] for msg in messages]
+            logger.info(f"MemoryService.delete_messages_by_session: Deleting {len(message_ids)} messages for session {session_id}")
+
+            # Use existing delete method for batch deletion
+            result = await self.delete(message_ids)
+            logger.info(f"MemoryService.delete_messages_by_session: Deletion result: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"MemoryService.delete_messages_by_session: Error deleting messages for session {session_id}: {e}")
+            return {
+                "status": "error",
+                "code": 500,
+                "data": {"error": str(e)},
+                "message": f"Failed to delete messages for session {session_id}",
+                "errors": [{"field": "session_id", "message": str(e)}],
+            }
 
     async def add_knowledge(self, knowledge: List[str]) -> Dict[str, Any]:
         """Add knowledge to memory.

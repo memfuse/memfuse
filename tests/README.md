@@ -1,347 +1,87 @@
 # MemFuse Test Suite
 
-This directory contains comprehensive tests for the MemFuse system following industry best practices.
+Comprehensive test suite for MemFuse system with layered architecture and multiple execution modes.
 
-## 📖 Documentation
+## Test Layers
 
-- **[TEST.md](TEST.md)** - **Practical testing guide** for running tests with `run_tests.py`
-- **[README.md](README.md)** - **Test architecture** and direct pytest usage (this file)
+| Layer | Purpose | Examples |
+|-------|---------|----------|
+| `smoke/` | Quick health checks | API availability, database connectivity |
+| `contract/` | API contract validation | Request/response schemas, error codes |
+| `integration/` | Component interactions | Database integration, service communication |
+| `unit/` | Individual components | RAG chunking, memory layers, services |
+| `retrieval/` | RAG and search | Vector retrieval, semantic search |
+| `e2e/` | End-to-end workflows | Complete user journeys |
+| `perf/` | Performance benchmarks | Load testing, response times |
 
-## 📁 Directory Structure
-
-```
-tests/
-├── __init__.py                 # Test package initialization
-├── conftest.py                 # Pytest configuration and shared fixtures
-├── README.md                   # This file
-│
-├── unit/                       # Unit tests for individual components
-│   ├── __init__.py
-│   ├── rag/                    # RAG component tests
-│   │   ├── __init__.py
-│   │   └── chunk/              # Chunking system tests
-│   │       ├── __init__.py
-│   │       ├── test_base.py                    # ChunkData and ChunkStrategy tests
-│   │       ├── test_message_chunk_strategy.py  # MessageChunkStrategy tests
-│   │       ├── test_contextual_chunk_strategy.py # ContextualChunkStrategy tests
-│   │       └── test_character_chunk_strategy.py  # CharacterChunkStrategy tests
-│   ├── services/               # Service layer tests
-│   ├── interfaces/             # Interface tests
-│   ├── buffer/                 # Buffer system tests
-│   └── api/                    # API layer tests
-│
-├── integration/                # Integration tests for component interactions
-│   ├── __init__.py
-│   ├── rag/                    # RAG integration tests
-│   │   ├── __init__.py
-│   │   └── test_contextual_retrieval_integration.py  # Contextual retrieval integration
-│   ├── llm/                    # LLM integration tests
-│   │   ├── __init__.py
-│   │   └── test_llm_integration.py  # LLM provider integration
-│   ├── chunking/               # Chunking integration tests
-│   │   ├── __init__.py
-│   │   └── test_chunking_integration.py  # Advanced chunking integration
-│   └── test_chunking_integration.py  # Legacy chunking integration tests
-│
-└── e2e/                        # End-to-end tests for full system functionality
-    ├── __init__.py
-    └── test_chunking.py         # E2E chunking functionality tests
-```
-
-## 🧪 Test Categories
-
-### Unit Tests (`tests/unit/`)
-
-- Test individual components in isolation
-- Fast execution (< 1 second per test)
-- Mock external dependencies
-- High code coverage focus
-
-### Integration Tests (`tests/integration/`)
-
-- Test component interactions and complete workflows
-- Medium execution time (1-10 seconds per test)
-- Test real component integration without external dependencies
-- Focus on interface contracts and data flow
-- **RAG Integration**: Advanced contextual retrieval and three-layer strategies
-- **LLM Integration**: LLM provider integration with chunking enhancement
-- **Chunking Integration**: Complete chunking workflows with real conversation data
-
-### End-to-End Tests (`tests/e2e/`)
-
-- Test complete user workflows
-- Slower execution (10+ seconds per test)
-- Test against running system
-- Focus on user scenarios
-
-## 🏃‍♂️ Running Tests
-
-### Prerequisites
+## Quick Start
 
 ```bash
-# Install test dependencies (using Poetry)
+# Using run_tests.py (recommended)
+poetry run python scripts/run_tests.py smoke        # Quick validation
+poetry run python scripts/run_tests.py integration  # Full integration tests
+poetry run python scripts/run_tests.py --client-type=testclient unit  # Fast unit tests
+
+# Direct pytest usage
+poetry run pytest tests/smoke/ -v                   # Smoke tests
+poetry run pytest tests/integration/connection_pool/ -v  # Specific component
+poetry run pytest -k "test_user" --tb=short        # Pattern matching
+```
+
+## Configuration Options
+
+**Client Types**:
+- `--client-type=server`: HTTP server (shows requests in logs)
+- `--client-type=testclient`: In-process TestClient (faster, isolated)
+
+**Server Management**:
+- Default: Restart server after database reset (clean connections)
+- `--no-restart-server`: Keep development server running
+
+**Database Options**:
+- Automatic database reset for clean test state
+- Custom database URL via environment variables
+
+## Direct pytest Usage
+
+```bash
+# Prerequisites
 poetry install --with dev
 
-# Or install manually
-pip install pytest pytest-asyncio aiohttp pytest-cov
-
-# Ensure MemFuse server is running for E2E tests
-python -m memfuse_core.server
+# Basic execution
+pytest tests/smoke/ -v                    # Quick validation
+pytest tests/integration/connection_pool/ -v  # Specific component
+pytest --cov=src/memfuse_core --cov-report=html  # With coverage
 ```
 
-### Run All Tests
+## Test Markers
+
+Key markers for filtering tests:
+- `@pytest.mark.unit`, `@pytest.mark.integration`, `@pytest.mark.e2e`
+- `@pytest.mark.chunking`, `@pytest.mark.slow`, `@pytest.mark.api`
+
+## Debugging
 
 ```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run with coverage
-pytest --cov=src/memfuse_core --cov-report=html
-```
-
-### Run Specific Test Categories
-
-```bash
-# Run only unit tests
-pytest tests/unit/ -m unit
-
-# Run only integration tests
-pytest tests/integration/ -m integration
-
-# Run only E2E tests (requires running server)
-pytest tests/e2e/ -m e2e
-
-# Run only chunking-related tests
-pytest -m chunking
-
-# Run only fast tests (exclude slow tests)
-pytest -m "not slow"
-```
-
-### Run Specific Test Files
-
-```bash
-# Run chunking unit tests
-pytest tests/unit/rag/chunk/
-
-# Run specific strategy tests
-pytest tests/unit/rag/chunk/test_message_chunk_strategy.py
-
-# Run integration tests
-pytest tests/integration/
-
-# Run specific integration test categories
-pytest tests/integration/rag/  # RAG integration tests
-pytest tests/integration/llm/  # LLM integration tests
-pytest tests/integration/chunking/  # Chunking integration tests
-
-# Run E2E tests
-pytest tests/e2e/test_chunking.py
-```
-
-## 🏷️ Test Markers
-
-Tests are marked with the following markers for easy filtering:
-
-- `@pytest.mark.unit` - Unit tests
-- `@pytest.mark.integration` - Integration tests
-- `@pytest.mark.e2e` - End-to-end tests
-- `@pytest.mark.chunking` - Chunking-related tests
-- `@pytest.mark.slow` - Slow-running tests
-- `@pytest.mark.api` - API tests
-- `@pytest.mark.buffer` - Buffer system tests
-- `@pytest.mark.services` - Service layer tests
-- `@pytest.mark.rag` - RAG functionality tests
-
-## 🔧 Test Configuration
-
-### Pytest Configuration (`pytest.ini`)
-
-The test suite is configured with:
-
-- Automatic test discovery
-- Async test support
-- Custom markers
-- Timeout settings
-- Logging configuration
-
-### Shared Fixtures (`conftest.py`)
-
-Common fixtures available to all tests:
-
-- `sample_messages` - Sample message data
-- `sample_message_batch` - Sample message batch data
-- `mock_config` - Mock configuration
-- `mock_vector_store` - Mock vector store
-- `mock_keyword_store` - Mock keyword store
-- `mock_graph_store` - Mock graph store
-- `mock_memory_service` - Mock memory service
-- `mock_buffer_service` - Mock buffer service
-
-## 📊 Test Coverage
-
-### Current Coverage Areas
-
-✅ **Chunking System**
-
-- ChunkData class functionality
-- ChunkStrategy abstract base class
-- MessageChunkStrategy implementation
-- ContextualChunkStrategy implementation
-- CharacterChunkStrategy implementation
-- Strategy integration with services
-- Error handling and edge cases
-
-### Coverage Goals
-
-- **Unit Tests**: >90% code coverage
-- **Integration Tests**: All major component interactions
-- **E2E Tests**: All user-facing workflows
-
-## 🐛 Debugging Tests
-
-### Running Tests in Debug Mode
-
-```bash
-# Run with debug output
+# Debug mode
 pytest -s -v --tb=long
 
-# Run specific test with debugging
+# Specific test debugging
 pytest tests/unit/rag/chunk/test_base.py::TestChunkData::test_chunk_data_creation -s -v
 
-# Run with pdb on failure
+# Debug on failure
 pytest --pdb
-
-# Use test runner script
-python tests/run_tests.py --verbose --type unit
-
-# Verify test structure
-python tests/verify_structure.py
 ```
 
-### Common Issues
+## Writing Tests
 
-1. **Import Errors**: Ensure `src/` is in Python path
-2. **Async Test Failures**: Check `pytest-asyncio` is installed
-3. **E2E Test Failures**: Ensure MemFuse server is running
-4. **Mock Issues**: Check fixture dependencies in `conftest.py`
+**Naming**: `test_*.py`, `Test*` classes, `test_*` methods
 
-## 📝 Writing New Tests
-
-### Test Naming Convention
-
-- Test files: `test_*.py`
-- Test classes: `Test*`
-- Test methods: `test_*`
-
-### Example Unit Test
-
+**Example**:
 ```python
-import pytest
-from memfuse_core.rag.chunk import MessageChunkStrategy
-
-class TestMyComponent:
-    @pytest.fixture
-    def component(self):
-        return MessageChunkStrategy()
-
-    @pytest.mark.unit
-    @pytest.mark.asyncio
-    async def test_my_functionality(self, component):
-        """Test description."""
-        result = await component.create_chunks([])
-        assert result == []
-```
-
-### Example Integration Test
-
-```python
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.asyncio
-async def test_component_integration(self, mock_memory_service):
-    """Test component integration."""
-    result = await mock_memory_service.add_batch([])
-    assert "status" in result
+async def test_my_functionality(self, component):
+    result = await component.create_chunks([])
+    assert result == []
 ```
-
-### Example E2E Test
-
-```python
-@pytest.mark.e2e
-@pytest.mark.asyncio
-async def test_user_workflow(self, http_session, test_user):
-    """Test complete user workflow."""
-    # Test implementation
-    pass
-```
-
-## 🚀 Continuous Integration
-
-### GitHub Actions Integration
-
-```yaml
-# .github/workflows/test.yml
-name: Tests
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.11
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run unit tests
-        run: pytest tests/unit/ -m unit
-      - name: Run integration tests
-        run: pytest tests/integration/ -m integration
-```
-
-## 📈 Performance Testing
-
-### Benchmark Tests
-
-```bash
-# Run performance tests
-pytest tests/integration/ -m "chunking and not slow" --benchmark-only
-```
-
-### Memory Usage Testing
-
-```bash
-# Run with memory profiling
-pytest tests/unit/ --memray
-```
-
-## 📋 Recent Cleanup (2025-07-13)
-
-The test directory has been reorganized to improve maintainability:
-
-### Removed Files
-
-- **Build artifacts**: Removed 17 test files from `build/scripts/` directory
-- **Documentation artifacts**: Removed test files from `docs/_build/`
-- **Root directory cleanup**: Moved `test_e2e.py` to `tests/e2e/test_complete_workflow.py`
-- **Duplicate store tests**: Removed 8 redundant test files from `tests/store/`
-- **Duplicate integration tests**: Removed 6 redundant test files from `tests/integration/`
-- **Standalone test files**: Removed `tests/simple_query_test.py` and `tests/test_auto_embedding_final.py`
-
-### Consolidated Tests
-
-- **Query method tests**: Consolidated in `tests/store/pgai_store/test_event_driven_store_query_method.py`
-- **E2E tests**: Organized in `tests/e2e/` directory with clear naming
-- **Performance tests**: Separated into dedicated `tests/performance/` directory
-- **Integration tests**: Removed duplicates, kept most comprehensive versions
-
-### Benefits
-
-- **Reduced complexity**: From 80+ test files to ~50 focused test files
-- **Eliminated duplication**: Removed redundant test coverage
-- **Improved organization**: Clear separation by test type and component
-- **Better maintainability**: Easier to find and update relevant tests

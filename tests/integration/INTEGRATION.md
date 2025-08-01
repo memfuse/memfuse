@@ -329,7 +329,7 @@ poetry run pytest tests/integration/api/test_users_api_integration.py -v
 poetry run pytest tests/integration/ -v -s
 
 # Run specific test case
-poetry run pytest tests/integration/api/test_users_api_integration.py::test_create_user_persistence -v
+poetry run pytest tests/integration/api/test_users_api_integration.py::test_create_user -v
 ```
 
 ## Development Workflow

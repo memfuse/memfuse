@@ -1,7 +1,7 @@
 """
-Integration tests for message persistence across API calls.
+Integration tests for message functionality across API calls.
 
-These tests verify that messages are properly persisted and can be retrieved
+These tests verify that messages are properly handled and can be retrieved
 across separate API requests, simulating real-world usage patterns.
 """
 
@@ -15,8 +15,8 @@ from memfuse_core.server import create_app
 from memfuse_core.services.service_factory import ServiceFactory
 
 
-class TestMessagePersistence:
-    """Integration tests for message persistence across API calls."""
+class TestMessageFunctionality:
+    """Integration tests for message functionality across API calls."""
 
     @pytest.fixture
     def client(self):
@@ -77,7 +77,7 @@ class TestMessagePersistence:
             pytest.skip("Session creation failed - API response is None")
         return session_data["data"]["session"]["id"]
 
-    def test_message_persistence_immediate(self, client, headers, test_session_id):
+    def test_message_immediate_access(self, client, headers, test_session_id):
         """Test that messages added can be read immediately (buffer behavior)."""
         # Add messages
         add_response = client.post(
@@ -106,8 +106,8 @@ class TestMessagePersistence:
         assert len(messages) == 2
         assert messages[0]["content"] in ["Hello, immediate test", "Hi there!"]
 
-    def test_message_persistence_after_delay(self, client, headers, test_session_id):
-        """Test that messages persist after a delay (simulating separate requests)."""
+    def test_message_delayed_access(self, client, headers, test_session_id):
+        """Test that messages remain accessible after a delay (simulating separate requests)."""
         # Add messages
         add_response = client.post(
             f"/api/v1/sessions/{test_session_id}/messages",
@@ -139,8 +139,8 @@ class TestMessagePersistence:
         assert any(msg["content"] == "Hello, delayed test" for msg in messages)
         assert any(msg["content"] == "Hi from delayed test!" for msg in messages)
 
-    def test_message_persistence_across_sessions(self, client, headers, test_session_id):
-        """Test that messages persist across different API sessions."""
+    def test_message_cross_session_access(self, client, headers, test_session_id):
+        """Test that messages remain accessible across different API sessions."""
         # Add messages in first client instance
         add_response = client.post(
             f"/api/v1/sessions/{test_session_id}/messages",
@@ -170,8 +170,8 @@ class TestMessagePersistence:
         assert len(messages) == 2
         assert any(msg["content"] == "Hello, session test" for msg in messages)
 
-    def test_message_persistence_with_buffer_flush(self, client, headers, test_session_id):
-        """Test that messages persist after buffer flush operations."""
+    def test_message_buffer_flush_handling(self, client, headers, test_session_id):
+        """Test that messages remain accessible after buffer flush operations."""
         # Add messages
         add_response = client.post(
             f"/api/v1/sessions/{test_session_id}/messages",
@@ -245,7 +245,7 @@ class TestMessagePersistence:
         assert "Hello, list test" in content_list
         assert "Hi from list test!" in content_list
 
-    def test_message_persistence_error_handling(self, client, headers, test_session_id):
+    def test_message_error_handling(self, client, headers, test_session_id):
         """Test error handling for non-existent message IDs."""
         # Try to read non-existent message IDs
         read_response = client.post(
@@ -262,8 +262,8 @@ class TestMessagePersistence:
         assert response_data["code"] == 404
 
     @pytest.mark.asyncio
-    async def test_buffer_service_persistence_integration(self, test_session_id):
-        """Test BufferService persistence behavior directly."""
+    async def test_buffer_service_integration(self, test_session_id):
+        """Test BufferService behavior directly."""
         # Reset service instances to ensure clean state
         ServiceFactory.reset()
         

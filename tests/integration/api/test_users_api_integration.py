@@ -12,10 +12,10 @@ from typing import Dict, Any
 class TestUsersAPIIntegration:
     """Integration tests for Users API endpoints."""
 
-    def test_create_user_persistence(self, client, headers: Dict[str, str],
+    def test_create_user(self, client, headers: Dict[str, str],
                                    test_user_data: Dict[str, Any], database_connection,
                                    integration_helper, mock_embedding_service):
-        """Test that creating a user actually persists to database."""
+        """Test that creating a user works correctly through API."""
         # Create user via API
         response = client.post("/api/v1/users", json=test_user_data, headers=headers)
 
@@ -74,10 +74,10 @@ class TestUsersAPIIntegration:
         assert retrieved_user["name"] == test_user_data["name"]
         assert retrieved_user["description"] == test_user_data["description"]
 
-    def test_update_user_persistence(self, client, headers: Dict[str, str],
+    def test_update_user(self, client, headers: Dict[str, str],
                                     test_user_data: Dict[str, Any], database_connection,
                                     integration_helper, mock_embedding_service):
-        """Test that updating a user actually modifies database record."""
+        """Test that updating a user works correctly through API."""
         # Create user first
         user = integration_helper.create_user_via_api(client, headers, test_user_data)
         user_id = user["id"]
@@ -114,10 +114,10 @@ class TestUsersAPIIntegration:
         assert db_record["description"] == updated_data["description"]
         assert db_record["updated_at"] is not None  # updated_at should be set
 
-    def test_delete_user_persistence(self, client, headers: Dict[str, str],
+    def test_delete_user(self, client, headers: Dict[str, str],
                                     test_user_data: Dict[str, Any], database_connection,
                                     integration_helper, mock_embedding_service):
-        """Test that deleting a user actually removes it from database."""
+        """Test that deleting a user works correctly through API."""
         # Create user first
         user = integration_helper.create_user_via_api(client, headers, test_user_data)
         user_id = user["id"]

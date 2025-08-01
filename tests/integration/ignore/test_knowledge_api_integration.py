@@ -67,7 +67,7 @@ class TestKnowledgeAPIIntegration:
 
     # Data Persistence Testing Pillar
 
-    def test_knowledge_add_persistence(self, client, headers, test_user_a, database_connection):
+    def test_knowledge_add(self, client, headers, test_user_a, database_connection):
         """Test that added knowledge actually persists in the database."""
         user_id = test_user_a["id"]
         knowledge_data = {
@@ -111,7 +111,7 @@ class TestKnowledgeAPIIntegration:
         for record in db_records:
             assert record[1] == user_id
 
-    def test_knowledge_update_persistence(self, client, headers, test_user_a, database_connection):
+    def test_knowledge_update(self, client, headers, test_user_a, database_connection):
         """Test that knowledge updates actually persist in the database."""
         user_id = test_user_a["id"]
         
@@ -152,7 +152,7 @@ class TestKnowledgeAPIIntegration:
         assert db_record is not None
         assert db_record[0] == "Updated knowledge content"
 
-    def test_knowledge_delete_persistence(self, client, headers, test_user_a, database_connection):
+    def test_knowledge_delete(self, client, headers, test_user_a, database_connection):
         """Test that knowledge deletion actually removes data from the database."""
         user_id = test_user_a["id"]
         

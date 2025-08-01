@@ -140,11 +140,14 @@ class StoreFactory:
         config = config_manager.get_config()
 
         # Use defaults from config if not provided
-        backend = backend or StoreBackend(config["store"]["backend"])
-        data_dir = str(data_dir or config["data_dir"])
-        buffer_size = int(buffer_size or config["store"]["buffer_size"])
-        cache_size = int(cache_size or config["store"]["cache_size"])
-        model_name = str(model_name or config["embedding"]["model"])
+        store_config = config.get("store", {})
+        embedding_config = config.get("embedding", {})
+
+        backend = backend or StoreBackend(store_config.get("backend", "pgai"))
+        data_dir = str(data_dir or config.get("data_dir", "data"))
+        buffer_size = int(buffer_size or store_config.get("buffer_size", 1000))
+        cache_size = int(cache_size or store_config.get("cache_size", 100))
+        model_name = str(model_name or embedding_config.get("model", "all-MiniLM-L6-v2"))
 
         # Create encoder if not provided
         if encoder is None:
@@ -190,10 +193,12 @@ class StoreFactory:
 
             # Check if we have a specific dimension for this model in the config
             model_key = model_name.lower() if model_name else ""
-            for key, model_config in config["embedding"]["models"].items():
-                if key.lower() in model_key:
-                    embedding_dim = model_config["dimension"]
-                    break
+            models_config = config.get("embedding", {}).get("models", {})
+            if models_config:  # Only iterate if models_config is not None/empty
+                for key, model_config in models_config.items():
+                    if key.lower() in model_key:
+                        embedding_dim = model_config["dimension"]
+                        break
 
             logger.info(
                 f"Using embedding dimension: {embedding_dim}")
@@ -271,15 +276,18 @@ class StoreFactory:
         config = config_manager.get_config()
 
         # Use defaults from config if not provided
-        data_dir = str(data_dir or config["data_dir"])
-        model_name = str(model_name or config["embedding"]["model"])
-        backend = backend or StoreBackend(config["store"]["backend"])
+        store_config = config.get("store", {})
+        embedding_config = config.get("embedding", {})
+
+        data_dir = str(data_dir or config.get("data_dir", "data"))
+        model_name = str(model_name or embedding_config.get("model", "all-MiniLM-L6-v2"))
+        backend = backend or StoreBackend(store_config.get("backend", "pgai"))
 
         # Create encoder if not provided
         if encoder is None:
             encoder = await cls.create_encoder(
                 model_name=model_name,
-                cache_size=config["store"]["cache_size"],
+                cache_size=store_config.get("cache_size", 100),
                 existing_model=existing_model
             )
 
@@ -340,9 +348,11 @@ class StoreFactory:
         config = config_manager.get_config()
 
         # Use defaults from config if not provided
-        data_dir = str(data_dir or config["data_dir"])
-        cache_size = int(cache_size or config["store"]["cache_size"])
-        backend = backend or StoreBackend(config["store"]["backend"])
+        store_config = config.get("store", {})
+
+        data_dir = str(data_dir or config.get("data_dir", "data"))
+        cache_size = int(cache_size or store_config.get("cache_size", 100))
+        backend = backend or StoreBackend(store_config.get("backend", "pgai"))
 
         # Create user directory if it doesn't exist
         PathManager.ensure_directory(data_dir)
@@ -405,22 +415,25 @@ class StoreFactory:
         cfg = config_manager.get_config()
 
         # Use defaults from config if not provided
-        data_dir = str(data_dir or cfg["data_dir"])
+        store_config = cfg.get("store", {})
+        multi_path_config = store_config.get("multi_path", {})
+
+        data_dir = str(data_dir or cfg.get("data_dir", "data"))
 
         # Create stores if not provided
-        if vector_store is None and cfg["store"]["multi_path"]["use_vector"]:
+        if vector_store is None and multi_path_config.get("use_vector", True):
             vector_store = await cls.create_vector_store(
                 data_dir=data_dir,
                 **kwargs
             )
 
-        if graph_store is None and cfg["store"]["multi_path"]["use_graph"]:
+        if graph_store is None and multi_path_config.get("use_graph", False):
             graph_store = await cls.create_graph_store(
                 data_dir=data_dir,
                 **kwargs
             )
 
-        if keyword_store is None and cfg["store"]["multi_path"]["use_keyword"]:
+        if keyword_store is None and multi_path_config.get("use_keyword", False):
             keyword_store = await cls.create_keyword_store(
                 data_dir=data_dir,
                 **kwargs

@@ -32,44 +32,51 @@ except ImportError:
 @dataclass
 class ConnectionPoolConfig:
     """Configuration for PostgreSQL connection pools."""
-    min_size: int = 1  # Minimal connections for stability
-    max_size: int = 2  # Very conservative max to avoid pool exhaustion
-    timeout: float = 5.0  # Short timeout to fail fast
-    recycle: int = 1800  # Shorter recycle time
-    connection_timeout: float = 10.0  # Short connection timeout
+    min_size: int = 15  # Reasonable minimum for dual-write mode
+    max_size: int = 50  # Higher max to support concurrent operations
+    timeout: float = 60.0  # Longer timeout for complex operations
+    recycle: int = 7200  # 2 hours recycle time (match config)
+    connection_timeout: float = 30.0  # Reasonable connection timeout
     keepalives_idle: int = 600  # Longer idle time for stability
-    keepalives_interval: int = 60  # Longer interval
+    keepalives_interval: int = 30  # Standard interval
     keepalives_count: int = 3
-    
+
     @classmethod
     def from_memfuse_config(cls, config: Dict[str, Any]) -> 'ConnectionPoolConfig':
         """Create configuration from MemFuse config hierarchy.
-        
+
         Configuration priority (highest to lowest):
         1. store.database.postgres.*
         2. database.postgres.*
         3. postgres.*
         4. Default values
         """
+        logger.debug(f"ConnectionPoolConfig.from_memfuse_config: config type={type(config)}")
         postgres_config = {}
-        
+
         # Layer 1: Base postgres config
-        if "postgres" in config:
+        if "postgres" in config and config["postgres"] is not None:
+            logger.debug(f"ConnectionPoolConfig: Found base postgres config")
             postgres_config.update(config["postgres"])
-        
+
         # Layer 2: Database postgres config (higher priority)
-        if "database" in config and "postgres" in config["database"]:
+        if ("database" in config and
+            "postgres" in config["database"] and
+            config["database"]["postgres"] is not None):
+            logger.debug(f"ConnectionPoolConfig: Found database.postgres config")
             postgres_config.update(config["database"]["postgres"])
-        
+
         # Layer 3: Store database postgres config (highest priority)
-        if ("store" in config and 
-            "database" in config["store"] and 
-            "postgres" in config["store"]["database"]):
+        if ("store" in config and
+            "database" in config["store"] and
+            "postgres" in config["store"]["database"] and
+            config["store"]["database"]["postgres"] is not None):
+            logger.debug(f"ConnectionPoolConfig: Found store.database.postgres config")
             postgres_config.update(config["store"]["database"]["postgres"])
         
-        # Extract values with defaults
-        pool_size = postgres_config.get("pool_size", 10)  # Match test expectations
-        max_overflow = postgres_config.get("max_overflow", 40)  # 50 - 10 = 40
+        # Extract values with defaults matching database/default.yaml
+        pool_size = postgres_config.get("pool_size", 20)  # Match database config default
+        max_overflow = postgres_config.get("max_overflow", 40)  # Match database config default
         max_size = pool_size + max_overflow
         
         logger.debug(f"ConnectionPoolConfig: min_size={pool_size}, max_size={max_size}, "
@@ -163,17 +170,41 @@ class GlobalConnectionManager:
             # Check if pool already exists
             if db_url in self._pools:
                 pool = self._pools[db_url]
-                
-                # Add store reference for tracking
-                if store_ref is not None:
-                    self._add_store_reference(db_url, store_ref)
-                
-                logger.debug(f"GlobalConnectionManager: Reusing pool for {self._mask_url(db_url)}")
-                return pool
+
+                # Check if pool is closed or invalid (but don't test database connectivity)
+                # This preserves pool sharing while still detecting truly broken pools
+                try:
+                    if pool.closed:
+                        logger.warning(f"GlobalConnectionManager: Pool is closed for {self._mask_url(db_url)}, recreating")
+                        # Remove closed pool
+                        del self._pools[db_url]
+                        if db_url in self._store_references:
+                            del self._store_references[db_url]
+                        # Continue to create new pool below
+                    else:
+                        # Pool exists and is not closed, reuse it
+                        # Add store reference for tracking
+                        if store_ref is not None:
+                            self._add_store_reference(db_url, store_ref)
+
+                        logger.debug(f"GlobalConnectionManager: Reusing existing pool for {self._mask_url(db_url)}")
+                        return pool
+
+                except Exception as e:
+                    logger.warning(f"GlobalConnectionManager: Error checking pool status for {self._mask_url(db_url)}: {e}")
+                    # If we can't even check the pool status, it's probably broken
+                    try:
+                        await pool.close()
+                    except Exception:
+                        pass
+                    del self._pools[db_url]
+                    if db_url in self._store_references:
+                        del self._store_references[db_url]
+                    # Continue to create new pool below
             
             # Create new pool
             logger.info(f"GlobalConnectionManager: Creating new pool for {self._mask_url(db_url)}")
-            
+
             # Get pool configuration from MemFuse config
             if config is None:
                 # Try to get config from global config manager
@@ -183,8 +214,10 @@ class GlobalConnectionManager:
                 except Exception as e:
                     logger.warning(f"Could not get global config: {e}")
                     config = {}
-            
+
+            logger.info(f"GlobalConnectionManager: Creating pool config from config type={type(config)}")
             pool_config = ConnectionPoolConfig.from_memfuse_config(config)
+            logger.info(f"GlobalConnectionManager: Pool config created: min_size={pool_config.min_size}, max_size={pool_config.max_size}")
             self._pool_configs[db_url] = pool_config
             
             # Create the pool with enhanced connection parameters
@@ -228,7 +261,7 @@ class GlobalConnectionManager:
             from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
             parsed = urlparse(db_url)
-            query_params = parse_qs(parsed.query)
+            query_params = parse_qs(parsed.query or "")
 
             # Add keepalive parameters
             query_params['keepalives_idle'] = [str(config.keepalives_idle)]

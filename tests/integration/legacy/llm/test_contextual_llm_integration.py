@@ -78,7 +78,7 @@ async def test_contextual_description_with_xai(llm_provider):
         return False
     
     try:
-        # 创建测试数据
+        # Create test data
         context_chunks = [
             ChunkData(
                 content="[ASSISTANT]: Hi! How are you doing tonight?\n[USER]: I'm doing great. Just relaxing with my two dogs.",
@@ -154,13 +154,13 @@ async def test_contextual_strategy_with_xai(llm_provider):
             gpt_model="grok-3-mini"
         )
         
-        print(f"✅ 策略创建成功:")
+        print(f"✅ Strategy created successfully:")
         print(f"   enable_contextual: {strategy.enable_contextual}")
         print(f"   context_window_size: {strategy.context_window_size}")
         print(f"   llm_provider: {strategy.llm_provider is not None}")
         print(f"   gpt_model: {strategy.gpt_model}")
-        
-        # 测试contextual description生成方法
+
+        # Test contextual description generation method
         context_chunks = [
             ChunkData(
                 content="[ASSISTANT]: Hi! How are you doing tonight?\n[USER]: I'm doing great. Just relaxing with my two dogs.",
@@ -170,33 +170,33 @@ async def test_contextual_strategy_with_xai(llm_provider):
         
         current_chunk = "[ASSISTANT]: Great. In my spare time I do volunteer work.\n[USER]: That's neat. What kind of volunteer work do you do?"
         
-        print(f"\n📄 测试_generate_contextual_description方法...")
-        print("📡 调用XAI API...")
-        
+        print(f"\n📄 Testing _generate_contextual_description method...")
+        print("📡 Calling XAI API...")
+
         description = await strategy._generate_contextual_description(
             current_chunk, context_chunks
         )
-        
-        print(f"✅ XAI方法调用成功:")
-        print(f"   描述: {description}")
-        
+
+        print(f"✅ XAI method call successful:")
+        print(f"   Description: {description}")
+
         return True
-        
+
     except Exception as e:
-        print(f"❌ 策略测试失败: {e}")
+        print(f"❌ Strategy test failed: {e}")
         return False
 
 
 async def test_create_enhanced_chunk_with_xai(llm_provider):
-    """测试使用XAI的_create_enhanced_chunk_async方法"""
-    print("\n🔧 测试XAI _create_enhanced_chunk_async方法...")
-    
+    """Test _create_enhanced_chunk_async method using XAI"""
+    print("\n🔧 Testing XAI _create_enhanced_chunk_async method...")
+
     if not llm_provider:
-        print("❌ 无法测试 - LLM提供者不可用")
+        print("❌ Cannot test - LLM provider unavailable")
         return False
-    
+
     try:
-        # 创建策略实例
+        # Create strategy instance
         strategy = ContextualChunkStrategy(
             enable_contextual=True,
             context_window_size=2,
@@ -204,21 +204,21 @@ async def test_create_enhanced_chunk_with_xai(llm_provider):
             gpt_model="grok-3-mini"
         )
         
-        # 创建测试数据
+        # Create test data
         previous_chunks = [
             ChunkData(
                 content="[ASSISTANT]: Hi! How are you doing tonight?\n[USER]: I'm doing great. Just relaxing with my two dogs.",
                 metadata={"chunk_id": "chunk_0", "session_id": "test"}
             )
         ]
-        
+
         chunk_content = "[ASSISTANT]: Great. In my spare time I do volunteer work.\n[USER]: That's neat. What kind of volunteer work do you do?"
-        
-        print(f"📄 测试chunk内容: {chunk_content[:50]}...")
-        print(f"🔗 历史chunks: {len(previous_chunks)}")
-        print("📡 调用XAI API生成enhanced chunk...")
-        
-        # 调用方法
+
+        print(f"📄 Testing chunk content: {chunk_content[:50]}...")
+        print(f"🔗 Historical chunks: {len(previous_chunks)}")
+        print("📡 Calling XAI API to generate enhanced chunk...")
+
+        # Call method
         enhanced_chunk = await strategy._create_enhanced_chunk_async(
             chunk_content, 0, previous_chunks, "test_session"
         )
@@ -241,46 +241,46 @@ async def test_create_enhanced_chunk_with_xai(llm_provider):
 
 
 async def main():
-    """主测试函数"""
-    print("🧪 开始XAI LLM Contextual Chunking完整测试\n")
-    print(f"📁 当前工作目录: {os.getcwd()}")
-    print(f"🔍 检查环境变量...")
-    print(f"   XAI_API_KEY: {'已设置' if os.getenv('XAI_API_KEY') else '未设置'}")
-    print(f"   OPENAI_API_KEY: {'已设置' if os.getenv('OPENAI_API_KEY') else '未设置'}")
-    print(f"   XAI_API_URL: {os.getenv('XAI_API_URL', '未设置')}")
+    """Main test function"""
+    print("🧪 Starting XAI LLM Contextual Chunking comprehensive test\n")
+    print(f"📁 Current working directory: {os.getcwd()}")
+    print(f"🔍 Checking environment variables...")
+    print(f"   XAI_API_KEY: {'Set' if os.getenv('XAI_API_KEY') else 'Not set'}")
+    print(f"   OPENAI_API_KEY: {'Set' if os.getenv('OPENAI_API_KEY') else 'Not set'}")
+    print(f"   XAI_API_URL: {os.getenv('XAI_API_URL', 'Not set')}")
     print()
-    
-    # 1. 测试XAI LLM提供者
+
+    # 1. Test XAI LLM provider
     llm_provider = await test_xai_llm_provider()
-    
-    # 2. 测试prompt管理器
+
+    # 2. Test prompt manager
     try:
         prompt_manager = get_prompt_manager()
         prompt_success = True
-        print("✅ Prompt管理器初始化成功")
+        print("✅ Prompt manager initialization successful")
     except Exception as e:
         prompt_success = False
-        print(f"❌ Prompt管理器初始化失败: {e}")
-    
-    # 3. 测试XAI相关功能
+        print(f"❌ Prompt manager initialization failed: {e}")
+
+    # 3. Test XAI related functionality
     if llm_provider:
         description_success = await test_contextual_description_with_xai(llm_provider)
         strategy_success = await test_contextual_strategy_with_xai(llm_provider)
         enhanced_chunk_success = await test_create_enhanced_chunk_with_xai(llm_provider)
     else:
-        print("\n⚠️  跳过XAI LLM相关测试 - LLM提供者不可用")
+        print("\n⚠️  Skipping XAI LLM related tests - LLM provider unavailable")
         description_success = False
         strategy_success = False
         enhanced_chunk_success = False
-    
-    # 总结
-    print("\n📊 测试总结:")
-    print(f"✅ XAI LLM提供者: {'成功' if llm_provider else '失败'}")
-    print(f"✅ Prompt管理器: {'成功' if prompt_success else '失败'}")
-    print(f"✅ XAI Contextual Description: {'成功' if description_success else '失败/跳过'}")
-    print(f"✅ XAI 策略集成: {'成功' if strategy_success else '失败/跳过'}")
-    print(f"✅ XAI Enhanced Chunk: {'成功' if enhanced_chunk_success else '失败/跳过'}")
-    
+
+    # Summary
+    print("\n📊 Test Summary:")
+    print(f"✅ XAI LLM Provider: {'Success' if llm_provider else 'Failed'}")
+    print(f"✅ Prompt Manager: {'Success' if prompt_success else 'Failed'}")
+    print(f"✅ XAI Contextual Description: {'Success' if description_success else 'Failed/Skipped'}")
+    print(f"✅ XAI Strategy Integration: {'Success' if strategy_success else 'Failed/Skipped'}")
+    print(f"✅ XAI Enhanced Chunk: {'Success' if enhanced_chunk_success else 'Failed/Skipped'}")
+
     all_success = all([
         llm_provider is not None,
         prompt_success,
@@ -288,9 +288,9 @@ async def main():
         strategy_success,
         enhanced_chunk_success
     ])
-    
+
     if all_success:
-        print("\n🎉 所有测试通过！XAI LLM Contextual Chunking功能完全正常。")
+        print("\n🎉 All tests passed! XAI LLM Contextual Chunking functionality is fully operational.")
         print("🚀 现在可以运行端到端测试验证contextual chunks是否正确生成！")
     else:
         print("\n⚠️  部分测试失败，需要检查配置或网络连接。")

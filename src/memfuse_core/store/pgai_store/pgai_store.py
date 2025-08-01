@@ -790,7 +790,7 @@ class PgaiStore(ChunkStoreInterface):
 
         # Priority 3: Get global embedding model from ServiceFactory
         try:
-            from ..services.service_factory import ServiceFactory
+            from ...services.service_factory import ServiceFactory
             global_embedding_model = ServiceFactory.get_global_embedding_model()
 
             if global_embedding_model is not None:
@@ -806,7 +806,7 @@ class PgaiStore(ChunkStoreInterface):
         # Priority 4: Create direct encoder as last resort
         try:
             logger.info("Creating direct MiniLM encoder as fallback")
-            from ..rag.encode.MiniLM import MiniLMEncoder
+            from ...rag.encode.MiniLM import MiniLMEncoder
             # Use the configured model name
             try:
                 from ...utils.config import config_manager

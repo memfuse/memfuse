@@ -4,15 +4,15 @@ This test suite validates the refactored buffer system with proper abstraction l
 
 ARCHITECTURE TESTED:
 ===================
-BufferService (最高层抽象 - 组合三种 Buffer 类型)
-├── WriteBuffer (写入路径抽象)
-│   ├── RoundBuffer (短期缓存)
-│   ├── HybridBuffer (中期缓存 + VectorCache)
-│   └── FlushManager (持久化管理)
-├── QueryBuffer (查询路径抽象)
-│   └── 多源查询和缓存
-└── SpeculativeBuffer (预测预取抽象 - PLACEHOLDER)
-    └── 预测和预取逻辑
+BufferService (Top-level abstraction - combines three Buffer types)
+├── WriteBuffer (Write path abstraction)
+│   ├── RoundBuffer (Short-term cache)
+│   ├── HybridBuffer (Mid-term cache + VectorCache)
+│   └── FlushManager (Data synchronization manager)
+├── QueryBuffer (Query path abstraction)
+│   └── Multi-source querying and caching
+└── SpeculativeBuffer (Predictive prefetch abstraction - PLACEHOLDER)
+    └── Prediction and prefetch logic
 
 KEY VALIDATIONS:
 ===============
@@ -25,14 +25,12 @@ KEY VALIDATIONS:
 """
 
 import asyncio
-import pytest
 import uuid
-from typing import Dict, Any, List
 from loguru import logger
 
 from memfuse_core.services import MemoryService, BufferService
 from memfuse_core.services.database_service import DatabaseService
-from memfuse_core.interfaces import MessageList, MessageBatchList
+from memfuse_core.interfaces import MessageList
 
 
 class TestBufferArchitectureRefactor:

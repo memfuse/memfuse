@@ -12,10 +12,10 @@ from typing import Dict, Any
 class TestSessionsAPIIntegration:
     """Integration tests for Sessions API endpoints."""
 
-    def test_create_session_persistence(self, client, headers: Dict[str, str],
+    def test_create_session(self, client, headers: Dict[str, str],
                                        test_user_data: Dict[str, Any], test_agent_data: Dict[str, Any],
                                        database_connection, integration_helper, mock_embedding_service):
-        """Test that creating a session actually persists to database."""
+        """Test that creating a session works correctly through API."""
         # Create user and agent first
         user = integration_helper.create_user_via_api(client, headers, test_user_data)
         agent = integration_helper.create_agent_via_api(client, headers, test_agent_data)
@@ -110,13 +110,13 @@ class TestSessionsAPIIntegration:
         
         # Verify in database
         cursor = database_connection.cursor()
-        cursor.execute("SELECT name FROM sessions WHERE id = %s", (session_id,))
+        cursor.execute("SELECT id, name FROM sessions WHERE id = %s", (session_id,))
         db_record = cursor.fetchone()
         cursor.close()
-        
+
         assert db_record is not None
-        assert db_record["id"] is not None
-        assert db_record["id"] != ""
+        assert db_record["name"] is not None
+        assert db_record["name"] != ""
 
     def test_get_session_from_database(self, client, headers: Dict[str, str],
                                       test_user_data: Dict[str, Any], test_agent_data: Dict[str, Any],
@@ -190,10 +190,10 @@ class TestSessionsAPIIntegration:
         assert retrieved_session["agent_id"] == agent["id"]
         assert retrieved_session["name"] == session_data["name"]
 
-    def test_update_session_persistence(self, client, headers: Dict[str, str],
+    def test_update_session(self, client, headers: Dict[str, str],
                                        test_user_data: Dict[str, Any], test_agent_data: Dict[str, Any],
                                        database_connection, integration_helper, mock_embedding_service):
-        """Test that updating a session actually modifies database record."""
+        """Test that updating a session works correctly through API."""
         # Create user and agent first
         user = integration_helper.create_user_via_api(client, headers, test_user_data)
         agent = integration_helper.create_agent_via_api(client, headers, test_agent_data)
@@ -241,10 +241,10 @@ class TestSessionsAPIIntegration:
         assert db_record["name"] == updated_data["name"]
         assert db_record["updated_at"] is not None  # updated_at should be set
 
-    def test_delete_session_persistence(self, client, headers: Dict[str, str],
+    def test_delete_session(self, client, headers: Dict[str, str],
                                        test_user_data: Dict[str, Any], test_agent_data: Dict[str, Any],
                                        database_connection, integration_helper, mock_embedding_service):
-        """Test that deleting a session actually removes it from database."""
+        """Test that deleting a session works correctly through API."""
         # Create user and agent first
         user = integration_helper.create_user_via_api(client, headers, test_user_data)
         agent = integration_helper.create_agent_via_api(client, headers, test_agent_data)

@@ -79,8 +79,8 @@ class TestGlobalConnectionManager:
         """Test that multiple stores share the same connection pool."""
         manager = get_global_connection_manager()
         
-        # Mock database URL
-        db_url = "postgresql://postgres:postgres@localhost:5432/memfuse_test"
+        # Use existing memfuse database instead of non-existent test database
+        db_url = "postgresql://postgres:postgres@localhost:5432/memfuse"
         
         # Mock configuration
         config = {
@@ -129,8 +129,8 @@ class TestGlobalConnectionManager:
         """Test that connection pools are properly cleaned up."""
         manager = get_global_connection_manager()
         
-        # Mock database URL
-        db_url = "postgresql://postgres:postgres@localhost:5432/memfuse_test"
+        # Use existing memfuse database instead of non-existent test database
+        db_url = "postgresql://postgres:postgres@localhost:5432/memfuse"
         
         # Mock configuration
         config = {

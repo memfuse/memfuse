@@ -326,34 +326,40 @@ class DatabaseManager:
         """Reset database (clear data, keep schema)."""
         print("🗑️ Resetting Database (Clear Data, Keep Schema)")
         print("=" * 60)
-        
+
         if not self.check_container_status():
             return False
-        
+
         # Get current stats
         current_status = self.get_database_status()
-        
-        # Clear m0_raw table if it exists
-        if 'm0_raw' in current_status.get('tables', {}):
-            print("Clearing m0_raw table...")
-            result = self.run_sql_command("TRUNCATE TABLE m0_raw RESTART IDENTITY CASCADE;")
 
-            if result is not None:
-                print("✅ m0_raw table cleared")
+        # Get all tables to clear
+        tables_to_clear = [
+            'messages', 'rounds', 'sessions', 'agents', 'users', 'api_keys', 'knowledge', 'm0_raw', 'm1_episodic', 'm2_semantic'
+        ]
 
-                # Verify empty
-                count_result = self.run_sql_command("SELECT COUNT(*) FROM m0_raw;", "tuples")
-                if count_result and int(count_result.strip()) == 0:
-                    print("✅ Table is empty")
+        # Clear all tables
+        for table in tables_to_clear:
+            if table in current_status.get('tables', {}):
+                print(f"Clearing {table} table...")
+                result = self.run_sql_command(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE;")
+
+                if result is not None:
+                    print(f"✅ {table} table cleared")
+
+                    # Verify empty
+                    count_result = self.run_sql_command(f"SELECT COUNT(*) FROM {table};", "tuples")
+                    if count_result and int(count_result.strip()) == 0:
+                        print(f"✅ {table} table is empty")
+                    else:
+                        print(f"❌ {table} table is not empty after reset")
+                        return False
                 else:
-                    print("❌ Table is not empty after reset")
+                    print(f"❌ Failed to clear {table} table")
                     return False
             else:
-                print("❌ Failed to clear m0_raw table")
-                return False
-        else:
-            print("⚠️  m0_raw table not found")
-        
+                print(f"⚠️  {table} table not found")
+
         print("✅ Database reset completed successfully")
         return True
     

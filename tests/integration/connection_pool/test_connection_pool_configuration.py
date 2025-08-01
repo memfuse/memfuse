@@ -71,9 +71,9 @@ class TestConnectionPoolConfiguration:
         empty_config = {}
         pool_config = ConnectionPoolConfig.from_memfuse_config(empty_config)
         
-        # Should use defaults
-        assert pool_config.min_size == 10  # Updated default
-        assert pool_config.max_size == 50  # Updated default
+        # Should use defaults (matching database/default.yaml)
+        assert pool_config.min_size == 20  # Match database config default
+        assert pool_config.max_size == 60  # 20 + 40 overflow
         assert pool_config.timeout == 60.0
         assert pool_config.recycle == 7200
         

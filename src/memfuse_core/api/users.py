@@ -145,16 +145,53 @@ async def delete_user(
     user_id: str,
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> None:
-    """Delete a user."""
+    """Delete a user and all associated resources (cascade deletion).
+
+    When a user is deleted, all associated resources are also deleted:
+    - All sessions where the user participates
+    - All messages in the user's sessions
+    """
     db = await DatabaseService.get_instance()
 
     # Check if user exists
     _ = await ensure_user_exists(db, user_id)
 
-    # Delete the user
-    success = await db.delete_user(user_id)
+    logger.info(f"Deleting user {user_id} with cascade deletion")
 
-    if not success:
+    # Implement cascade deletion manually
+    # Step 1: Get all sessions for this user
+    user_sessions = await db.get_sessions(user_id=user_id)
+    logger.info(f"Found {len(user_sessions)} sessions for user {user_id}")
+
+    # Step 2: Delete all messages in each session
+    total_messages_deleted = 0
+    for session in user_sessions:
+        session_id = session['id']
+        # Get messages in this session
+        messages = await db.get_messages_by_session(session_id)
+        logger.info(f"Found {len(messages)} messages in session {session_id}")
+
+        # Delete each message
+        for message in messages:
+            message_success = await db.delete_message(message['id'])
+            if message_success:
+                total_messages_deleted += 1
+            else:
+                logger.warning(f"Failed to delete message {message['id']}")
+
+    # Step 3: Delete all sessions for this user
+    sessions_deleted = 0
+    for session in user_sessions:
+        session_success = await db.delete_session(session['id'])
+        if session_success:
+            sessions_deleted += 1
+        else:
+            logger.warning(f"Failed to delete session {session['id']}")
+
+    # Step 4: Delete the user
+    user_success = await db.delete_user(user_id)
+
+    if not user_success:
         error_response = ApiResponse.error(
             message="Failed to delete user",
             errors=[ErrorDetail(
@@ -162,6 +199,7 @@ async def delete_user(
         )
         raise_api_error(error_response)
 
+    logger.info(f"User {user_id} deleted successfully: {sessions_deleted} sessions and {total_messages_deleted} messages removed")
     # Return 204 No Content (no response body)
 
 

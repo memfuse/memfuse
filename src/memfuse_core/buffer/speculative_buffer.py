@@ -108,12 +108,13 @@ class SpeculativeBuffer(BufferComponentInterface):
                 self._access_history = self._access_history[-self.context_window * 5:]
         
         logger.debug(f"SpeculativeBuffer: Recorded {len(recent_items)} recent items for future prediction")
-        
-        # TODO: Implement prediction logic
-        # - Analyze recent_items for semantic context
-        # - Generate prediction queries based on strategy
-        # - Retrieve and cache predicted items
-        # - Update prediction accuracy metrics
+
+        # PLACEHOLDER: Prediction logic implementation pending
+        # Future implementation will include:
+        # - Semantic context analysis of recent_items
+        # - Strategy-based prediction query generation
+        # - Predicted item retrieval and caching
+        # - Prediction accuracy metrics tracking
 
     async def predict_and_prefetch(self, context: Dict[str, Any]) -> List[Any]:
         """Predict and prefetch items based on context (PLACEHOLDER).
@@ -127,11 +128,12 @@ class SpeculativeBuffer(BufferComponentInterface):
         # PLACEHOLDER: Return empty list
         logger.debug("SpeculativeBuffer: Prediction not yet implemented")
         return []
-        
-        # TODO: Implement prediction strategies
-        # - semantic_similarity: Use embeddings to find similar content
-        # - temporal: Predict based on time-based patterns
-        # - hybrid: Combine multiple strategies
+
+        # PLACEHOLDER: Prediction strategies implementation pending
+        # Future strategies will include:
+        # - semantic_similarity: Embedding-based content similarity
+        # - temporal: Time-based pattern prediction
+        # - hybrid: Multi-strategy combination approach
 
     async def get_prefetched(self, query_context: str) -> List[Any]:
         """Get prefetched items that match query context (PLACEHOLDER).
@@ -145,8 +147,9 @@ class SpeculativeBuffer(BufferComponentInterface):
         async with self._lock:
             # PLACEHOLDER: Return cached items
             return self._prefetch_cache.copy()
-        
-        # TODO: Implement smart matching
+
+        # PLACEHOLDER: Smart matching implementation pending
+        # Future implementation will include:
         # - Semantic similarity matching
         # - Relevance scoring
         # - Cache hit tracking

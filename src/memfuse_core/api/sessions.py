@@ -20,6 +20,7 @@ from ..utils import (
     handle_api_errors,
     raise_api_error,
 )
+from .messages import get_service_for_session
 
 
 router = APIRouter()
@@ -252,7 +253,45 @@ async def delete_session(
     db = await DatabaseService.get_instance()
 
     # Check if session exists
-    _ = await ensure_session_exists(db, session_id)
+    session = await ensure_session_exists(db, session_id)
+
+    # Implement cascade deletion for session through service layer
+    logger.info(f"Deleting session {session_id} with cascade deletion")
+
+    # Use service layer for CRUD operations - this respects buffer configuration
+    # and handles data location transparently without forcing persistence
+    try:
+        service = await get_service_for_session(session, session_id)
+        if service:
+            # Delete messages through service layer (respects buffer/database location)
+            logger.info(f"Deleting messages for session {session_id} through service layer")
+            # Service layer will handle messages in buffer and/or database appropriately
+            await service.delete_messages_by_session(session_id)
+            logger.info(f"Messages deleted for session {session_id}")
+        else:
+            logger.warning(f"No service available for session {session_id}, using database directly")
+            # Fallback to database-only deletion
+            messages = await db.get_messages_by_session(session_id)
+            logger.info(f"Found {len(messages)} messages in session {session_id}")
+
+            for message in messages:
+                await db.delete_message(message['id'])
+    except Exception as e:
+        logger.warning(f"Failed to delete messages through service layer: {e}")
+        # Fallback to database-only deletion
+        messages = await db.get_messages_by_session(session_id)
+        for message in messages:
+            await db.delete_message(message['id'])
+
+    # Delete rounds directly from database (rounds are not buffered)
+    rounds = await db.backend.select('rounds', {'session_id': session_id})
+    logger.info(f"Found {len(rounds)} rounds in session {session_id}")
+
+    rounds_deleted = 0
+    for round_data in rounds:
+        round_success = await db.backend.delete('rounds', {'id': round_data['id']})
+        if round_success > 0:
+            rounds_deleted += 1
 
     # Delete the session
     success = await db.delete_session(session_id)
@@ -263,6 +302,8 @@ async def delete_session(
             errors=[ErrorDetail(field="general", message="Database delete failed")],
         )
         raise_api_error(error_response)
+
+    logger.info(f"Session {session_id} deleted successfully: {rounds_deleted} rounds deleted")
 
     return ApiResponse.success(
         data={"session_id": session_id},

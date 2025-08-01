@@ -38,7 +38,7 @@ class TestMessagesAPIIntegration:
             "session": session
         }
 
-    def test_add_messages_persistence(self, client, headers: Dict[str, str], test_session_setup,
+    def test_add_messages(self, client, headers: Dict[str, str], test_session_setup,
                                      database_connection, integration_helper, mock_embedding_service):
         """Test that adding messages actually persists to database."""
         session = test_session_setup["session"]
@@ -216,7 +216,7 @@ class TestMessagesAPIIntegration:
         assert "Second message" in message_contents
         assert "First response" not in message_contents
 
-    def test_update_messages_persistence(self, client, headers: Dict[str, str], test_session_setup,
+    def test_update_messages(self, client, headers: Dict[str, str], test_session_setup,
                                         database_connection, integration_helper, mock_embedding_service):
         """Test that updating messages actually modifies database records."""
         session = test_session_setup["session"]
@@ -262,7 +262,7 @@ class TestMessagesAPIIntegration:
         assert db_record[0] == "Updated message content"
         assert db_record[1] is not None  # updated_at should exist
 
-    def test_delete_messages_persistence(self, client, headers: Dict[str, str], test_session_setup,
+    def test_delete_messages(self, client, headers: Dict[str, str], test_session_setup,
                                         database_connection, integration_helper, mock_embedding_service):
         """Test that deleting messages actually removes records from database."""
         session = test_session_setup["session"]
@@ -391,7 +391,7 @@ class TestMessagesAPIIntegration:
         assert session1_data[0]["session_id"] == session1["id"]
         assert session2_data[0]["session_id"] == session2["id"]
 
-    def test_message_ordering_persistence(self, client, headers: Dict[str, str], test_session_setup,
+    def test_message_ordering(self, client, headers: Dict[str, str], test_session_setup,
                                          database_connection, integration_helper, mock_embedding_service):
         """Test that messages are stored and retrieved in correct chronological order."""
         session = test_session_setup["session"]

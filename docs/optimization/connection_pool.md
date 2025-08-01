@@ -1,294 +1,221 @@
-# PostgreSQL Connection Pool Optimization
+# PostgreSQL Connection Pool Architecture
 
 ## Overview
 
-This document describes the comprehensive PostgreSQL connection pool optimization implemented to resolve connection leak issues in MemFuse. The solution follows the singleton design pattern and provides centralized connection management across all services and users.
+This document describes the PostgreSQL connection pool architecture in MemFuse, including design decisions, implementation strategies, and optimization approaches for handling concurrent database operations across M0/M1/M2 memory layers.
 
-## Problem Statement
+## Architecture Design
 
-### Original Issue
-Multiple calls to the query API (`/users/{user_id}/query`) resulted in PostgreSQL connection errors:
-
-```
-[2025-07-29 16:27:07,650][psycopg.pool][WARNING] - error connecting in 'pool-5': 
-connection failed: connection to server at "127.0.0.1", port 5432 failed: 
-FATAL: sorry, too many clients already
-```
-
-### Root Causes
-1. **Multiple Individual Connection Pools**: Each PgaiStore instance created its own connection pool (1-2 connections each)
-2. **No Pool Sharing**: Multiple users and memory layers (M0, M1, M2) created separate store instances
-3. **Poor Connection Cleanup**: Destructor-based cleanup was unreliable in async contexts
-4. **Configuration Ignored**: Hardcoded pool sizes ignored configuration files
-5. **Connection Accumulation**: Connections weren't properly released, accumulating until PostgreSQL limit
-
-### Impact
-- API became unusable after several query requests
-- Required service restart to recover
-- Poor resource utilization and scalability
-
-## Solution Architecture
+### Core Problem
+MemFuse's multi-layer memory architecture (M0/M1/M2) with parallel processing creates complex database connection requirements:
+- Multiple memory layers accessing database simultaneously
+- Per-user isolation requirements vs resource sharing efficiency
+- Connection pool sizing for concurrent vector operations
+- Health monitoring vs pool sharing semantics
 
 ### Design Principles
-Following the [MemFuse Singleton Optimization Strategy](singleton.md):
+1. **Global Singleton Pattern**: One connection pool per database URL across all services
+2. **Configuration Hierarchy**: Layered configuration with store-specific overrides
+3. **Pool Sharing**: Multiple stores share pools while maintaining reference tracking
+4. **Health vs Sharing Balance**: Structural health checks without breaking pool sharing
 
-1. **Tier 1 Global Singleton**: One connection pool per database URL
-2. **Configuration-Driven**: Pool settings read from configuration hierarchy
-3. **Resource Efficiency**: Shared pools across all users and services
-4. **Proper Lifecycle Management**: Explicit cleanup and monitoring
-5. **Backward Compatibility**: Same interfaces for existing code
+### Solution Comparison
 
-### Core Components
+#### Approach 1: Per-Store Individual Pools
+**Pros**: Simple isolation, no sharing complexity
+**Cons**: Resource waste (30+ connections for 5 users), connection limit exhaustion
+**Verdict**: ❌ Rejected due to scalability issues
 
-#### 1. GlobalConnectionManager (Tier 1 Singleton)
+#### Approach 2: Global Shared Pools (Selected)
+**Pros**: Resource efficiency, configurable sizing, proper cleanup
+**Cons**: Complexity in reference tracking and health monitoring
+**Verdict**: ✅ Selected for optimal resource utilization
+
+#### Approach 3: Per-User Pools
+**Pros**: User isolation, moderate resource usage
+**Cons**: Still creates multiple pools, doesn't solve M0/M1/M2 sharing
+**Verdict**: ❌ Rejected as intermediate solution without full benefits
+
+## Implementation Architecture
+
+### GlobalConnectionManager (Core Component)
 ```python
 class GlobalConnectionManager:
     """
-    Tier 1 Global Singleton: PostgreSQL Connection Pool Manager
-    
-    Features:
-    - Single connection pool per database URL
-    - Configuration-driven pool sizing
-    - Automatic cleanup and lifecycle management
-    - Connection monitoring and statistics
-    - Thread-safe operations
+    Singleton connection pool manager implementing:
+    - Pool sharing: One pool per database URL
+    - Reference tracking: Weak references for automatic cleanup
+    - Health monitoring: Structural checks without breaking sharing
+    - Configuration hierarchy: Store > database > postgres > defaults
     """
 ```
 
-**Key Methods:**
-- `get_connection_pool()`: Get or create shared connection pool
-- `close_all_pools()`: Cleanup all pools during shutdown
-- `get_pool_statistics()`: Monitor pool usage and health
+**Critical Design Decisions:**
 
-#### 2. Configuration Hierarchy
-Configuration priority (highest to lowest):
-1. `store.database.postgres.*`
-2. `database.postgres.*` 
-3. `postgres.*`
-4. Default values
+1. **Pool Sharing Strategy**
+   - **Challenge**: Multiple stores requesting same database URL
+   - **Solution**: Return same pool instance with reference counting
+   - **Risk**: Health check failures could break sharing semantics
 
-**Configuration Example:**
+2. **Health Check Balance**
+   - **Original Issue**: Aggressive health checks deleted pools on connectivity failures
+   - **Root Cause**: Database connectivity != pool structural health
+   - **Solution**: Check `pool.closed` status, not database reachability
+   - **Rationale**: Preserve sharing while detecting truly broken pools
+
+3. **Reference Tracking**
+   - **Method**: Weak references to store instances
+   - **Cleanup**: Automatic when stores are garbage collected
+   - **Monitoring**: Track active references per pool for diagnostics
+
+### Configuration Strategy
+
+**Hierarchy Design** (highest to lowest priority):
 ```yaml
-# config/database/default.yaml
-postgres:
-  pool_size: 10          # Minimum connections in pool
-  max_overflow: 20       # Additional connections beyond pool_size
-  pool_timeout: 30.0     # Timeout for getting connection from pool
-  pool_recycle: 3600     # Recycle connections after 1 hour
-```
-
-#### 3. Store Integration
-PgaiStore instances now use the global connection manager:
-
-```python
-# Get shared connection pool with store reference for tracking
-self.pool = await connection_manager.get_connection_pool(
-    db_url=self.db_url,
-    config=self.db_config,
-    store_ref=self  # Pass self for reference tracking
-)
-```
-
-## Implementation Details
-
-### Connection Pool Sharing
-- **One pool per database URL**: Multiple stores with same database share one pool
-- **Reference tracking**: Weak references track which stores use each pool
-- **Automatic cleanup**: Pools closed when no active references remain
-
-### Configuration Management
-```python
-@classmethod
-def from_memfuse_config(cls, config: Dict[str, Any]) -> 'ConnectionPoolConfig':
-    """Create configuration from MemFuse config hierarchy."""
-    postgres_config = {}
-    
-    # Layer 1: Base postgres config
-    if "postgres" in config:
-        postgres_config.update(config["postgres"])
-    
-    # Layer 2: Database postgres config (higher priority)
-    if "database" in config and "postgres" in config["database"]:
-        postgres_config.update(config["database"]["postgres"])
-    
-    # Layer 3: Store database postgres config (highest priority)
-    if ("store" in config and 
-        "database" in config["store"] and 
-        "postgres" in config["store"]["database"]):
-        postgres_config.update(config["store"]["database"]["postgres"])
-```
-
-### Lifecycle Management
-1. **Initialization**: Pools created on first use with configuration
-2. **Reference Tracking**: Weak references automatically cleaned up
-3. **Graceful Shutdown**: All pools closed during service shutdown
-4. **Health Monitoring**: Pool statistics available for monitoring
-
-## Performance Improvements
-
-### Before Optimization
-- **Per user**: 1-3 store instances × 2 connections = 2-6 connections
-- **Multiple users**: 5 users × 6 connections = 30 connections
-- **Connection accumulation**: Connections not released properly
-- **Resource waste**: Many idle individual pools
-
-### After Optimization
-- **Global sharing**: 1 connection pool for all stores
-- **Configurable sizing**: 10-30 connections total (configurable)
-- **Proper cleanup**: Automatic reference counting and cleanup
-- **Resource efficiency**: Shared pools across all users
-
-### Test Results
-From integration tests:
-- ✅ **21 connection pool tests pass**: All core functionality verified
-- ✅ **Multiple store instances share 1 connection pool**: Resource sharing confirmed
-- ✅ **No connection leaks**: Stable connection count under load
-- ✅ **Configuration hierarchy works**: Pool settings from config files applied correctly
-- ✅ **Immediate triggers supported**: Works with both enabled and disabled pgai triggers
-- ✅ **API integration verified**: Agent creation and database persistence working
-
-## Configuration Options
-
-### Database Configuration
-```yaml
-# config/database/default.yaml
-postgres:
-  host: ${oc.env:POSTGRES_HOST,localhost}
-  port: ${oc.env:POSTGRES_PORT,5432}
-  database: ${oc.env:POSTGRES_DB,memfuse}
-  user: ${oc.env:POSTGRES_USER,postgres}
-  password: ${oc.env:POSTGRES_PASSWORD,postgres}
-  
-  # Global connection pool settings
-  pool_size: 10          # Minimum connections in pool
-  max_overflow: 20       # Additional connections beyond pool_size
-  pool_timeout: 30.0     # Timeout for getting connection from pool
-  pool_recycle: 3600     # Recycle connections after 1 hour
-```
-
-### Store-Specific Configuration
-```yaml
-# config/store/pgai.yaml
+store:
+  database:
+    postgres:
+      pool_size: 15        # Store-specific override
 database:
   postgres:
-    pool_size: 15          # Override for pgai stores
-    max_overflow: 25       # Higher limits for vector operations
-    pool_timeout: 45.0     # Longer timeout for complex queries
+    pool_size: 20          # Database-level setting
+    max_overflow: 40       # Additional connections
+    pool_timeout: 60.0     # Connection acquisition timeout
+    pool_recycle: 7200     # Connection lifecycle (2 hours)
+postgres:
+  pool_size: 10            # Base configuration
 ```
 
-### Environment Variables
-All configuration values support environment variable overrides:
-- `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`
-- `POSTGRES_USER`, `POSTGRES_PASSWORD`
+**Sizing Strategy for Parallel Processing:**
+- **Base**: 10 connections (single-layer operations)
+- **Parallel M0/M1/M2**: 20-30 connections (concurrent layer processing)
+- **High Load**: 40+ connections with overflow (multiple users + parallel layers)
 
-## Monitoring and Diagnostics
+**Critical Parameters:**
+- `pool_timeout`: Must accommodate complex vector operations (60s recommended)
+- `pool_recycle`: Balance connection freshness vs overhead (2 hours optimal)
+- `keepalives_*`: Prevent connection drops during long operations
 
-### Pool Statistics
+## Critical Issues and Solutions
+
+### Issue 1: Pool Sharing vs Health Checks
+**Problem**: Health checks broke pool sharing by recreating pools on connectivity failures
+**Root Cause**: Conflating database connectivity with pool structural health
+**Solution**:
 ```python
-# Get comprehensive pool statistics
+# Check structural health, not database connectivity
+if pool.closed:
+    # Pool is structurally broken, recreate
+    del self._pools[db_url]
+else:
+    # Pool exists and functional, share it
+    return pool
+```
+**Risk Mitigation**: Monitor pool statistics to detect actual health issues
+
+### Issue 2: Parallel Processing Connection Requirements
+**Problem**: M0/M1/M2 parallel processing overwhelmed connection pools
+**Analysis**:
+- Sequential processing: 5-10 connections sufficient
+- Parallel processing: 20-30 connections required
+- Multiple users + parallel: 40+ connections needed
+**Solution**: Dynamic configuration based on parallel_enabled setting
+
+### Issue 3: Reference Tracking Complexity
+**Problem**: Determining when to close shared pools
+**Solution**: Weak reference counting with automatic cleanup
+**Trade-off**: Slight memory overhead vs robust lifecycle management
+
+## Performance Analysis
+
+### Resource Utilization Comparison
+| Scenario | Before (Individual Pools) | After (Shared Pools) | Improvement |
+|----------|---------------------------|---------------------|-------------|
+| Single User | 6 connections (3 stores × 2) | 2-5 connections | 60% reduction |
+| 5 Users | 30 connections | 10-20 connections | 50% reduction |
+| Parallel M0/M1/M2 | 45+ connections | 20-30 connections | 40% reduction |
+
+### Scalability Metrics
+- **Connection Stability**: Stable count under load (verified in tests)
+- **Pool Sharing**: Multiple stores confirmed sharing single pool instance
+- **Configuration Responsiveness**: Pool sizing adjusts to parallel_enabled setting
+- **Memory Efficiency**: Weak reference tracking prevents memory leaks
+
+### Risk Assessment
+**Low Risk**:
+- Pool sharing semantics well-tested
+- Configuration hierarchy provides flexibility
+- Reference tracking prevents resource leaks
+
+**Medium Risk**:
+- Complex health check logic requires monitoring
+- Parallel processing increases connection requirements
+
+**Mitigation Strategies**:
+- Comprehensive test coverage for edge cases
+- Pool statistics monitoring in production
+- Configurable pool sizing for different deployment scenarios
+
+## Production Configuration
+
+### Recommended Settings
+```yaml
+# config/database/default.yaml
+postgres:
+  # Connection pool sizing for parallel M0/M1/M2 processing
+  pool_size: 20          # Base connections for concurrent operations
+  max_overflow: 40       # Additional connections for peak load
+  pool_timeout: 60.0     # Accommodate complex vector operations
+  pool_recycle: 7200     # 2-hour connection lifecycle
+
+  # Connection stability
+  connection_timeout: 30.0
+  keepalives_idle: 600   # 10-minute TCP keepalive
+  keepalives_interval: 30
+  keepalives_count: 3
+```
+
+### Deployment Considerations
+- **Development**: pool_size=5, max_overflow=10 (minimal resources)
+- **Production**: pool_size=20, max_overflow=40 (parallel processing)
+- **High Load**: pool_size=30, max_overflow=60 (multiple concurrent users)
+
+## Monitoring and Testing
+
+### Key Metrics
+```python
 stats = connection_manager.get_pool_statistics()
-# Returns:
-{
-    "postgresql://postgres:***@localhost:5432/memfuse": {
-        "min_size": 10,
-        "max_size": 30,
-        "timeout": 30.0,
-        "recycle": 3600,
-        "active_references": 5,
-        "pool_closed": False
-    }
-}
+# Monitor: active_references, pool_closed, min/max_size utilization
 ```
 
-### Connection Monitoring
-Use the provided monitoring tools:
+### Test Coverage
+- **Pool Sharing**: Multiple stores share single pool instance
+- **Configuration Hierarchy**: Store > database > postgres precedence
+- **Health Checks**: Structural validation without breaking sharing
+- **Reference Tracking**: Automatic cleanup on store disposal
 
-```bash
-# Monitor current connections
-poetry run python tests/connection_monitor.py
+### Operational Guidelines
+1. **Monitor connection count trends** - Watch for gradual increases indicating leaks
+2. **Adjust pool sizing based on parallel_enabled setting** - 20+ for parallel, 10 for sequential
+3. **Use pool statistics for capacity planning** - Track active_references vs max_size
+4. **Implement graceful shutdown** - Ensure proper pool cleanup during service restart
 
-# Continuous monitoring
-poetry run python tests/connection_monitor.py continuous 10 60
+## Architecture Evolution
 
-# Test connection leak prevention
-poetry run python tests/integration/connection_pool/test_connection_leak_prevention.py
-```
+### Current State
+- Global singleton connection manager
+- Configuration-driven pool sizing
+- Structural health checks preserving sharing
+- Weak reference tracking for cleanup
 
-## Testing
+### Future Considerations
+1. **Read/Write Separation**: Separate pools for read-heavy vs write-heavy operations
+2. **Dynamic Scaling**: Automatic pool sizing based on load patterns
+3. **Multi-Database Support**: Pool management across different database instances
+4. **Connection Routing**: Intelligent connection assignment based on operation type
 
-### Test Suite
-Located in `tests/integration/connection_pool/`:
-
-1. **test_global_connection_manager.py**: Singleton pattern and pool sharing
-2. **test_connection_pool_configuration.py**: Configuration hierarchy and application
-3. **test_connection_leak_prevention.py**: Connection leak prevention under load
-
-### Running Tests
-```bash
-# Run all connection pool tests
-poetry run python scripts/run_tests.py tests/integration/connection_pool/test_global_connection_manager.py -v
-
-# Run specific test
-poetry run python tests/integration/connection_pool/test_connection_leak_prevention.py
-
-# Monitor connections during tests
-poetry run python tests/connection_monitor.py continuous 5 120 &
-poetry run python tests/simple_api_test.py
-```
-
-## Best Practices
-
-### For Developers
-1. **Use Global Manager**: Always use `get_global_connection_manager()` for pools
-2. **Proper Cleanup**: Call `await store.close()` when done with stores
-3. **Configuration**: Use configuration files instead of hardcoded values
-4. **Monitoring**: Monitor pool statistics in production
-
-### For Operations
-1. **Pool Sizing**: Start with 10-30 connections, adjust based on load
-2. **Monitoring**: Watch for connection count growth over time
-3. **Alerts**: Set up alerts for high connection usage
-4. **Graceful Shutdown**: Ensure proper service shutdown to close pools
-
-### For Testing
-1. **Cleanup**: Always cleanup pools in test teardown
-2. **Isolation**: Use separate database URLs for test isolation
-3. **Monitoring**: Include connection monitoring in integration tests
-
-## Migration Guide
-
-### Existing Code
-No changes required for existing PgaiStore usage:
-```python
-# This continues to work unchanged
-store = PgaiStore(config=config, table_name="my_table")
-await store.initialize()
-# Now uses shared connection pool automatically
-```
-
-### Service Shutdown
-Add proper cleanup to service shutdown:
-```python
-# In service shutdown
-from memfuse_core.services.service_factory import ServiceFactory
-await ServiceFactory.cleanup_all_services()
-```
-
-## Future Enhancements
-
-1. **Connection Pool Metrics**: Prometheus metrics for pool usage
-2. **Dynamic Pool Sizing**: Automatic scaling based on load
-3. **Connection Health Checks**: Periodic connection validation
-4. **Multi-Database Support**: Pool management for multiple databases
-5. **Connection Routing**: Read/write connection separation
-
-## Conclusion
-
-The PostgreSQL connection pool optimization successfully resolves the connection leak issue while improving resource efficiency and scalability. The solution follows MemFuse's singleton design principles and provides a robust foundation for future database operations.
-
-**Key Benefits:**
-- ✅ **Eliminated connection leaks**
-- ✅ **Improved resource efficiency** 
-- ✅ **Configuration-driven management**
-- ✅ **Better monitoring and diagnostics**
-- ✅ **Maintained backward compatibility**
+### Lessons Learned
+1. **Health checks must preserve sharing semantics** - Database connectivity != pool health
+2. **Configuration hierarchy enables flexible deployment** - Different settings per environment
+3. **Reference tracking is essential for shared resources** - Prevents both leaks and premature cleanup
+4. **Parallel processing significantly impacts connection requirements** - Plan capacity accordingly

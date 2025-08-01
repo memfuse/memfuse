@@ -31,7 +31,7 @@ graph TD
     subgraph write_implementation ["Write Path Implementation"]
         WriteBuffer --> RoundBuffer["RoundBuffer<br/>(Short-term Cache)"]
         WriteBuffer --> HybridBuffer["HybridBuffer<br/>(Mid-term Cache + VectorCache)"]
-        WriteBuffer --> FlushManager["FlushManager<br/>(Persistence Manager)"]
+        WriteBuffer --> FlushManager["FlushManager<br/>(Data Synchronization Manager)"]
     end
 
     subgraph query_implementation ["Query Path Implementation"]

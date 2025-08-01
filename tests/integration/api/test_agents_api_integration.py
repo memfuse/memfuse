@@ -12,10 +12,10 @@ from typing import Dict, Any
 class TestAgentsAPIIntegration:
     """Integration tests for Agents API endpoints."""
 
-    def test_create_agent_persistence(self, client, headers: Dict[str, str],
+    def test_create_agent(self, client, headers: Dict[str, str],
                                     test_agent_data: Dict[str, Any], database_connection,
                                     integration_helper, mock_embedding_service):
-        """Test that creating an agent actually persists to database."""
+        """Test that creating an agent works correctly through API."""
         # Create agent via API
         response = client.post("/api/v1/agents", json=test_agent_data, headers=headers)
         
@@ -75,10 +75,10 @@ class TestAgentsAPIIntegration:
         assert retrieved_agent["name"] == test_agent_data["name"]
         assert retrieved_agent["description"] == test_agent_data["description"]
 
-    def test_update_agent_persistence(self, client, headers: Dict[str, str],
+    def test_update_agent(self, client, headers: Dict[str, str],
                                     test_agent_data: Dict[str, Any], database_connection,
                                     integration_helper, mock_embedding_service):
-        """Test that updating an agent actually modifies database record."""
+        """Test that updating an agent works correctly through API."""
         # Create agent first
         agent = integration_helper.create_agent_via_api(client, headers, test_agent_data)
         agent_id = agent["id"]
@@ -116,10 +116,10 @@ class TestAgentsAPIIntegration:
         assert db_record["description"] == updated_data["description"]
         assert db_record["updated_at"] is not None  # updated_at should be set
 
-    def test_delete_agent_persistence(self, client, headers: Dict[str, str],
+    def test_delete_agent(self, client, headers: Dict[str, str],
                                     test_agent_data: Dict[str, Any], database_connection,
                                     integration_helper, mock_embedding_service):
-        """Test that deleting an agent actually removes it from database."""
+        """Test that deleting an agent works correctly through API."""
         # Create agent first
         agent = integration_helper.create_agent_via_api(client, headers, test_agent_data)
         agent_id = agent["id"]
