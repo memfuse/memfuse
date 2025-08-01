@@ -16,6 +16,13 @@ from ..interfaces import MessageList
 from ..rag.chunk.base import ChunkData
 from .flush_manager import FlushManager, FlushPriority
 
+# Import SentenceTransformer for compatibility with tests
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    # Fallback if sentence-transformers is not available
+    SentenceTransformer = None
+
 
 class HybridBuffer:
     """Optimized HybridBuffer with non-blocking flush operations.
@@ -786,6 +793,32 @@ class HybridBuffer:
                 session_messages = session_messages[:limit]
 
             return session_messages
+
+    def get_message_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific message by ID from buffer.
+
+        Args:
+            message_id: Message ID to search for
+
+        Returns:
+            Message dictionary if found, None otherwise
+        """
+        for round_messages in self.original_rounds:
+            for message in round_messages:
+                if message.get("id") == message_id:
+                    # Convert to API format
+                    api_message = {
+                        "id": message.get("id", ""),
+                        "role": message.get("role", "user"),
+                        "content": message.get("content", ""),
+                        "created_at": message.get("created_at", ""),
+                        "updated_at": message.get("updated_at", ""),
+                        "metadata": message.get("metadata", {}).copy()
+                    }
+                    # Add buffer source metadata
+                    api_message["metadata"]["source"] = "hybrid_buffer"
+                    return api_message
+        return None
 
     def get_stats(self) -> Dict[str, Any]:
         """Get buffer statistics.

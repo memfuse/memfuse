@@ -60,14 +60,13 @@ class MemoryServiceProxy:
         # Store the global memory service instance
         self._memory_service = memory_service
 
-        # Use the global database instance
-        self.db = DatabaseService.get_instance()
-
-        # Ensure user exists and get user_id
-        self._user_id = self.db.get_or_create_user_by_name(user)
+        # Store user for async initialization
+        self.user = user
+        self.db = None
+        self._user_id = None
+        self._async_initialized = False
 
         # P1 OPTIMIZATION: Store user context only, session context passed as parameters
-        self.user = user
 
         # For backward compatibility, handle session context if provided during initialization
         if agent is not None or session is not None or session_id is not None:
@@ -89,7 +88,21 @@ class MemoryServiceProxy:
             MemoryServiceProxy._instances[instance_key] = True
             logger.info(f"MemoryServiceProxy: Initialized user-level proxy for user {user}")
 
-    def _resolve_session_context(
+    async def _async_init(self):
+        """Perform async initialization of database-related components."""
+        if self._async_initialized:
+            return
+
+        # Get database instance
+        from .database_service import DatabaseService
+        self.db = await DatabaseService.get_instance()
+
+        # Ensure user exists and get user_id
+        self._user_id = await self.db.get_or_create_user_by_name(self.user)
+
+        self._async_initialized = True
+
+    async def _resolve_session_context(
         self,
         agent: Optional[str] = None,
         session: Optional[str] = None,
@@ -108,34 +121,37 @@ class MemoryServiceProxy:
         Returns:
             Tuple of (resolved_agent_id, resolved_session_id)
         """
+        # Ensure async initialization
+        await self._async_init()
+
         # Use provided parameters or fall back to defaults
         effective_agent = agent or self._default_agent or "agent_default"
         effective_session = session or self._default_session
         effective_session_id = session_id or self._default_session_id
 
         # Get or create agent_id
-        agent_id = self.db.get_or_create_agent_by_name(effective_agent)
+        agent_id = await self.db.get_or_create_agent_by_name(effective_agent)
 
         # Resolve session_id
         resolved_session_id = None
         if effective_session_id is not None:
             # If session_id is provided, use it directly
-            session_data = self.db.get_session(effective_session_id)
+            session_data = await self.db.get_session(effective_session_id)
             if session_data is None:
                 # Session not found, create a new one
-                resolved_session_id = self.db.create_session(
+                resolved_session_id = await self.db.create_session(
                     self._user_id, agent_id, effective_session)
             else:
                 resolved_session_id = effective_session_id
         elif effective_session is not None:
             # If session name is provided, check if it already exists for this user
-            session_data = self.db.get_session_by_name(effective_session, user_id=self._user_id)
+            session_data = await self.db.get_session_by_name(effective_session, user_id=self._user_id)
             if session_data is not None:
                 # Session exists for this user
                 resolved_session_id = session_data['id']
             else:
                 # Session not found, create a new one
-                resolved_session_id = self.db.create_session_with_name(
+                resolved_session_id = await self.db.create_session_with_name(
                     self._user_id, agent_id, effective_session)
 
         return agent_id, resolved_session_id
@@ -196,7 +212,7 @@ class MemoryServiceProxy:
             }
 
         # P1 OPTIMIZATION: Resolve session context for this method call
-        agent_id, resolved_session_id = self._resolve_session_context(
+        agent_id, resolved_session_id = await self._resolve_session_context(
             agent=agent, session=session, session_id=session_id
         )
 
@@ -263,7 +279,7 @@ class MemoryServiceProxy:
             Dictionary with status, code, and message IDs
         """
         # P1 OPTIMIZATION: Resolve session context from parameters
-        agent_id, resolved_session_id = self._resolve_session_context(agent, session, session_id)
+        agent_id, resolved_session_id = await self._resolve_session_context(agent, session, session_id)
 
         # Validate input parameters
         if not messages:
@@ -352,7 +368,7 @@ class MemoryServiceProxy:
             # Check if messages exist before reading
             not_found_ids = []
             for message_id in message_ids:
-                if not self.db.get_message(message_id):
+                if not await self.db.get_message(message_id):
                     not_found_ids.append(message_id)
 
             if not_found_ids:
@@ -407,7 +423,7 @@ class MemoryServiceProxy:
         """
         try:
             # Validate session exists
-            session = self.db.get_session(session_id)
+            session = await self.db.get_session(session_id)
             if not session:
                 logger.warning(f"Session {session_id} not found")
                 return []
@@ -422,7 +438,7 @@ class MemoryServiceProxy:
                 )
             else:
                 # Fallback to direct database access
-                return self.db.get_messages_by_session(
+                return await self.db.get_messages_by_session(
                     session_id=session_id,
                     limit=limit,
                     sort_by=sort_by,
@@ -486,7 +502,7 @@ class MemoryServiceProxy:
             # Check if messages exist before updating
             not_found_ids = []
             for message_id in message_ids:
-                if not self.db.get_message(message_id):
+                if not await self.db.get_message(message_id):
                     not_found_ids.append(message_id)
 
             if not_found_ids:
@@ -570,7 +586,7 @@ class MemoryServiceProxy:
 
         for message_id in message_ids:
             # Check if message exists before attempting to delete
-            message = self.db.get_message(message_id)
+            message = await self.db.get_message(message_id)
             if not message:
                 not_found_ids.append(message_id)
                 continue
@@ -700,7 +716,7 @@ class MemoryServiceProxy:
 
         for knowledge_id in knowledge_ids:
             # Check if knowledge exists before attempting to delete
-            knowledge = self.db.get_knowledge(knowledge_id)
+            knowledge = await self.db.get_knowledge(knowledge_id)
             if not knowledge:
                 not_found_ids.append(knowledge_id)
                 continue

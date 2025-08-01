@@ -10,8 +10,8 @@ import sys
 import time
 import json
 import requests
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
+from psycopg.rows import dict_row
 import traceback
 
 # Configuration
@@ -40,8 +40,8 @@ def test_postgres_connection():
     print_status("Testing PostgreSQL connection...")
     
     try:
-        conn = psycopg2.connect(**POSTGRES_CONFIG)
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        conn = psycopg.connect(**POSTGRES_CONFIG)
+        cursor = conn.cursor(row_factory=dict_row)
         
         # Test basic connection
         cursor.execute("SELECT version();")
@@ -183,8 +183,8 @@ def test_database_integration():
     print_status("Testing database integration...")
     
     try:
-        conn = psycopg2.connect(**POSTGRES_CONFIG)
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        conn = psycopg.connect(**POSTGRES_CONFIG)
+        cursor = conn.cursor(row_factory=dict_row)
         
         # Check if MemFuse tables exist
         cursor.execute("""

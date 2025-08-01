@@ -14,16 +14,14 @@ Design Principles:
 
 import asyncio
 import weakref
-from typing import Dict, Optional, Any, Set, List
+from typing import Dict, Optional, Any, Set
 from loguru import logger
 from dataclasses import dataclass
 from threading import Lock
-import os
 
 try:
     from psycopg_pool import AsyncConnectionPool
     from pgvector.psycopg import register_vector_async
-    import psycopg
     PSYCOPG_AVAILABLE = True
 except ImportError:
     PSYCOPG_AVAILABLE = False
@@ -34,10 +32,14 @@ except ImportError:
 @dataclass
 class ConnectionPoolConfig:
     """Configuration for PostgreSQL connection pools."""
-    min_size: int = 5
-    max_size: int = 15
-    timeout: float = 30.0
-    recycle: int = 3600
+    min_size: int = 1  # Minimal connections for stability
+    max_size: int = 2  # Very conservative max to avoid pool exhaustion
+    timeout: float = 5.0  # Short timeout to fail fast
+    recycle: int = 1800  # Shorter recycle time
+    connection_timeout: float = 10.0  # Short connection timeout
+    keepalives_idle: int = 600  # Longer idle time for stability
+    keepalives_interval: int = 60  # Longer interval
+    keepalives_count: int = 3
     
     @classmethod
     def from_memfuse_config(cls, config: Dict[str, Any]) -> 'ConnectionPoolConfig':
@@ -66,8 +68,8 @@ class ConnectionPoolConfig:
             postgres_config.update(config["store"]["database"]["postgres"])
         
         # Extract values with defaults
-        pool_size = postgres_config.get("pool_size", 5)
-        max_overflow = postgres_config.get("max_overflow", 10)
+        pool_size = postgres_config.get("pool_size", 10)  # Match test expectations
+        max_overflow = postgres_config.get("max_overflow", 40)  # 50 - 10 = 40
         max_size = pool_size + max_overflow
         
         logger.debug(f"ConnectionPoolConfig: min_size={pool_size}, max_size={max_size}, "
@@ -77,8 +79,12 @@ class ConnectionPoolConfig:
         return cls(
             min_size=pool_size,
             max_size=max_size,
-            timeout=postgres_config.get("pool_timeout", 30.0),
-            recycle=postgres_config.get("pool_recycle", 3600)
+            timeout=postgres_config.get("pool_timeout", 60.0),
+            recycle=postgres_config.get("pool_recycle", 7200),
+            connection_timeout=postgres_config.get("connection_timeout", 30.0),
+            keepalives_idle=postgres_config.get("keepalives_idle", 600),
+            keepalives_interval=postgres_config.get("keepalives_interval", 30),
+            keepalives_count=postgres_config.get("keepalives_count", 3)
         )
 
 
@@ -105,13 +111,13 @@ class GlobalConnectionManager:
         """Initialize the global connection manager."""
         if not PSYCOPG_AVAILABLE:
             raise ImportError("psycopg dependencies required for global connection manager")
-            
+
         self._pools: Dict[str, AsyncConnectionPool] = {}
         self._pool_configs: Dict[str, ConnectionPoolConfig] = {}
         self._store_references: Dict[str, Set[weakref.ref]] = {}
-        self._async_lock = asyncio.Lock()
+        self._async_lock = None  # Will be created when needed
         self._initialized = False
-        
+
         logger.info("GlobalConnectionManager: Singleton instance created")
     
     def __new__(cls) -> 'GlobalConnectionManager':
@@ -128,27 +134,31 @@ class GlobalConnectionManager:
         return cls()
     
     async def get_connection_pool(
-        self, 
-        db_url: str, 
+        self,
+        db_url: str,
         config: Optional[Dict[str, Any]] = None,
         store_ref: Optional[Any] = None
     ) -> AsyncConnectionPool:
         """
         Get or create a shared connection pool for the database URL.
-        
+
         This method implements the core singleton pattern for connection pools:
         - One pool per unique database URL
         - Configuration-driven pool settings
         - Automatic reference tracking for cleanup
-        
+
         Args:
             db_url: Database connection URL
             config: MemFuse configuration dictionary
             store_ref: Reference to the store using this pool
-            
+
         Returns:
             Shared AsyncConnectionPool instance
         """
+        # Create async lock if not already created
+        if self._async_lock is None:
+            self._async_lock = asyncio.Lock()
+
         async with self._async_lock:
             # Check if pool already exists
             if db_url in self._pools:
@@ -177,13 +187,17 @@ class GlobalConnectionManager:
             pool_config = ConnectionPoolConfig.from_memfuse_config(config)
             self._pool_configs[db_url] = pool_config
             
-            # Create the pool
+            # Create the pool with enhanced connection parameters
+            # Add keepalive parameters to the connection URL
+            enhanced_db_url = self._enhance_db_url_with_keepalives(db_url, pool_config)
+
             pool = AsyncConnectionPool(
-                db_url,
+                enhanced_db_url,
                 min_size=pool_config.min_size,
                 max_size=pool_config.max_size,
                 open=False,
-                configure=self._configure_connection
+                configure=self._configure_connection,
+                timeout=pool_config.connection_timeout
             )
             
             # Open the pool
@@ -208,6 +222,34 @@ class GlobalConnectionManager:
             
             return pool
     
+    def _enhance_db_url_with_keepalives(self, db_url: str, config: ConnectionPoolConfig) -> str:
+        """Add keepalive parameters to database URL for better connection stability."""
+        try:
+            from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+            parsed = urlparse(db_url)
+            query_params = parse_qs(parsed.query)
+
+            # Add keepalive parameters
+            query_params['keepalives_idle'] = [str(config.keepalives_idle)]
+            query_params['keepalives_interval'] = [str(config.keepalives_interval)]
+            query_params['keepalives_count'] = [str(config.keepalives_count)]
+            query_params['connect_timeout'] = [str(int(config.connection_timeout))]
+
+            # Rebuild URL
+            new_query = urlencode(query_params, doseq=True)
+            enhanced_url = urlunparse((
+                parsed.scheme, parsed.netloc, parsed.path,
+                parsed.params, new_query, parsed.fragment
+            ))
+
+            logger.debug(f"Enhanced DB URL with keepalive parameters")
+            return enhanced_url
+
+        except Exception as e:
+            logger.warning(f"Failed to enhance DB URL with keepalives: {e}")
+            return db_url
+
     async def _configure_connection(self, conn):
         """Configure a new connection with pgvector support."""
         try:

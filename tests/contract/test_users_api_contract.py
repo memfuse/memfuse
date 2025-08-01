@@ -19,8 +19,8 @@ class TestUsersAPIContract:
     """Contract tests for Users API endpoints."""
     
     @pytest.fixture
-    def client(self):
-        """Create test client."""
+    def client(self, mock_database_service):
+        """Create test client with mocked database service."""
         return TestClient(create_app())
     
     @pytest.fixture

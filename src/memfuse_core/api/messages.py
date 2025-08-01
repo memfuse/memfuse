@@ -54,7 +54,7 @@ async def get_service_for_session(
         logger.error("Session is None")
         return None
 
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
     user_id = session.get("user_id")
     agent_id = session.get("agent_id")
 
@@ -62,8 +62,8 @@ async def get_service_for_session(
         logger.error("Invalid session data: missing user_id or agent_id")
         return None
 
-    user = db.get_user(user_id)
-    agent = db.get_agent(agent_id)
+    user = await db.get_user(user_id)
+    agent = await db.get_agent(agent_id)
 
     if not user or not agent:
         logger.error(f"User or agent not found for session {session_id}")
@@ -180,10 +180,10 @@ async def add_messages(
     _api_key_data: dict = api_key_dependency,
 ) -> ApiResponse:
     """Add messages to a session."""
-    db = DatabaseService.get_instance()
-    
+    db = await DatabaseService.get_instance()
+
     # Validate session exists
-    session = ensure_session_exists(db, session_id)
+    session = await ensure_session_exists(db, session_id)
 
     # Get memory service
     memory = await get_service_for_session(session, session_id)
@@ -252,7 +252,7 @@ async def list_messages(
         order: Sort order (allowed values: asc, desc)
         buffer_only: Buffer parameter - if "true", only return RoundBuffer data; if "false" or omitted, return data from all sources (RoundBuffer + HybridBuffer + Database)
     """
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
     
     # Validate query parameters
     # Validate and convert limit
@@ -325,7 +325,7 @@ async def list_messages(
             raise_api_error(error_response)
 
     # Validate session exists
-    session = ensure_session_exists(db, session_id)
+    session = await ensure_session_exists(db, session_id)
 
     # Get the appropriate service (Buffer or Memory) for this session
     service = await get_service_for_session(session, session_id)
@@ -354,7 +354,7 @@ async def list_messages(
                 )
             except Exception as e:
                 logger.error(f"Service error, falling back to database: {e}")
-                raw_messages = db.get_messages_by_session(
+                raw_messages = await db.get_messages_by_session(
                     session_id=session_id,
                     limit=limit_value,
                     sort_by=sort_by,
@@ -362,7 +362,7 @@ async def list_messages(
                 )
         except Exception as e:
             logger.error(f"Service error, falling back to database: {e}")
-            raw_messages = db.get_messages_by_session(
+            raw_messages = await db.get_messages_by_session(
                 session_id=session_id,
                 limit=limit_value,
                 sort_by=sort_by,
@@ -370,7 +370,7 @@ async def list_messages(
             )
     else:
         # Fallback to direct database access if service doesn't support the method
-        raw_messages = db.get_messages_by_session(
+        raw_messages = await db.get_messages_by_session(
             session_id=session_id,
             limit=limit_value,
             sort_by=sort_by,
@@ -402,10 +402,10 @@ async def read_messages(
     _api_key_data: dict = api_key_dependency,
 ) -> ApiResponse:
     """Read specific messages from a session."""
-    db = DatabaseService.get_instance()
-    
+    db = await DatabaseService.get_instance()
+
     # Validate session exists
-    session = ensure_session_exists(db, session_id)
+    session = await ensure_session_exists(db, session_id)
 
     # Get memory service
     memory = await get_service_for_session(session, session_id)
@@ -425,6 +425,15 @@ async def read_messages(
     # Read messages
     result = await memory.read(request.message_ids)
 
+    # Check if any messages were not found
+    if result.get("status") == "error" and result.get("code") == 404:
+        error_response = ApiResponse.error(
+            message=result.get("message", "Some message IDs were not found"),
+            code=404,
+            errors=result.get("errors", []),
+        )
+        raise_api_error(error_response)
+
     return ApiResponse.success(
         data={"messages": result["data"]["messages"]},
         message="Messages read successfully",
@@ -442,10 +451,10 @@ async def update_messages(
     _api_key_data: dict = api_key_dependency,
 ) -> ApiResponse:
     """Update messages in a session."""
-    db = DatabaseService.get_instance()
-    
+    db = await DatabaseService.get_instance()
+
     # Validate session exists
-    session = ensure_session_exists(db, session_id)
+    session = await ensure_session_exists(db, session_id)
 
     # Get memory service
     memory = await get_service_for_session(session, session_id)
@@ -464,7 +473,18 @@ async def update_messages(
 
     # Convert messages and update them
     new_messages = convert_pydantic_to_dict(request.new_messages)
-    await memory.update(request.message_ids, new_messages)
+    logger.info(f"Messages API: Updating messages {request.message_ids} with new content")
+    result = await memory.update(request.message_ids, new_messages)
+    logger.info(f"Messages API: Update result: {result}")
+
+    # Check if any messages were not found
+    if result.get("status") == "error" and result.get("code") == 404:
+        error_response = ApiResponse.error(
+            message=result.get("message", "Some message IDs were not found"),
+            code=404,
+            errors=result.get("errors", []),
+        )
+        raise_api_error(error_response)
 
     return ApiResponse.success(
         data={"message_ids": request.message_ids},
@@ -483,10 +503,10 @@ async def delete_messages(
     _api_key_data: dict = api_key_dependency,
 ) -> ApiResponse:
     """Delete messages from a session."""
-    db = DatabaseService.get_instance()
-    
+    db = await DatabaseService.get_instance()
+
     # Validate session exists
-    session = ensure_session_exists(db, session_id)
+    session = await ensure_session_exists(db, session_id)
 
     # Get memory service
     memory = await get_service_for_session(session, session_id)

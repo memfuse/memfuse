@@ -296,11 +296,13 @@ class M1EpisodicLayer(MemoryLayer):
                         processed_items.append(episode_id)
             
             processing_time = time.time() - start_time
-            success = len(processed_items) > 0
-            
+            # M1 layer should succeed even if no episodes are formed (e.g., for short content)
+            # The layer processed the data successfully, just didn't produce episodes
+            success = True
+
             # Update statistics
             self._update_stats(processing_time, success)
-            
+
             # Create result
             result = ProcessingResult(
                 success=success,

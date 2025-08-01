@@ -35,13 +35,13 @@ async def list_knowledge(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """List all knowledge items for a user."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if user exists
-    user = ensure_user_exists(db, user_id)
+    user = await ensure_user_exists(db, user_id)
 
     # Get knowledge items
-    knowledge_items = db.get_knowledge_by_user(user_id)
+    knowledge_items = await db.get_knowledge_by_user(user_id)
 
     return ApiResponse.success(
         data={"knowledge": knowledge_items},
@@ -59,15 +59,15 @@ async def add_knowledge(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Add knowledge items for a user."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if user exists
-    user = ensure_user_exists(db, user_id)
+    user = await ensure_user_exists(db, user_id)
 
     # Add knowledge items
     knowledge_ids = []
     for content in request.knowledge:
-        knowledge_id = db.add_knowledge(
+        knowledge_id = await db.add_knowledge(
             user_id=user_id,
             content=content,
         )
@@ -90,15 +90,15 @@ async def read_knowledge(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Read specific knowledge items for a user."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if user exists
-    user = ensure_user_exists(db, user_id)
+    user = await ensure_user_exists(db, user_id)
 
     # Read knowledge items
     knowledge_items = []
     for knowledge_id in request.knowledge_ids:
-        knowledge = db.get_knowledge(knowledge_id)
+        knowledge = await db.get_knowledge(knowledge_id)
         if knowledge and knowledge["user_id"] == user_id:
             knowledge_items.append(knowledge)
 
@@ -118,21 +118,21 @@ async def update_knowledge(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Update knowledge items for a user."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if user exists
-    user = ensure_user_exists(db, user_id)
+    user = await ensure_user_exists(db, user_id)
 
     # Update knowledge items
     updated_ids = []
     for i, knowledge_id in enumerate(request.knowledge_ids):
         # Check if knowledge item exists and belongs to the user
-        knowledge = db.get_knowledge(knowledge_id)
+        knowledge = await db.get_knowledge(knowledge_id)
         if not knowledge or knowledge["user_id"] != user_id:
             continue
 
         # Update the knowledge item
-        success = db.update_knowledge(
+        success = await db.update_knowledge(
             knowledge_id=knowledge_id,
             content=request.new_knowledge[i],
         )
@@ -156,21 +156,21 @@ async def delete_knowledge(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Delete knowledge items for a user."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if user exists
-    user = ensure_user_exists(db, user_id)
+    user = await ensure_user_exists(db, user_id)
 
     # Delete knowledge items
     deleted_ids = []
     for knowledge_id in request.knowledge_ids:
         # Check if knowledge item exists and belongs to the user
-        knowledge = db.get_knowledge(knowledge_id)
+        knowledge = await db.get_knowledge(knowledge_id)
         if not knowledge or knowledge["user_id"] != user_id:
             continue
 
         # Delete the knowledge item
-        success = db.delete_knowledge(knowledge_id)
+        success = await db.delete_knowledge(knowledge_id)
 
         if success:
             deleted_ids.append(knowledge_id)

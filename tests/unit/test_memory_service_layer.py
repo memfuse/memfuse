@@ -94,11 +94,13 @@ class TestMemoryServiceLayer:
     async def test_parallel_layers_disabled_detection(self, mock_config_disabled):
         """Test that MemoryService correctly detects when parallel layers should be disabled."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service:
-            # Mock database service
-            mock_db = Mock()
+            # Mock database service with async methods
+            mock_db = AsyncMock()
             mock_db.get_or_create_user_by_name.return_value = "user123"
             mock_db.get_or_create_agent_by_name.return_value = "agent456"
-            mock_db_service.get_instance.return_value = mock_db
+
+            # Make get_instance async
+            mock_db_service.get_instance = AsyncMock(return_value=mock_db)
 
             # Create MemoryService with parallel layers disabled config
             memory_service = MemoryService(cfg=mock_config_disabled, user="test_user")
@@ -143,11 +145,13 @@ class TestMemoryServiceLayer:
     async def test_add_batch_with_memory_layer(self, mock_config, sample_message_batch_list):
         """Test add_batch method uses memory layer when enabled."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service:
-            # Mock database service
-            mock_db = Mock()
+            # Mock database service with async methods
+            mock_db = AsyncMock()
             mock_db.get_or_create_user_by_name.return_value = "user123"
             mock_db.get_or_create_agent_by_name.return_value = "agent456"
-            mock_db_service.get_instance.return_value = mock_db
+
+            # Make get_instance async
+            mock_db_service.get_instance = AsyncMock(return_value=mock_db)
 
             # Create MemoryService
             memory_service = MemoryService(cfg=mock_config, user="test_user")
@@ -184,11 +188,13 @@ class TestMemoryServiceLayer:
     async def test_add_batch_fallback_to_traditional(self, mock_config_disabled, sample_message_batch_list):
         """Test add_batch method falls back to traditional method when memory layer is disabled."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service:
-            # Mock database service
-            mock_db = Mock()
+            # Mock database service with async methods
+            mock_db = AsyncMock()
             mock_db.get_or_create_user_by_name.return_value = "user123"
             mock_db.get_or_create_agent_by_name.return_value = "agent456"
-            mock_db_service.get_instance.return_value = mock_db
+
+            # Make get_instance async
+            mock_db_service.get_instance = AsyncMock(return_value=mock_db)
             
             # Create MemoryService with unified layer disabled
             memory_service = MemoryService(cfg=mock_config_disabled, user="test_user")
@@ -216,11 +222,13 @@ class TestMemoryServiceLayer:
     async def test_memory_layer_error_handling(self, mock_config, sample_message_batch_list):
         """Test error handling when memory layer processing fails."""
         with patch('src.memfuse_core.services.database_service.DatabaseService') as mock_db_service:
-            # Mock database service
-            mock_db = Mock()
+            # Mock database service with async methods
+            mock_db = AsyncMock()
             mock_db.get_or_create_user_by_name.return_value = "user123"
             mock_db.get_or_create_agent_by_name.return_value = "agent456"
-            mock_db_service.get_instance.return_value = mock_db
+
+            # Make get_instance async
+            mock_db_service.get_instance = AsyncMock(return_value=mock_db)
 
             # Create MemoryService
             memory_service = MemoryService(cfg=mock_config, user="test_user")

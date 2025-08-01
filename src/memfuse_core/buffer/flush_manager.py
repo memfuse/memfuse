@@ -485,17 +485,34 @@ class FlushManager:
         Returns:
             True if successful, False otherwise
         """
-        try:
-            if self.memory_service_handler:
-                await self.memory_service_handler(rounds)
-                logger.debug(f"Messages flush completed: {len(rounds)} rounds")
-                return True
-            else:
-                logger.error("MemoryService handler not available")
+        max_retries = 3
+        retry_delay = 0.5
+
+        for attempt in range(max_retries):
+            try:
+                if self.memory_service_handler:
+                    await self.memory_service_handler(rounds)
+                    logger.debug(f"Messages flush completed: {len(rounds)} rounds")
+                    return True
+                else:
+                    logger.error("MemoryService handler not available")
+                    return False
+
+            except Exception as e:
+                error_msg = str(e).lower()
+
+                # Check for connection pool related errors
+                if any(keyword in error_msg for keyword in ["connection", "pool", "timeout", "server closed"]):
+                    if attempt < max_retries - 1:
+                        logger.warning(f"FlushManager: Connection issue on attempt {attempt + 1}, retrying in {retry_delay}s: {e}")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 1.5  # Moderate backoff
+                        continue
+
+                logger.error(f"Messages flush error after {attempt + 1} attempts: {e}")
                 return False
-        except Exception as e:
-            logger.error(f"Messages flush error: {e}")
-            return False
+
+        return False
 
     async def _execute_qdrant_flush(self, chunks: List[ChunkData], embeddings: List[List[float]]) -> bool:
         """Execute Qdrant flush operation.

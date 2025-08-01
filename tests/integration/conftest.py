@@ -36,13 +36,24 @@ def setup_integration_environment():
     5. ENSURES proper cleanup of database connections
     """
     print("\n🔄 Setting up integration test environment...")
-    
+
     # Set environment variables for PostgreSQL
     os.environ["POSTGRES_HOST"] = "localhost"
     os.environ["POSTGRES_PORT"] = "5432"
     os.environ["POSTGRES_DB"] = "memfuse"
     os.environ["POSTGRES_USER"] = "postgres"
     os.environ["POSTGRES_PASSWORD"] = "postgres"
+
+    # CRITICAL: Disable pgai immediate triggers for testing to avoid connection pool issues
+    os.environ["PGAI_IMMEDIATE_TRIGGER"] = "false"
+    os.environ["PGAI_VECTORIZER_WORKER_ENABLED"] = "false"
+    os.environ["MEMFUSE_TEST_MODE"] = "true"
+    os.environ["DISABLE_PGAI_NOTIFICATIONS"] = "true"
+
+    # Conservative connection pool settings for testing
+    os.environ["POSTGRES_POOL_SIZE"] = "2"
+    os.environ["POSTGRES_MAX_OVERFLOW"] = "3"
+    os.environ["POSTGRES_POOL_TIMEOUT"] = "10.0"
 
     # Use default buffer configuration from config/buffer/default.yaml
     # This allows testing both buffer enabled and disabled scenarios
@@ -52,13 +63,24 @@ def setup_integration_environment():
     result = subprocess.run([
         sys.executable, "scripts/database_manager.py", "status"
     ], capture_output=True, text=True, cwd=PROJECT_ROOT)
-    
+
     if result.returncode != 0:
         pytest.fail(f"Database is not available. Please start it first with: poetry run python scripts/memfuse_launcher.py --start-db --optimize-db\nError: {result.stderr}")
-    
+
+    # CRITICAL: Reset database content to avoid session name conflicts
+    print("🗑️ Resetting database content...")
+    reset_result = subprocess.run([
+        sys.executable, "scripts/database_manager.py", "reset"
+    ], capture_output=True, text=True, cwd=PROJECT_ROOT)
+
+    if reset_result.returncode != 0:
+        print(f"Warning: Database reset failed: {reset_result.stderr}")
+    else:
+        print("✅ Database content reset completed")
+
     # CRITICAL: Reset DatabaseService singleton before each test
     from memfuse_core.services.database_service import DatabaseService
-    DatabaseService.reset_instance()
+    DatabaseService.reset_instance_sync()
     print("🧹 DatabaseService singleton reset")
     
     print("✅ Integration environment setup completed")
@@ -67,14 +89,33 @@ def setup_integration_environment():
     
     # CRITICAL: Cleanup after each test
     print("🧹 Cleaning up database connections...")
-    
+
+    # Clean up any remaining transaction state first
+    try:
+        import psycopg
+        conn = psycopg.connect(
+            host="localhost",
+            port=5432,
+            dbname="memfuse",
+            user="postgres",
+            password="postgres"
+        )
+        try:
+            conn.rollback()
+        except:
+            pass
+        conn.close()
+        print("🧹 Database transaction state cleaned")
+    except:
+        pass
+
     # Reset singleton to ensure connection is closed
-    DatabaseService.reset_instance()
-    
+    DatabaseService.reset_instance_sync()
+
     # Force garbage collection to ensure cleanup
     import gc
     gc.collect()
-    
+
     print("✅ Database cleanup completed")
 
 
@@ -115,7 +156,12 @@ def client():
                 """Make DELETE request to running server."""
                 full_url = f"{self.base_url}{url}"
                 return self.session.delete(full_url, headers=headers)
-                
+
+            def request(self, method, url, content=None, headers=None):
+                """Make generic request to running server."""
+                full_url = f"{self.base_url}{url}"
+                return self.session.request(method, full_url, data=content, headers=headers)
+
             def close(self):
                 """Close the session."""
                 self.session.close()
@@ -143,7 +189,11 @@ def client():
                     "port": 5432,
                     "database": "memfuse",
                     "user": "postgres",
-                    "password": "postgres"
+                    "password": "postgres",
+                    "pool_size": 10,  # Match new default
+                    "max_overflow": 40,  # 50 - 10 = 40
+                    "pool_timeout": 60.0,
+                    "pool_recycle": 7200
                 }
             },
             "embedding": {
@@ -151,8 +201,15 @@ def client():
                 "dimension": 384
             },
             "store": {
-                "backend": "pgai"
-            }
+                "backend": "pgai",
+                "buffer_size": 10,
+                "cache_size": 100
+            },
+            "embedding": {
+                "model": "all-MiniLM-L6-v2",
+                "dimension": 384
+            },
+            "data_dir": "/tmp/memfuse_test"
         }
         
         # Convert to DictConfig for ServiceInitializer
@@ -263,7 +320,8 @@ def mock_llm_service():
 def test_user_data():
     """Standard test user data."""
     import uuid
-    unique_suffix = str(uuid.uuid4())[:8]
+    import time
+    unique_suffix = f"{str(uuid.uuid4())}_{int(time.time() * 1000000) % 1000000}"
     return {
         "name": f"integration_test_user_{unique_suffix}",
         "description": "User for integration testing"
@@ -274,9 +332,10 @@ def test_user_data():
 def test_agent_data():
     """Standard test agent data."""
     import uuid
-    unique_suffix = str(uuid.uuid4())[:8]
+    import time
+    unique_suffix = f"{str(uuid.uuid4())}_{int(time.time() * 1000000) % 1000000}"
     return {
-        "name": f"integration_test_agent_{unique_suffix}", 
+        "name": f"integration_test_agent_{unique_suffix}",
         "description": "Agent for integration testing"
     }
 
@@ -286,7 +345,8 @@ def test_session_data():
     """Standard test session data generator."""
     def _generate_session_data(user_id: str, agent_id: str, name_suffix: str = ""):
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        import time
+        unique_suffix = f"{str(uuid.uuid4())}_{int(time.time() * 1000000) % 1000000}"
         return {
             "user_id": user_id,
             "agent_id": agent_id,
@@ -347,63 +407,108 @@ def taylor_swift_test_data():
 def database_connection():
     """
     Provide database connection for direct database validation.
-    
+
     This fixture can be used to directly query the database
     to verify data persistence in integration tests.
-    
-    IMPORTANT: This creates a separate connection for validation only.
+
+    IMPORTANT: This creates a separate synchronous connection for validation only.
     """
-    # Import here to avoid circular imports
-    from memfuse_core.database.postgres import PostgresDB
-    
-    # Create database connection with test configuration
-    db = PostgresDB(
+    import psycopg
+    from psycopg.rows import dict_row
+
+    # Create a direct synchronous connection for testing validation
+    conn = psycopg.connect(
         host="localhost",
         port=5432,
-        database="memfuse",
+        dbname="memfuse",
         user="postgres",
-        password="postgres"
+        password="postgres",
+        row_factory=dict_row
     )
-    
-    yield db
-    
-    # CRITICAL: Close connection properly
-    db.close()
+
+    yield conn
+
+    # CRITICAL: Ensure clean connection close
+    conn.close()
     print("✅ Database validation connection closed")
 
 
 class IntegrationTestHelper:
     """Helper class for common integration test operations."""
-    
+
     @staticmethod
-    def create_user_via_api(client, headers: Dict[str, str], 
+    def validate_api_response(response, expected_status_code: int = 200) -> Dict[str, Any]:
+        """Validate API response and return parsed JSON data with enhanced error handling."""
+        # Check status code
+        if response.status_code != expected_status_code:
+            try:
+                error_data = response.json()
+                error_msg = f"Expected {expected_status_code}, got {response.status_code}. Error: {error_data.get('message', 'Unknown error')}"
+            except Exception:
+                error_msg = f"Expected {expected_status_code}, got {response.status_code}. Response: {response.text}"
+            assert False, error_msg
+
+        # Parse and validate JSON response
+        try:
+            response_data = response.json()
+            if not response_data:
+                assert False, f"Empty response data"
+
+            # Validate response structure
+            if "status" not in response_data:
+                assert False, f"Missing 'status' field in response: {response_data}"
+
+            if response_data["status"] != "success":
+                assert False, f"API returned error status: {response_data.get('message', 'Unknown error')}"
+
+            # For success responses, data field should exist (but can be None for some operations)
+            if "data" not in response_data:
+                assert False, f"Missing 'data' field in response: {response_data}"
+
+            return response_data
+        except Exception as e:
+            assert False, f"Failed to parse response JSON: {e}. Response: {response.text}"
+
+    @staticmethod
+    def create_user_via_api(client, headers: Dict[str, str],
                            user_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a user via API and return the response data."""
         response = client.post("/api/v1/users", json=user_data, headers=headers)
-        assert response.status_code == 201, f"Expected 201, got {response.status_code}. Response: {response.text}"
-        return response.json()["data"]["user"]
+        response_data = IntegrationTestHelper.validate_api_response(response, 201)
+
+        if not response_data.get("data") or not response_data["data"].get("user"):
+            assert False, f"Invalid user creation response format: {response_data}"
+
+        return response_data["data"]["user"]
     
     @staticmethod
-    def create_agent_via_api(client, headers: Dict[str, str], 
+    def create_agent_via_api(client, headers: Dict[str, str],
                             agent_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create an agent via API and return the response data."""
         response = client.post("/api/v1/agents", json=agent_data, headers=headers)
-        assert response.status_code == 201, f"Expected 201, got {response.status_code}. Response: {response.text}"
-        return response.json()["data"]["agent"]
-    
+        response_data = IntegrationTestHelper.validate_api_response(response, 201)
+
+        if not response_data.get("data") or not response_data["data"].get("agent"):
+            assert False, f"Invalid agent creation response format: {response_data}"
+
+        return response_data["data"]["agent"]
+
     @staticmethod
-    def create_session_via_api(client, headers: Dict[str, str], 
+    def create_session_via_api(client, headers: Dict[str, str],
                               session_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a session via API and return the response data."""
         response = client.post("/api/v1/sessions", json=session_data, headers=headers)
-        assert response.status_code == 201, f"Expected 201, got {response.status_code}. Response: {response.text}"
-        return response.json()["data"]["session"]
+        response_data = IntegrationTestHelper.validate_api_response(response, 201)
+
+        if not response_data.get("data") or not response_data["data"].get("session"):
+            assert False, f"Invalid session creation response format: {response_data}"
+
+        return response_data["data"]["session"]
     
     @staticmethod
     def verify_database_record_exists(db, table: str, record_id: str) -> bool:
         """Verify that a record exists in the database."""
-        cursor = db.conn.cursor()
-        cursor.execute(f"SELECT id FROM {table} WHERE id = %s", (record_id,))
+        cursor = db.execute(f"SELECT id FROM {table} WHERE id = %s", (record_id,))
         result = cursor.fetchone()
         cursor.close()
         return result is not None
@@ -411,11 +516,10 @@ class IntegrationTestHelper:
     @staticmethod
     def verify_database_record_count(db, table: str, expected_count: int) -> bool:
         """Verify the number of records in a table."""
-        cursor = db.conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+        cursor = db.execute(f"SELECT COUNT(*) as count FROM {table}")
         result = cursor.fetchone()
         cursor.close()
-        return result[0] == expected_count if result else False
+        return result["count"] == expected_count if result else False
 
 
 @pytest.fixture
@@ -444,8 +548,11 @@ def test_config():
             "dimension": 384
         },
         "store": {
-            "backend": "pgai"
+            "backend": "pgai",
+            "buffer_size": 10,
+            "cache_size": 100
         },
+        "data_dir": "/tmp/memfuse_test",
         "embedding_service": "mock_for_crud_real_for_memory",
         "llm_service": "mock_unless_specified",
         "vector_store": "real_always",

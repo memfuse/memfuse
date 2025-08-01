@@ -39,7 +39,7 @@ async def list_sessions(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """List sessions, optionally filtered by user, agent, or name."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # If name is provided, get session by name
     if name:
@@ -48,7 +48,7 @@ async def list_sessions(
         # - GET /api/v1/sessions?name=xxx&user_id=yyy → user-scoped lookup (recommended)
         # - GET /api/v1/sessions?name=xxx → global lookup (returns all sessions with that name)
         # The real data isolation happens at the data storage and query level, not here
-        session = ensure_session_by_name_exists(db, name, user_id=user_id)
+        session = await ensure_session_by_name_exists(db, name, user_id=user_id)
         return ApiResponse.success(
             data={"sessions": [session]},
             message="Session retrieved successfully",
@@ -56,14 +56,14 @@ async def list_sessions(
 
     # Validate user_id if provided
     if user_id:
-        ensure_user_exists(db, user_id)
+        await ensure_user_exists(db, user_id)
 
     # Validate agent_id if provided
     if agent_id:
-        ensure_agent_exists(db, agent_id)
+        await ensure_agent_exists(db, agent_id)
 
     # Get sessions with filters
-    sessions = db.get_sessions(user_id=user_id, agent_id=agent_id)
+    sessions = await db.get_sessions(user_id=user_id, agent_id=agent_id)
 
     return ApiResponse.success(
         data={"sessions": sessions},
@@ -80,11 +80,11 @@ async def create_session(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Create a new session."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Validate user_id and agent_id
-    user = ensure_user_exists(db, request.user_id)
-    agent = ensure_agent_exists(db, request.agent_id)
+    user = await ensure_user_exists(db, request.user_id)
+    agent = await ensure_agent_exists(db, request.agent_id)
 
     # Generate a session name if not provided
     session_name = request.name
@@ -95,7 +95,7 @@ async def create_session(
         logger.info(f"Generated session name: {session_name}")
 
     # Check if a session with this name already exists for this user
-    existing_session = db.get_session_by_name(session_name, user_id=request.user_id)
+    existing_session = await db.get_session_by_name(session_name, user_id=request.user_id)
     if existing_session:
         error_response = ApiResponse.error(
             message=f"Session with name '{session_name}' already exists for this user",
@@ -111,14 +111,14 @@ async def create_session(
 
     # Check if there's already a session with null name for this user/agent pair
     # This is to prevent duplicate sessions with null names
-    existing_sessions = db.get_sessions(
+    existing_sessions = await db.get_sessions(
         user_id=request.user_id, agent_id=request.agent_id)
     for existing_session in existing_sessions:
         if existing_session["name"] is None or existing_session["name"] == "":
             # Update the existing session with the new name
             logger.info(
                 f"Found existing session with null name, updating with name: {session_name}")
-            success = db.update_session(
+            success = await db.update_session(
                 session_id=existing_session["id"],
                 name=session_name
             )
@@ -131,7 +131,7 @@ async def create_session(
                 raise_api_error(error_response)
             
             # Get the updated session
-            updated_session = db.get_session(existing_session["id"])
+            updated_session = await db.get_session(existing_session["id"])
 
             # Initialize memory service for this updated session
             try:
@@ -153,14 +153,14 @@ async def create_session(
             )
 
     # Create the session
-    session_id = db.create_session(
+    session_id = await db.create_session(
         user_id=request.user_id,
         agent_id=request.agent_id,
         name=session_name,  # Using generated or provided name
     )
 
     # Get the created session
-    session = db.get_session(session_id)
+    session = await db.get_session(session_id)
 
     # Initialize memory service for this session
     try:
@@ -192,10 +192,10 @@ async def get_session(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Get session details."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if session exists
-    session = ensure_session_exists(db, session_id)
+    session = await ensure_session_exists(db, session_id)
 
     return ApiResponse.success(
         data={"session": session},
@@ -213,13 +213,13 @@ async def update_session(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Update session details."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if session exists
-    _ = ensure_session_exists(db, session_id)
+    _ = await ensure_session_exists(db, session_id)
 
     # Update the session
-    success = db.update_session(
+    success = await db.update_session(
         session_id=session_id,
         name=request.name,  # Using name parameter
     )
@@ -232,7 +232,7 @@ async def update_session(
         raise_api_error(error_response)
 
     # Get the updated session
-    updated_session = db.get_session(session_id)
+    updated_session = await db.get_session(session_id)
 
     return ApiResponse.success(
         data={"session": updated_session},
@@ -249,13 +249,13 @@ async def delete_session(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Delete a session."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if session exists
-    _ = ensure_session_exists(db, session_id)
+    _ = await ensure_session_exists(db, session_id)
 
     # Delete the session
-    success = db.delete_session(session_id)
+    success = await db.delete_session(session_id)
 
     if not success:
         error_response = ApiResponse.error(

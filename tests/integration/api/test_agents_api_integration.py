@@ -40,20 +40,19 @@ class TestAgentsAPIIntegration:
         )
         
         # Verify database record details
-        cursor = database_connection.conn.cursor()
-        cursor.execute(
-            "SELECT id, name, description, created_at, updated_at FROM agents WHERE id = %s",
-            (agent_id,)
-        )
-        db_record = cursor.fetchone()
-        cursor.close()
-        
+        with database_connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, name, description, created_at, updated_at FROM agents WHERE id = %s",
+                (agent_id,)
+            )
+            db_record = cursor.fetchone()
+
         assert db_record is not None
-        assert db_record[0] == agent_id
-        assert db_record[1] == test_agent_data["name"]
-        assert db_record[2] == test_agent_data["description"]
-        assert db_record[3] is not None  # created_at
-        assert db_record[4] is not None  # updated_at
+        assert db_record["id"] == agent_id
+        assert db_record["name"] == test_agent_data["name"]
+        assert db_record["description"] == test_agent_data["description"]
+        assert db_record["created_at"] is not None  # created_at
+        assert db_record["updated_at"] is not None  # updated_at
 
     def test_get_agent_from_database(self, client, headers: Dict[str, str],
                                    test_agent_data: Dict[str, Any], integration_helper,
@@ -105,18 +104,17 @@ class TestAgentsAPIIntegration:
         assert updated_agent["description"] == updated_data["description"]
         
         # Verify database record was actually updated
-        cursor = database_connection.conn.cursor()
-        cursor.execute(
+        cursor = database_connection.execute(
             "SELECT name, description, updated_at FROM agents WHERE id = %s",
             (agent_id,)
         )
         db_record = cursor.fetchone()
         cursor.close()
-        
+
         assert db_record is not None
-        assert db_record[0] == updated_data["name"]
-        assert db_record[1] == updated_data["description"]
-        assert db_record[2] is not None  # updated_at should be set
+        assert db_record["name"] == updated_data["name"]
+        assert db_record["description"] == updated_data["description"]
+        assert db_record["updated_at"] is not None  # updated_at should be set
 
     def test_delete_agent_persistence(self, client, headers: Dict[str, str],
                                     test_agent_data: Dict[str, Any], database_connection,

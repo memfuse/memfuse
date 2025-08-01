@@ -6,7 +6,7 @@ is on the server side or in the test code.
 """
 
 import pytest
-import psycopg2
+import psycopg
 import time
 import sys
 import os
@@ -28,23 +28,23 @@ class DatabaseConnectionMonitor:
         self.conn_params = {
             "host": "localhost",
             "port": 5432,
-            "database": "postgres",  # Connect to postgres db to monitor
+            "dbname": "postgres",  # Connect to postgres db to monitor
             "user": "postgres",
             "password": "postgres"
         }
     
     def get_connection_count(self, target_database="memfuse"):
         """Get the number of active connections to target database."""
-        conn = psycopg2.connect(**self.conn_params)
+        conn = psycopg.connect(**self.conn_params)
         cursor = conn.cursor()
-        
+
         # Query to get connection count for specific database
         cursor.execute("""
-            SELECT count(*) 
-            FROM pg_stat_activity 
+            SELECT count(*)
+            FROM pg_stat_activity
             WHERE datname = %s
         """, (target_database,))
-        
+
         count = cursor.fetchone()[0]
         cursor.close()
         conn.close()
@@ -52,15 +52,15 @@ class DatabaseConnectionMonitor:
     
     def get_detailed_connections(self, target_database="memfuse"):
         """Get detailed information about active connections."""
-        conn = psycopg2.connect(**self.conn_params)
+        conn = psycopg.connect(**self.conn_params)
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             SELECT pid, usename, application_name, client_addr, state, query_start, LEFT(query, 100) as query
-            FROM pg_stat_activity 
+            FROM pg_stat_activity
             WHERE datname = %s
         """, (target_database,))
-        
+
         connections = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -158,7 +158,7 @@ def test_postgresql_raw_connection_cleanup(connection_monitor):
     print("✅ Raw PostgreSQL connection properly cleaned up")
 
 
-def test_postgresql_singleton_cleanup(connection_monitor, force_postgresql_config):
+async def test_postgresql_singleton_cleanup(connection_monitor, force_postgresql_config):
     """Test 2: DatabaseService singleton with PostgreSQL - likely shows leakage."""
     print("\n🔍 Test 2: DatabaseService singleton with PostgreSQL cleanup")
     
@@ -167,7 +167,7 @@ def test_postgresql_singleton_cleanup(connection_monitor, force_postgresql_confi
     print(f"Initial connections: {initial_count}")
     
     # Get database instance through singleton (should use PostgreSQL now)
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
     
     # Verify it's using PostgreSQL
     if hasattr(db.backend, 'conn_params'):
@@ -221,7 +221,7 @@ def test_postgresql_singleton_cleanup(connection_monitor, force_postgresql_confi
         print("✅ DatabaseService properly cleaned up")
 
 
-def test_integration_test_simulation(connection_monitor, force_postgresql_config):
+async def test_integration_test_simulation(connection_monitor, force_postgresql_config):
     """Test 3: Simulate what happens in integration tests."""
     print("\n🔍 Test 3: Integration test simulation")
     
@@ -234,17 +234,16 @@ def test_integration_test_simulation(connection_monitor, force_postgresql_config
         print(f"\n--- Simulating test {i+1} ---")
         
         # Each "test" gets a database instance
-        db = DatabaseService.get_instance()
+        db = await DatabaseService.get_instance()
         
         # Check connection count
         current_count = connection_monitor.get_connection_count()
         print(f"Test {i+1} - connections: {current_count}")
         
         # Simulate some database operations
-        cursor = db.backend.execute("SELECT 1")
-        result = cursor.fetchone()
-        cursor.close()
-        db.commit()
+        result = await db.backend.execute("SELECT 1")
+        print(f"Query result: {result}")
+        await db.commit()
         
         # This is what SHOULD happen after each test but might not be
         DatabaseService.reset_instance()

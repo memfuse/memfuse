@@ -9,24 +9,25 @@ from loguru import logger
 try:
     from pgai.vectorizer import Worker
     import psycopg
-    from psycopg_pool import AsyncConnectionPool
+    from psycopg.rows import dict_row
     from pgvector.psycopg import register_vector_async
+    from psycopg_pool import AsyncConnectionPool
     PGAI_AVAILABLE = True
 except ImportError:
     PGAI_AVAILABLE = False
     # Create dummy classes for type hints when imports fail
 
     class psycopg:
-        class AsyncConnection:
+        class connection:
             pass
-
-    class AsyncConnectionPool:
-        pass
 
     class Worker:
         pass
 
-    logger.warning("pgai dependencies not available. Install with: pip install pgai psycopg pgvector")
+    class AsyncConnectionPool:
+        pass
+
+    logger.warning("pgai dependencies not available. Install with: pip install pgai psycopg pgvector psycopg-pool")
 
 # Import the global connection manager (Tier 1 Singleton)
 from ...services.global_connection_manager import get_global_connection_manager
@@ -259,7 +260,7 @@ class PgaiStore(ChunkStoreInterface):
             logger.warning(f"Failed to configure pgvector on pool: {e}")
             # Continue anyway - basic operations should still work
 
-    async def _setup_pgvector_connection_safe(self, conn: psycopg.AsyncConnection):
+    async def _setup_pgvector_connection_safe(self, conn):
         """Safe pgvector setup with error handling."""
         try:
             await register_vector_async(conn)
@@ -268,7 +269,7 @@ class PgaiStore(ChunkStoreInterface):
             logger.warning(f"pgvector registration failed, continuing anyway: {e}")
             # Don't fail the entire initialization for pgvector registration issues
     
-    async def _setup_pgvector_connection(self, conn: psycopg.AsyncConnection):
+    async def _setup_pgvector_connection(self, conn):
         """Setup pgvector for connection with timeout and retry."""
         max_retries = 2  # Reduce retries to fail faster
         base_timeout = 5.0  # Shorter timeout

@@ -6,14 +6,14 @@ import pytest
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime
 
 # Add src to path so we can import the modules
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-@pytest.fixture(autouse=True, scope="function")
+@pytest.fixture(autouse=True, scope="session")
 def mock_database_service():
     """Mock the database service to avoid threading issues and focus on contract validation."""
     
@@ -25,13 +25,13 @@ def mock_database_service():
     mock_sessions = {}
     session_counter = 0
     
-    def create_user(name, description=None):
+    async def create_user(name, description=None):
         nonlocal user_counter
         # Check for duplicate names
         for user in mock_users.values():
             if user["name"] == name:
                 raise ValueError(f"User with name '{name}' already exists")
-        
+
         user_counter += 1
         user_id = f"user-{user_counter}"
         mock_users[user_id] = {
@@ -43,19 +43,19 @@ def mock_database_service():
         }
         return user_id
     
-    def get_user(user_id):
+    async def get_user(user_id):
         return mock_users.get(user_id)
-    
-    def get_all_users():
+
+    async def get_all_users():
         return list(mock_users.values())
-    
-    def get_user_by_name(name):
+
+    async def get_user_by_name(name):
         for user in mock_users.values():
             if user["name"] == name:
                 return user
         return None
     
-    def update_user(user_id, name=None, description=None):
+    async def update_user(user_id, name=None, description=None):
         if user_id not in mock_users:
             return False
         
@@ -72,13 +72,13 @@ def mock_database_service():
         mock_users[user_id]["updated_at"] = datetime.now().isoformat()
         return True
     
-    def delete_user(user_id):
+    async def delete_user(user_id):
         if user_id in mock_users:
             del mock_users[user_id]
             return True
         return False
     
-    def create_agent(name, description=None):
+    async def create_agent(name, description=None):
         nonlocal agent_counter
         # Check for duplicate names
         for agent in mock_agents.values():
@@ -96,19 +96,19 @@ def mock_database_service():
         }
         return agent_id
 
-    def get_agent(agent_id):
+    async def get_agent(agent_id):
         return mock_agents.get(agent_id)
 
-    def get_all_agents():
+    async def get_all_agents():
         return list(mock_agents.values())
 
-    def get_agent_by_name(name):
+    async def get_agent_by_name(name):
         for agent in mock_agents.values():
             if agent["name"] == name:
                 return agent
         return None
 
-    def update_agent(agent_id, name=None, description=None):
+    async def update_agent(agent_id, name=None, description=None):
         if agent_id not in mock_agents:
             return False
 
@@ -125,13 +125,13 @@ def mock_database_service():
         mock_agents[agent_id]["updated_at"] = datetime.now().isoformat()
         return True
 
-    def delete_agent(agent_id):
+    async def delete_agent(agent_id):
         if agent_id in mock_agents:
             del mock_agents[agent_id]
             return True
         return False
     
-    def create_session(user_id, agent_id, name=None):
+    async def create_session(user_id, agent_id, name=None):
         nonlocal session_counter
         # Validate user and agent exist
         if user_id not in mock_users:
@@ -151,10 +151,10 @@ def mock_database_service():
         }
         return session_id
     
-    def get_session(session_id):
+    async def get_session(session_id):
         return mock_sessions.get(session_id)
     
-    def get_sessions(user_id=None, agent_id=None):
+    async def get_sessions(user_id=None, agent_id=None):
         sessions = list(mock_sessions.values())
         
         # Filter by user_id if provided
@@ -167,14 +167,14 @@ def mock_database_service():
         
         return sessions
     
-    def get_session_by_name(name, user_id=None):
+    async def get_session_by_name(name, user_id=None):
         for session in mock_sessions.values():
             if session["name"] == name:
                 if user_id is None or session["user_id"] == user_id:
                     return session
         return None
     
-    def update_session(session_id, name=None):
+    async def update_session(session_id, name=None):
         if session_id not in mock_sessions:
             return False
         
@@ -183,13 +183,13 @@ def mock_database_service():
         mock_sessions[session_id]["updated_at"] = datetime.now().isoformat()
         return True
     
-    def delete_session(session_id):
+    async def delete_session(session_id):
         if session_id in mock_sessions:
             del mock_sessions[session_id]
             return True
         return False
     
-    def create_session_with_name(user_id, agent_id, name):
+    async def create_session_with_name(user_id, agent_id, name):
         """Create a session with a specific name."""
         # Validate user and agent exist
         if user_id not in mock_users:
@@ -205,11 +205,11 @@ def mock_database_service():
         # Create the session
         return create_session(user_id, agent_id, name)
     
-    def get_messages_by_session(session_id, limit=20, sort_by="timestamp", order="desc"):
+    async def get_messages_by_session(session_id, limit=20, sort_by="timestamp", order="desc"):
         """Mock method for getting messages by session."""
         return []
     
-    def get_message(message_id):
+    async def get_message(message_id):
         """Mock method for getting a single message."""
         return None
     
@@ -217,7 +217,7 @@ def mock_database_service():
     mock_knowledge = {}
     knowledge_counter = 0
     
-    def add_knowledge(user_id, content, knowledge_id=None):
+    async def add_knowledge(user_id, content, knowledge_id=None):
         nonlocal knowledge_counter
         # Validate user exists
         if user_id not in mock_users:
@@ -236,13 +236,13 @@ def mock_database_service():
         }
         return knowledge_id
     
-    def get_knowledge(knowledge_id):
+    async def get_knowledge(knowledge_id):
         return mock_knowledge.get(knowledge_id)
     
-    def get_knowledge_by_user(user_id):
+    async def get_knowledge_by_user(user_id):
         return [k for k in mock_knowledge.values() if k["user_id"] == user_id]
     
-    def update_knowledge(knowledge_id, content):
+    async def update_knowledge(knowledge_id, content):
         if knowledge_id not in mock_knowledge:
             return False
         
@@ -250,13 +250,13 @@ def mock_database_service():
         mock_knowledge[knowledge_id]["updated_at"] = datetime.now().isoformat()
         return True
     
-    def delete_knowledge(knowledge_id):
+    async def delete_knowledge(knowledge_id):
         if knowledge_id in mock_knowledge:
             del mock_knowledge[knowledge_id]
             return True
         return False
     
-    def get_or_create_user_by_name(name, description=None):
+    async def get_or_create_user_by_name(name, description=None):
         """Get or create a user by name - returns user_id."""
         # Check if user exists
         for user in mock_users.values():
@@ -264,9 +264,9 @@ def mock_database_service():
                 return user["id"]
         
         # Create new user if not found
-        return create_user(name, description)
+        return await create_user(name, description)
     
-    def get_or_create_agent_by_name(name, description=None):
+    async def get_or_create_agent_by_name(name, description=None):
         """Get or create an agent by name - returns agent_id."""
         # Check if agent exists
         for agent in mock_agents.values():
@@ -274,38 +274,38 @@ def mock_database_service():
                 return agent["id"]
         
         # Create new agent if not found
-        return create_agent(name, description)
+        return await create_agent(name, description)
     
-    # Create a mock instance
-    mock_instance = MagicMock()
-    mock_instance.create_user.side_effect = create_user
-    mock_instance.get_user.side_effect = get_user
-    mock_instance.get_all_users.side_effect = get_all_users
-    mock_instance.get_user_by_name.side_effect = get_user_by_name
-    mock_instance.get_or_create_user_by_name.side_effect = get_or_create_user_by_name
-    mock_instance.update_user.side_effect = update_user
-    mock_instance.delete_user.side_effect = delete_user
-    mock_instance.create_agent.side_effect = create_agent
-    mock_instance.get_agent.side_effect = get_agent
-    mock_instance.get_all_agents.side_effect = get_all_agents
-    mock_instance.get_agent_by_name.side_effect = get_agent_by_name
-    mock_instance.get_or_create_agent_by_name.side_effect = get_or_create_agent_by_name
-    mock_instance.update_agent.side_effect = update_agent
-    mock_instance.delete_agent.side_effect = delete_agent
-    mock_instance.create_session.side_effect = create_session
-    mock_instance.get_session.side_effect = get_session
-    mock_instance.get_sessions.side_effect = get_sessions
-    mock_instance.get_session_by_name.side_effect = get_session_by_name
-    mock_instance.create_session_with_name.side_effect = create_session_with_name
-    mock_instance.update_session.side_effect = update_session
-    mock_instance.delete_session.side_effect = delete_session
-    mock_instance.get_messages_by_session.side_effect = get_messages_by_session
-    mock_instance.get_message.side_effect = get_message
-    mock_instance.add_knowledge.side_effect = add_knowledge
-    mock_instance.get_knowledge.side_effect = get_knowledge
-    mock_instance.get_knowledge_by_user.side_effect = get_knowledge_by_user
-    mock_instance.update_knowledge.side_effect = update_knowledge
-    mock_instance.delete_knowledge.side_effect = delete_knowledge
+    # Create a mock instance with async methods
+    mock_instance = AsyncMock()
+    mock_instance.create_user = AsyncMock(side_effect=create_user)
+    mock_instance.get_user = AsyncMock(side_effect=get_user)
+    mock_instance.get_all_users = AsyncMock(side_effect=get_all_users)
+    mock_instance.get_user_by_name = AsyncMock(side_effect=get_user_by_name)
+    mock_instance.get_or_create_user_by_name = AsyncMock(side_effect=get_or_create_user_by_name)
+    mock_instance.update_user = AsyncMock(side_effect=update_user)
+    mock_instance.delete_user = AsyncMock(side_effect=delete_user)
+    mock_instance.create_agent = AsyncMock(side_effect=create_agent)
+    mock_instance.get_agent = AsyncMock(side_effect=get_agent)
+    mock_instance.get_all_agents = AsyncMock(side_effect=get_all_agents)
+    mock_instance.get_agent_by_name = AsyncMock(side_effect=get_agent_by_name)
+    mock_instance.get_or_create_agent_by_name = AsyncMock(side_effect=get_or_create_agent_by_name)
+    mock_instance.update_agent = AsyncMock(side_effect=update_agent)
+    mock_instance.delete_agent = AsyncMock(side_effect=delete_agent)
+    mock_instance.create_session = AsyncMock(side_effect=create_session)
+    mock_instance.get_session = AsyncMock(side_effect=get_session)
+    mock_instance.get_sessions = AsyncMock(side_effect=get_sessions)
+    mock_instance.get_session_by_name = AsyncMock(side_effect=get_session_by_name)
+    mock_instance.create_session_with_name = AsyncMock(side_effect=create_session_with_name)
+    mock_instance.update_session = AsyncMock(side_effect=update_session)
+    mock_instance.delete_session = AsyncMock(side_effect=delete_session)
+    mock_instance.get_messages_by_session = AsyncMock(side_effect=get_messages_by_session)
+    mock_instance.get_message = AsyncMock(side_effect=get_message)
+    mock_instance.add_knowledge = AsyncMock(side_effect=add_knowledge)
+    mock_instance.get_knowledge = AsyncMock(side_effect=get_knowledge)
+    mock_instance.get_knowledge_by_user = AsyncMock(side_effect=get_knowledge_by_user)
+    mock_instance.update_knowledge = AsyncMock(side_effect=update_knowledge)
+    mock_instance.delete_knowledge = AsyncMock(side_effect=delete_knowledge)
     
     # Mock additional services for messages API
     mock_service = MagicMock()
@@ -321,9 +321,23 @@ def mock_database_service():
         return []
     
     async def mock_read(message_ids):
+        # Return mock messages with all required fields including session_id
+        mock_messages = []
+        for i, msg_id in enumerate(message_ids):
+            mock_messages.append({
+                "id": msg_id,
+                "session_id": "session-1",  # Use the test session ID
+                "role": "user" if i % 2 == 0 else "assistant",
+                "content": f"Mock message content {i + 1}",
+                "created_at": "2023-01-01T12:00:00Z",
+                "updated_at": "2023-01-01T12:00:00Z"
+            })
+
+
+
         return {
             "status": "success",
-            "data": {"messages": []}
+            "data": {"messages": mock_messages}
         }
     
     async def mock_update(message_ids, new_messages):
@@ -352,11 +366,36 @@ def mock_database_service():
     mock_service.update = mock_update
     mock_service.delete = mock_delete
     
-    with patch('memfuse_core.services.database_service.DatabaseService') as mock_class:
-        mock_class.get_instance.return_value = mock_instance
+    # Patch DatabaseService in all the places it's imported
+    patches = [
+        patch('memfuse_core.services.database_service.DatabaseService'),
+        patch('memfuse_core.api.users.DatabaseService'),
+        patch('memfuse_core.api.agents.DatabaseService'),
+        patch('memfuse_core.api.sessions.DatabaseService'),
+        patch('memfuse_core.api.messages.DatabaseService'),
+        patch('memfuse_core.api.knowledge.DatabaseService'),
+        patch('memfuse_core.api.api_keys.DatabaseService'),
+        patch('memfuse_core.api.chunks.DatabaseService'),
+    ]
+
+    with patches[0] as mock_class, \
+         patches[1] as mock_users_class, \
+         patches[2] as mock_agents_class, \
+         patches[3] as mock_sessions_class, \
+         patches[4] as mock_messages_class, \
+         patches[5] as mock_knowledge_class, \
+         patches[6] as mock_api_keys_class, \
+         patches[7] as mock_chunks_class:
+
+        # Configure all mock classes to return the same mock instance
+        for mock_cls in [mock_class, mock_users_class, mock_agents_class,
+                        mock_sessions_class, mock_messages_class, mock_knowledge_class,
+                        mock_api_keys_class, mock_chunks_class]:
+            mock_cls.get_instance = AsyncMock(return_value=mock_instance)
         
         # Mock service factory - make async methods return awaitable
-        with patch('memfuse_core.services.service_factory.ServiceFactory') as mock_factory:
+        with patch('memfuse_core.services.service_factory.ServiceFactory') as mock_factory, \
+             patch('memfuse_core.api.messages.ServiceFactory', mock_factory):
             async def mock_get_buffer_service(*args, **kwargs):
                 return mock_service
             

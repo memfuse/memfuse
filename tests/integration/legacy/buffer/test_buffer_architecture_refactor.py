@@ -153,8 +153,8 @@ class TestBufferArchitectureRefactor:
         await asyncio.sleep(1.0)
         
         # Verify data reached database through MemoryService
-        db = DatabaseService.get_instance()
-        sessions = db.get_sessions(user_id=self.memory_service._user_id)
+        db = await DatabaseService.get_instance()
+        sessions = await db.get_sessions(user_id=self.memory_service._user_id)
         assert len(sessions) > 0
         
         logger.info("✅ Write path data flow test passed")
@@ -261,8 +261,8 @@ class TestBufferArchitectureRefactor:
         await asyncio.sleep(1.0)
         
         # 5. Verify data in database
-        db = DatabaseService.get_instance()
-        sessions = db.get_sessions(user_id=self.memory_service._user_id)
+        db = await DatabaseService.get_instance()
+        sessions = await db.get_sessions(user_id=self.memory_service._user_id)
         assert len(sessions) > 0, "No sessions found in database"
 
         # Verify session exists (this confirms data was persisted)

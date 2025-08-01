@@ -68,8 +68,19 @@ class EventDrivenPgaiStore:
             # Initialize error handling system
             initialize_error_handling()
 
-            # Check if immediate trigger is enabled
-            if self.pgai_config.get("immediate_trigger", False):
+            # Check if immediate trigger is enabled (with test mode override)
+            import os
+            test_mode = os.environ.get("MEMFUSE_TEST_MODE", "false").lower() == "true"
+            disable_notifications = os.environ.get("DISABLE_PGAI_NOTIFICATIONS", "false").lower() == "true"
+            immediate_trigger_env = os.environ.get("PGAI_IMMEDIATE_TRIGGER", "").lower()
+
+            # Override immediate trigger setting if in test mode or explicitly disabled
+            immediate_trigger_enabled = self.pgai_config.get("immediate_trigger", False)
+            if test_mode or disable_notifications or immediate_trigger_env == "false":
+                immediate_trigger_enabled = False
+                logger.info(f"Immediate trigger disabled for {self.table_name} (test_mode={test_mode}, disable_notifications={disable_notifications}, env_override={immediate_trigger_env})")
+
+            if immediate_trigger_enabled:
                 # Initialize immediate trigger coordinator
                 self.coordinator = ImmediateTriggerCoordinator(
                     self.core_store.pool,
@@ -267,11 +278,11 @@ class EventDrivenPgaiStore:
             return False
         return await self.core_store.delete(chunk_ids)
 
-    async def update(self, chunks: List[ChunkData]) -> bool:
-        """Update existing chunks."""
+    async def update(self, chunk_id: str, chunk: ChunkData) -> bool:
+        """Update an existing chunk."""
         if not await self._ensure_initialized("update"):
             return False
-        return await self.core_store.update(chunks)
+        return await self.core_store.update(chunk_id, chunk)
 
     async def list_chunks(self, limit: int = 100, offset: int = 0) -> List[ChunkData]:
         """List chunks with pagination."""

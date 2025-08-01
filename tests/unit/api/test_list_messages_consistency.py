@@ -140,7 +140,7 @@ class TestListMessagesAPIConsistency:
     @pytest.fixture
     def mock_db_service(self):
         """Mock database service."""
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db.get_messages_by_session.return_value = [
             {"id": "1", "role": "user", "content": "Hello from DB"}
         ]
@@ -171,7 +171,7 @@ class TestListMessagesAPIConsistency:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
             
-            mock_db_class.get_instance.return_value = mock_db_service
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db_service)
             mock_get_service.return_value = mock_memory_service
             mock_ensure_session.return_value = {"id": "session_1"}
             
@@ -198,7 +198,7 @@ class TestListMessagesAPIConsistency:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
             
-            mock_db_class.get_instance.return_value = mock_db_service
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db_service)
             mock_get_service.return_value = mock_buffer_service
             mock_ensure_session.return_value = {"id": "session_1"}
             
@@ -225,7 +225,7 @@ class TestListMessagesAPIConsistency:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
             
-            mock_db_class.get_instance.return_value = mock_db_service
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db_service)
             mock_get_service.return_value = None  # No service available
             mock_ensure_session.return_value = {"id": "session_1"}
             
@@ -262,7 +262,7 @@ class TestListMessagesAPIConsistency:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
 
-            mock_db_class.get_instance.return_value = mock_db_service
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db_service)
             mock_get_service.return_value = mock_service
             mock_ensure_session.return_value = {"id": "session_1"}
 
@@ -293,7 +293,7 @@ class TestListMessagesAPIConsistency:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
 
-            mock_db_class.get_instance.return_value = mock_db_service
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db_service)
             mock_get_service.return_value = mock_service
             mock_ensure_session.return_value = {"id": "session_1"}
 
@@ -326,7 +326,7 @@ class TestListMessagesAPIConsistency:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
 
-            mock_db_class.get_instance.return_value = mock_db_service
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db_service)
             mock_get_service.return_value = mock_buffer_service
             mock_ensure_session.return_value = {"id": "session_1"}
 
@@ -365,7 +365,7 @@ class TestListMessagesAPIConsistency:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
 
-            mock_db_class.get_instance.return_value = mock_db_service
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db_service)
             mock_get_service.return_value = mock_service
             mock_ensure_session.return_value = {"id": "session_1"}
 

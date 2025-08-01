@@ -36,18 +36,18 @@ async def list_agents(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """List all agents or get an agent by name."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # If name is provided, get agent by name
     if name:
-        agent = ensure_agent_by_name_exists(db, name)
+        agent = await ensure_agent_by_name_exists(db, name)
         return ApiResponse.success(
             data={"agents": [agent]},
             message="Agent retrieved successfully",
         )
 
     # Otherwise, list all agents
-    agents = db.get_all_agents()
+    agents = await db.get_all_agents()
     return ApiResponse.success(
         data={"agents": agents},
         message="Agents retrieved successfully",
@@ -63,19 +63,19 @@ async def create_agent(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Create a new agent."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if agent with the same name already exists
-    ensure_agent_name_available(db, request.name)
+    await ensure_agent_name_available(db, request.name)
 
     # Create the agent
-    agent_id = db.create_agent(
+    agent_id = await db.create_agent(
         name=request.name,
         description=request.description,
     )
 
     # Get the created agent
-    agent = db.get_agent(agent_id)
+    agent = await db.get_agent(agent_id)
 
     return ApiResponse.success(
         data={"agent": agent},
@@ -93,10 +93,10 @@ async def get_agent(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Get agent details."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Validate agent exists
-    agent = ensure_agent_exists(db, agent_id)
+    agent = await ensure_agent_exists(db, agent_id)
 
     return ApiResponse.success(
         data={"agent": agent},
@@ -114,13 +114,13 @@ async def update_agent(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Update agent details."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if agent exists
-    _ = ensure_agent_exists(db, agent_id)
+    _ = await ensure_agent_exists(db, agent_id)
 
     # Update the agent
-    success = db.update_agent(
+    success = await db.update_agent(
         agent_id=agent_id,
         name=request.name,
         description=request.description,
@@ -135,7 +135,7 @@ async def update_agent(
         raise_api_error(error_response)
 
     # Get the updated agent
-    updated_agent = db.get_agent(agent_id)
+    updated_agent = await db.get_agent(agent_id)
 
     return ApiResponse.success(
         data={"agent": updated_agent},
@@ -152,13 +152,13 @@ async def delete_agent(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Delete an agent."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if agent exists
-    _ = ensure_agent_exists(db, agent_id)
+    _ = await ensure_agent_exists(db, agent_id)
 
     # Delete the agent
-    success = db.delete_agent(agent_id)
+    success = await db.delete_agent(agent_id)
 
     if not success:
         error_response = ApiResponse.error(

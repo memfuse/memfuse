@@ -22,22 +22,31 @@ class TestSessionsAPIIntegration:
         
         # Create session data
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         session_data = {
             "user_id": user["id"],
             "agent_id": agent["id"],
             "name": f"integration_test_session_{unique_suffix}"
         }
         
+        # Debug: Check if session exists before creation
+        print(f"DEBUG: About to create session with name: {session_data['name']}")
+
         # Create session via API
         response = client.post("/api/v1/sessions", json=session_data, headers=headers)
         
-        # Verify API response
-        assert response.status_code in [200, 201]  # Can be 200 for updates or 201 for creation
-        response_data = response.json()
-        assert response_data["status"] == "success"
-        assert "session" in response_data["data"]
-        
+        # Verify API response with enhanced error handling
+        assert response.status_code in [200, 201], f"Expected 200 or 201, got {response.status_code}. Response: {response.text}"
+
+        try:
+            response_data = response.json()
+            if not response_data or response_data.get("status") != "success":
+                assert False, f"API returned error: {response_data}"
+            if not response_data.get("data") or not response_data["data"].get("session"):
+                assert False, f"Missing session in response data: {response_data}"
+        except Exception as e:
+            assert False, f"Failed to parse response JSON: {e}. Response: {response.text}"
+
         session_response = response_data["data"]["session"]
         session_id = session_response["id"]
         
@@ -54,7 +63,7 @@ class TestSessionsAPIIntegration:
         )
         
         # Verify database record details
-        cursor = database_connection.conn.cursor()
+        cursor = database_connection.cursor()
         cursor.execute(
             "SELECT id, user_id, agent_id, name, created_at, updated_at FROM sessions WHERE id = %s",
             (session_id,)
@@ -63,12 +72,12 @@ class TestSessionsAPIIntegration:
         cursor.close()
         
         assert db_record is not None
-        assert db_record[0] == session_id
-        assert db_record[1] == user["id"]
-        assert db_record[2] == agent["id"]
-        assert db_record[3] == session_data["name"]
-        assert db_record[4] is not None  # created_at
-        assert db_record[5] is not None  # updated_at
+        assert db_record["id"] == session_id
+        assert db_record["user_id"] == user["id"]
+        assert db_record["agent_id"] == agent["id"]
+        assert db_record["name"] == session_data["name"]
+        assert db_record["created_at"] is not None
+        assert db_record["updated_at"] is not None
 
     def test_create_session_auto_generated_name(self, client, headers: Dict[str, str],
                                                test_user_data: Dict[str, Any], test_agent_data: Dict[str, Any],
@@ -100,14 +109,14 @@ class TestSessionsAPIIntegration:
         assert session_response["name"] != ""
         
         # Verify in database
-        cursor = database_connection.conn.cursor()
+        cursor = database_connection.cursor()
         cursor.execute("SELECT name FROM sessions WHERE id = %s", (session_id,))
         db_record = cursor.fetchone()
         cursor.close()
         
         assert db_record is not None
-        assert db_record[0] is not None
-        assert db_record[0] != ""
+        assert db_record["id"] is not None
+        assert db_record["id"] != ""
 
     def test_get_session_from_database(self, client, headers: Dict[str, str],
                                       test_user_data: Dict[str, Any], test_agent_data: Dict[str, Any],
@@ -119,7 +128,7 @@ class TestSessionsAPIIntegration:
         
         # Create session data
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         session_data = {
             "user_id": user["id"],
             "agent_id": agent["id"],
@@ -154,7 +163,7 @@ class TestSessionsAPIIntegration:
         
         # Create session data
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         session_data = {
             "user_id": user["id"],
             "agent_id": agent["id"],
@@ -191,7 +200,7 @@ class TestSessionsAPIIntegration:
         
         # Create session data
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         session_data = {
             "user_id": user["id"],
             "agent_id": agent["id"],
@@ -203,7 +212,7 @@ class TestSessionsAPIIntegration:
         session_id = session["id"]
         
         # Update session data with unique name to avoid conflicts
-        updated_unique_suffix = str(uuid.uuid4())[:8]
+        updated_unique_suffix = str(uuid.uuid4())
         updated_data = {
             "name": f"updated_integration_test_session_{updated_unique_suffix}"
         }
@@ -220,7 +229,7 @@ class TestSessionsAPIIntegration:
         assert updated_session["name"] == updated_data["name"]
         
         # Verify database record was actually updated
-        cursor = database_connection.conn.cursor()
+        cursor = database_connection.cursor()
         cursor.execute(
             "SELECT name, updated_at FROM sessions WHERE id = %s",
             (session_id,)
@@ -229,8 +238,8 @@ class TestSessionsAPIIntegration:
         cursor.close()
         
         assert db_record is not None
-        assert db_record[0] == updated_data["name"]
-        assert db_record[1] is not None  # updated_at should be set
+        assert db_record["name"] == updated_data["name"]
+        assert db_record["updated_at"] is not None  # updated_at should be set
 
     def test_delete_session_persistence(self, client, headers: Dict[str, str],
                                        test_user_data: Dict[str, Any], test_agent_data: Dict[str, Any],
@@ -242,7 +251,7 @@ class TestSessionsAPIIntegration:
         
         # Create session data
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         session_data = {
             "user_id": user["id"],
             "agent_id": agent["id"],
@@ -282,7 +291,7 @@ class TestSessionsAPIIntegration:
         
         # Create session data
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         session_data = {
             "user_id": user["id"],
             "agent_id": agent["id"],
@@ -321,7 +330,7 @@ class TestSessionsAPIIntegration:
         
         # Create multiple sessions with unique names
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         
         session1_data = {
             "user_id": user["id"],
@@ -359,7 +368,7 @@ class TestSessionsAPIIntegration:
         """Test that listing sessions with user_id filter returns only sessions for that user."""
         # Create two users and one agent
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         
         user1_data = {**test_user_data, "name": f"integration_test_user_1_{unique_suffix}"}
         user2_data = {**test_user_data, "name": f"integration_test_user_2_{unique_suffix}"}
@@ -407,7 +416,7 @@ class TestSessionsAPIIntegration:
         """Test that listing sessions with agent_id filter returns only sessions for that agent."""
         # Create one user and two agents
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         
         agent1_data = {**test_agent_data, "name": f"integration_test_agent_1_{unique_suffix}"}
         agent2_data = {**test_agent_data, "name": f"integration_test_agent_2_{unique_suffix}"}
@@ -503,7 +512,7 @@ class TestSessionsAPIIntegration:
         
         # Create session with user
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         session_data = {
             "user_id": user["id"],
             "agent_id": agent["id"],
@@ -541,7 +550,7 @@ class TestSessionsAPIIntegration:
         
         # Create session with agent
         import uuid
-        unique_suffix = str(uuid.uuid4())[:8]
+        unique_suffix = str(uuid.uuid4())
         session_data = {
             "user_id": user["id"],
             "agent_id": agent["id"],

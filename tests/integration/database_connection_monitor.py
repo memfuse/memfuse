@@ -9,7 +9,7 @@ This script continuously monitors active PostgreSQL connections to help
 identify when connections are not being properly released.
 """
 
-import psycopg2
+import psycopg
 import time
 import sys
 from datetime import datetime
@@ -32,7 +32,7 @@ class PostgreSQLConnectionMonitor:
     def get_connection_info(self):
         """Get detailed connection information."""
         try:
-            conn = psycopg2.connect(**self.conn_params)
+            conn = psycopg.connect(**self.conn_params)
             cursor = conn.cursor()
             
             # Get detailed connection info

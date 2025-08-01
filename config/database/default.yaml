@@ -1,7 +1,7 @@
 # @package database
 # Database configuration for MemFuse
 
-# Database type: sqlite or postgres
+# Database type: postgres (SQLite fallback removed)
 type: "postgres"
 
 # PostgreSQL configuration
@@ -12,14 +12,15 @@ postgres:
   user: ${oc.env:POSTGRES_USER,postgres}
   password: ${oc.env:POSTGRES_PASSWORD,postgres}
   # Global connection pool settings (shared across all stores)
-  pool_size: 10          # Minimum connections in pool
-  max_overflow: 20       # Additional connections beyond pool_size
-  pool_timeout: 30.0     # Timeout for getting connection from pool
-  pool_recycle: 3600     # Recycle connections after 1 hour
-  
-# SQLite configuration (fallback)
-sqlite:
-  path: "data/memfuse.db"
+  pool_size: 20          # Minimum connections in pool (increased for sync+async pools)
+  max_overflow: 30       # Additional connections beyond pool_size (increased)
+  pool_timeout: 60.0     # Timeout for getting connection from pool (increased)
+  pool_recycle: 7200     # Recycle connections after 2 hours (increased)
+  connection_timeout: 30.0  # Connection establishment timeout
+  keepalives_idle: 600   # TCP keepalive idle time (10 minutes)
+  keepalives_interval: 30  # TCP keepalive interval
+  keepalives_count: 3    # TCP keepalive count
+
 
 # pgai specific configuration
 pgai:

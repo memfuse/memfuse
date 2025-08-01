@@ -6,7 +6,7 @@ is on the server side or in the test code.
 """
 
 import pytest
-import psycopg2
+import psycopg
 import time
 import sys
 import os
@@ -27,23 +27,23 @@ class DatabaseConnectionMonitor:
         self.conn_params = {
             "host": "localhost",
             "port": 5432,
-            "database": "postgres",  # Connect to postgres db to monitor
+            "dbname": "postgres",  # Connect to postgres db to monitor
             "user": "postgres",
             "password": "postgres"
         }
     
     def get_connection_count(self, target_database="memfuse"):
         """Get the number of active connections to target database."""
-        conn = psycopg2.connect(**self.conn_params)
+        conn = psycopg.connect(**self.conn_params)
         cursor = conn.cursor()
-        
+
         # Query to get connection count for specific database
         cursor.execute("""
-            SELECT count(*) 
-            FROM pg_stat_activity 
+            SELECT count(*)
+            FROM pg_stat_activity
             WHERE datname = %s
         """, (target_database,))
-        
+
         count = cursor.fetchone()[0]
         cursor.close()
         conn.close()
@@ -51,15 +51,15 @@ class DatabaseConnectionMonitor:
     
     def get_detailed_connections(self, target_database="memfuse"):
         """Get detailed information about active connections."""
-        conn = psycopg2.connect(**self.conn_params)
+        conn = psycopg.connect(**self.conn_params)
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             SELECT pid, usename, application_name, client_addr, state, query_start, query
-            FROM pg_stat_activity 
+            FROM pg_stat_activity
             WHERE datname = %s
         """, (target_database,))
-        
+
         connections = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -108,16 +108,17 @@ def test_raw_database_connection_cleanup(connection_monitor):
     print("✅ Raw connection properly cleaned up")
 
 
-def test_database_service_singleton_cleanup(connection_monitor):
+@pytest.mark.asyncio
+async def test_database_service_singleton_cleanup(connection_monitor):
     """Test 2: DatabaseService singleton - likely shows leakage."""
     print("\n🔍 Test 2: DatabaseService singleton cleanup")
-    
+
     # Get initial connection count
     initial_count = connection_monitor.get_connection_count()
     print(f"Initial connections: {initial_count}")
-    
+
     # Get database instance through singleton
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
     
     # Check connection count after creation
     after_create_count = connection_monitor.get_connection_count()
@@ -157,19 +158,20 @@ def test_database_service_singleton_cleanup(connection_monitor):
             print(f"  PID: {conn[0]}, User: {conn[1]}, App: {conn[2]}, State: {conn[4]}")
 
 
-def test_multiple_singleton_calls(connection_monitor):
+@pytest.mark.asyncio
+async def test_multiple_singleton_calls(connection_monitor):
     """Test 3: Multiple calls to singleton - shows accumulation."""
     print("\n🔍 Test 3: Multiple singleton calls")
-    
+
     # Get initial connection count
     initial_count = connection_monitor.get_connection_count()
     print(f"Initial connections: {initial_count}")
-    
+
     # Call singleton multiple times (this should reuse the same instance)
-    db1 = DatabaseService.get_instance()
-    db2 = DatabaseService.get_instance()
-    db3 = DatabaseService.get_instance()
-    
+    db1 = await DatabaseService.get_instance()
+    db2 = await DatabaseService.get_instance()
+    db3 = await DatabaseService.get_instance()
+
     # These should all be the same instance
     assert db1 is db2 is db3, "Singleton not working correctly"
     

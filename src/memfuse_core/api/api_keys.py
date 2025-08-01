@@ -127,7 +127,7 @@ async def delete_api_key(
         return error_response
 
     # Check if the API key exists and belongs to the user
-    api_key = db.get_api_key(key_id)
+    api_key = await db.get_api_key(key_id)
     if not api_key or api_key["user_id"] != user_id:
         return ApiResponse.error(
             message=f"API key with ID '{key_id}' not found for user '{user_id}'",

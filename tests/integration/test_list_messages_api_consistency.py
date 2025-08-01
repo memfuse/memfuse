@@ -76,7 +76,7 @@ class TestListMessagesAPIIntegration:
     async def test_memory_service_integration(self, sample_messages):
         """Test list_messages with MemoryService integration."""
         # Mock database service
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db.get_messages_by_session.return_value = sample_messages
         
         # Mock memory service
@@ -87,7 +87,7 @@ class TestListMessagesAPIIntegration:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
             
-            mock_db_class.get_instance.return_value = mock_db
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db)
             mock_get_service.return_value = mock_memory_service
             mock_ensure_session.return_value = {"id": "test_session"}
             
@@ -116,7 +116,7 @@ class TestListMessagesAPIIntegration:
     async def test_buffer_service_integration(self, sample_messages):
         """Test list_messages with BufferService integration."""
         # Mock database service
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db.get_messages_by_session.return_value = sample_messages
         
         # Mock buffer service
@@ -127,7 +127,7 @@ class TestListMessagesAPIIntegration:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
             
-            mock_db_class.get_instance.return_value = mock_db
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db)
             mock_get_service.return_value = mock_buffer_service
             mock_ensure_session.return_value = {"id": "test_session"}
             
@@ -156,14 +156,14 @@ class TestListMessagesAPIIntegration:
     async def test_database_fallback_integration(self, sample_messages):
         """Test list_messages with database fallback."""
         # Mock database service
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db.get_messages_by_session.return_value = sample_messages
-        
+
         with patch('memfuse_core.api.messages.DatabaseService') as mock_db_class, \
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
-            
-            mock_db_class.get_instance.return_value = mock_db
+
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db)
             mock_get_service.return_value = None  # No service available
             mock_ensure_session.return_value = {"id": "test_session"}
             
@@ -191,7 +191,7 @@ class TestListMessagesAPIIntegration:
     async def test_empty_results_consistency(self):
         """Test that empty results are handled consistently."""
         # Mock database service returning empty list
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db.get_messages_by_session.return_value = []
         
         # Mock service returning empty list
@@ -202,7 +202,7 @@ class TestListMessagesAPIIntegration:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
             
-            mock_db_class.get_instance.return_value = mock_db
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db)
             mock_get_service.return_value = mock_service
             mock_ensure_session.return_value = {"id": "empty_session"}
             
@@ -222,7 +222,7 @@ class TestListMessagesAPIIntegration:
     @pytest.mark.asyncio
     async def test_parameter_validation_consistency(self):
         """Test that parameter validation works consistently."""
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db.get_messages_by_session.return_value = []
         
         mock_service = AsyncMock()
@@ -232,7 +232,7 @@ class TestListMessagesAPIIntegration:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
             
-            mock_db_class.get_instance.return_value = mock_db
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db)
             mock_get_service.return_value = mock_service
             mock_ensure_session.return_value = {"id": "test_session"}
             
@@ -255,7 +255,7 @@ class TestListMessagesAPIIntegration:
     @pytest.mark.asyncio
     async def test_error_handling_consistency(self):
         """Test that error handling maintains response format consistency."""
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db.get_messages_by_session.return_value = []
         
         # Mock service that raises an exception
@@ -266,7 +266,7 @@ class TestListMessagesAPIIntegration:
              patch('memfuse_core.api.messages.get_service_for_session') as mock_get_service, \
              patch('memfuse_core.api.messages.ensure_session_exists') as mock_ensure_session:
             
-            mock_db_class.get_instance.return_value = mock_db
+            mock_db_class.get_instance = AsyncMock(return_value=mock_db)
             mock_get_service.return_value = mock_service
             mock_ensure_session.return_value = {"id": "test_session"}
             

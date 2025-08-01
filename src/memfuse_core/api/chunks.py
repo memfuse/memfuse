@@ -140,13 +140,13 @@ async def get_session_chunks(
                 )
 
         # Validate session
-        db = DatabaseService.get_instance()
-        is_valid, error_response, session = validate_session_exists(db, session_id)
+        db = await DatabaseService.get_instance()
+        is_valid, error_response, session = await validate_session_exists(db, session_id)
         if not is_valid:
             return error_response
         # Get user and agent info for MemoryService initialization
-        user = db.get_user(session["user_id"])
-        agent = db.get_agent(session["agent_id"])
+        user = await db.get_user(session["user_id"])
+        agent = await db.get_agent(session["agent_id"])
 
         if not user or not agent:
             return ApiResponse.error(
@@ -305,8 +305,8 @@ async def get_round_chunks(
                 )
 
         # Get round and session info
-        db = DatabaseService.get_instance()
-        round_info = db.get_round(round_id)
+        db = await DatabaseService.get_instance()
+        round_info = await db.get_round(round_id)
         if not round_info:
             return ApiResponse.error(
                 message="Round not found",
@@ -314,7 +314,7 @@ async def get_round_chunks(
                 errors=[ErrorDetail(field="round_id", message="Round does not exist")]
             )
 
-        session = db.get_session(round_info["session_id"])
+        session = await db.get_session(round_info["session_id"])
         if not session:
             return ApiResponse.error(
                 message="Session not found for round",
@@ -323,8 +323,8 @@ async def get_round_chunks(
             )
 
         # Get user and agent info
-        user = db.get_user(session["user_id"])
-        agent = db.get_agent(session["agent_id"])
+        user = await db.get_user(session["user_id"])
+        agent = await db.get_agent(session["agent_id"])
 
         if not user or not agent:
             return ApiResponse.error(

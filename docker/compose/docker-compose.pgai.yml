@@ -10,10 +10,21 @@ services:
       POSTGRES_PASSWORD: postgres
       # TimescaleDB configuration
       TIMESCALEDB_TELEMETRY: 'off'
-      # PostgreSQL optimizations for vector operations
+      # PostgreSQL optimizations for vector operations and connection stability
       POSTGRES_SHARED_BUFFERS: '256MB'
       POSTGRES_EFFECTIVE_CACHE_SIZE: '1GB'
       POSTGRES_WORK_MEM: '64MB'
+      # Connection pool optimization
+      POSTGRES_MAX_CONNECTIONS: '300'
+      POSTGRES_SUPERUSER_RESERVED_CONNECTIONS: '5'
+      # TCP keepalive settings for connection stability
+      POSTGRES_TCP_KEEPALIVES_IDLE: '600'
+      POSTGRES_TCP_KEEPALIVES_INTERVAL: '30'
+      POSTGRES_TCP_KEEPALIVES_COUNT: '3'
+      # WAL and checkpoint settings for stability
+      POSTGRES_WAL_LEVEL: 'replica'
+      POSTGRES_MAX_WAL_SIZE: '2GB'
+      POSTGRES_CHECKPOINT_COMPLETION_TARGET: '0.9'
     ports:
       - "5432:5432"
     volumes:

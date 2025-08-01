@@ -39,20 +39,20 @@ class TestQueryBufferVectorRetrieval:
             mock_st.return_value = mock_model
             
             buffer = HybridBuffer(
-                max_tokens=1000,
-                max_chunks=10,
-                embedding_model_name="all-MiniLM-L6-v2"
+                max_size=10,
+                chunk_strategy="message",
+                embedding_model="all-MiniLM-L6-v2"
             )
             
             # Add test chunks
-            from src.memfuse_core.buffer.chunk import Chunk
-            
-            chunk1 = Chunk(
+            from src.memfuse_core.rag.chunk.base import ChunkData
+
+            chunk1 = ChunkData(
                 content="Mars exploration faces significant challenges including radiation exposure from cosmic rays and solar particles.",
                 metadata={"source": "test", "topic": "mars"}
             )
             
-            chunk2 = Chunk(
+            chunk2 = ChunkData(
                 content="Space travel requires advanced life support systems to maintain breathable atmosphere and temperature control.",
                 metadata={"source": "test", "topic": "space"}
             )

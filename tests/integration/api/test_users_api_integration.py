@@ -18,13 +18,11 @@ class TestUsersAPIIntegration:
         """Test that creating a user actually persists to database."""
         # Create user via API
         response = client.post("/api/v1/users", json=test_user_data, headers=headers)
-        
-        # Verify API response
-        assert response.status_code == 201
-        response_data = response.json()
-        assert response_data["status"] == "success"
-        assert "user" in response_data["data"]
-        
+
+        # Verify API response with enhanced error handling
+        response_data = integration_helper.validate_api_response(response, 201)
+        assert "user" in response_data["data"], f"Missing 'user' in response data: {response_data}"
+
         user_data = response_data["data"]["user"]
         user_id = user_data["id"]
         
@@ -40,20 +38,19 @@ class TestUsersAPIIntegration:
         )
         
         # Verify database record details
-        cursor = database_connection.conn.cursor()
-        cursor.execute(
-            "SELECT id, name, description, created_at, updated_at FROM users WHERE id = %s",
-            (user_id,)
-        )
-        db_record = cursor.fetchone()
-        cursor.close()
+        with database_connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, name, description, created_at, updated_at FROM users WHERE id = %s",
+                (user_id,)
+            )
+            db_record = cursor.fetchone()
         
         assert db_record is not None
-        assert db_record[0] == user_id
-        assert db_record[1] == test_user_data["name"]
-        assert db_record[2] == test_user_data["description"]
-        assert db_record[3] is not None  # created_at
-        assert db_record[4] is not None  # updated_at
+        assert db_record["id"] == user_id
+        assert db_record["name"] == test_user_data["name"]
+        assert db_record["description"] == test_user_data["description"]
+        assert db_record["created_at"] is not None  # created_at
+        assert db_record["updated_at"] is not None  # updated_at
 
 
 
@@ -67,12 +64,11 @@ class TestUsersAPIIntegration:
         
         # Get user via API
         response = client.get(f"/api/v1/users/{user_id}", headers=headers)
-        
-        # Verify response
-        assert response.status_code == 200
-        response_data = response.json()
-        assert response_data["status"] == "success"
-        
+
+        # Verify response with enhanced error handling
+        response_data = integration_helper.validate_api_response(response, 200)
+        assert "user" in response_data["data"], f"Missing 'user' in response data: {response_data}"
+
         retrieved_user = response_data["data"]["user"]
         assert retrieved_user["id"] == user_id
         assert retrieved_user["name"] == test_user_data["name"]
@@ -96,29 +92,27 @@ class TestUsersAPIIntegration:
         
         # Update via API
         response = client.put(f"/api/v1/users/{user_id}", json=updated_data, headers=headers)
-        
-        # Verify API response
-        assert response.status_code == 200
-        response_data = response.json()
-        assert response_data["status"] == "success"
-        
+
+        # Verify API response with enhanced error handling
+        response_data = integration_helper.validate_api_response(response, 200)
+        assert "user" in response_data["data"], f"Missing 'user' in response data: {response_data}"
+
         updated_user = response_data["data"]["user"]
         assert updated_user["name"] == updated_data["name"]
         assert updated_user["description"] == updated_data["description"]
         
         # Verify database record was actually updated
-        cursor = database_connection.conn.cursor()
-        cursor.execute(
-            "SELECT name, description, updated_at FROM users WHERE id = %s",
-            (user_id,)
-        )
-        db_record = cursor.fetchone()
-        cursor.close()
+        with database_connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT name, description, updated_at FROM users WHERE id = %s",
+                (user_id,)
+            )
+            db_record = cursor.fetchone()
         
         assert db_record is not None
-        assert db_record[0] == updated_data["name"]
-        assert db_record[1] == updated_data["description"]
-        assert db_record[2] is not None  # updated_at should be set
+        assert db_record["name"] == updated_data["name"]
+        assert db_record["description"] == updated_data["description"]
+        assert db_record["updated_at"] is not None  # updated_at should be set
 
     def test_delete_user_persistence(self, client, headers: Dict[str, str],
                                     test_user_data: Dict[str, Any], database_connection,
@@ -135,8 +129,8 @@ class TestUsersAPIIntegration:
         
         # Delete via API
         response = client.delete(f"/api/v1/users/{user_id}", headers=headers)
-        
-        # Verify API response
+
+        # Verify API response (204 No Content for successful deletion)
         assert response.status_code == 204
         
         # Verify user no longer exists in database
@@ -186,12 +180,11 @@ class TestUsersAPIIntegration:
         
         # Get users list via API
         response = client.get("/api/v1/users", headers=headers)
-        
-        # Verify response
-        assert response.status_code == 200
-        response_data = response.json()
-        assert response_data["status"] == "success"
-        
+
+        # Verify response with enhanced error handling
+        response_data = integration_helper.validate_api_response(response, 200)
+        assert "users" in response_data["data"], f"Missing 'users' in response data: {response_data}"
+
         users_list = response_data["data"]["users"]
         assert len(users_list) >= 2  # At least our two test users
         

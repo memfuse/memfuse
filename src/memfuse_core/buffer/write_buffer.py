@@ -77,7 +77,26 @@ class WriteBuffer:
         self.total_transfers = 0
 
         logger.info("WriteBuffer: Initialized with RoundBuffer, HybridBuffer, and FlushManager integration")
-    
+
+    async def initialize(self) -> bool:
+        """Initialize WriteBuffer and start FlushManager workers.
+
+        Returns:
+            True if initialization was successful
+        """
+        try:
+            # Initialize FlushManager workers
+            if not await self.flush_manager.initialize():
+                logger.error("WriteBuffer: Failed to initialize FlushManager")
+                return False
+
+            logger.info("WriteBuffer: Initialization completed successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"WriteBuffer: Initialization failed: {e}")
+            return False
+
     async def add(self, messages: MessageList, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Add a single list of messages to the buffer.
         

@@ -140,10 +140,12 @@ def from_memfuse_config(cls, config: Dict[str, Any]) -> 'ConnectionPoolConfig':
 
 ### Test Results
 From integration tests:
-- ✅ **5 store instances share 1 connection pool**
-- ✅ **Connection increase: only 3 connections for 5 stores**
-- ✅ **No connection leaks**: 10 API requests with stable connection count
-- ✅ **Configuration applied**: Pool settings from config files used correctly
+- ✅ **21 connection pool tests pass**: All core functionality verified
+- ✅ **Multiple store instances share 1 connection pool**: Resource sharing confirmed
+- ✅ **No connection leaks**: Stable connection count under load
+- ✅ **Configuration hierarchy works**: Pool settings from config files applied correctly
+- ✅ **Immediate triggers supported**: Works with both enabled and disabled pgai triggers
+- ✅ **API integration verified**: Agent creation and database persistence working
 
 ## Configuration Options
 

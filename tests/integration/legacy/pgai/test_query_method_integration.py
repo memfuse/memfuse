@@ -140,8 +140,8 @@ class TestQueryMethodIntegration:
         
         # Verify results
         assert len(result) == 2
-        assert result[0].chunk_id == "test_1"
-        assert result[1].chunk_id == "test_2"
+        assert result["id"].chunk_id == "test_1"
+        assert result["name"].chunk_id == "test_2"
         
         # Verify core store was called correctly
         mock_core_store.query.assert_called_once_with("Mars exploration", 5)

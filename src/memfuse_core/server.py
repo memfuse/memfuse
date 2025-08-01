@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from loguru import logger
 from omegaconf import DictConfig
 import uvicorn
+import hydra
 
 # Load environment variables from .env file
 try:
@@ -99,24 +100,14 @@ async def get_buffer_service(
 # Server Management
 # ============================================================================
 
-def run_server(cfg: Optional[DictConfig] = None):
+def run_server(cfg: DictConfig):
     """Run the MemFuse server with the given configuration.
 
     Args:
         cfg: Configuration from Hydra (DictConfig)
     """
-    # If no configuration provided, use __main__.main to run server
     if cfg is None:
-        logger.info("No configuration provided, using __main__.main to run server")
-        try:
-            # Import main function
-            from . import __main__
-            # Call main function (this will trigger Hydra decorator)
-            __main__.main()
-            return
-        except Exception as e:
-            logger.error(f"Error running server via __main__.main: {e}")
-            raise ValueError(f"Failed to run server: {e}") from e
+        raise ValueError("Configuration is required to run the server")
 
     # Use provided configuration to run server
     logger.info("Using provided configuration to run server")
@@ -316,11 +307,15 @@ def create_app() -> FastAPI:
 # Entry Point
 # ============================================================================
 
-def main():
+@hydra.main(version_base=None, config_path="../../config", config_name="config")
+def main(cfg: DictConfig) -> None:
     """Entry point for the memfuse-core command.
 
     This function is called when running:
     - `poetry run memfuse-core`
     - `python -m memfuse_core` (via __main__.py)
+
+    Args:
+        cfg: Configuration from Hydra
     """
-    run_server()
+    run_server(cfg)

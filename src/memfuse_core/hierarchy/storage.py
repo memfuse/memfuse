@@ -543,7 +543,7 @@ class UnifiedStorageManager(StorageManager):
             elif storage_type == StorageType.SQL:
                 # SQL storage backend - use existing database service
                 from ..services.database_service import DatabaseService
-                db_service = DatabaseService.get_instance()
+                db_service = await DatabaseService.get_instance()
                 store = db_service.backend  # Access the backend directly
                 logger.info(f"UnifiedStorageManager: Created SQL backend using database service")
             else:

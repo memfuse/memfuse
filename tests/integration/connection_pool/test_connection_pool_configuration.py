@@ -72,10 +72,10 @@ class TestConnectionPoolConfiguration:
         pool_config = ConnectionPoolConfig.from_memfuse_config(empty_config)
         
         # Should use defaults
-        assert pool_config.min_size == 5
-        assert pool_config.max_size == 15  # 5 + 10 (default max_overflow)
-        assert pool_config.timeout == 30.0
-        assert pool_config.recycle == 3600
+        assert pool_config.min_size == 10  # Updated default
+        assert pool_config.max_size == 50  # Updated default
+        assert pool_config.timeout == 60.0
+        assert pool_config.recycle == 7200
         
         # Partial configuration
         partial_config = {
@@ -89,9 +89,9 @@ class TestConnectionPoolConfiguration:
         
         # Should use provided value and defaults for others
         assert pool_config.min_size == 8
-        assert pool_config.max_size == 18  # 8 + 10 (default max_overflow)
-        assert pool_config.timeout == 30.0  # default
-        assert pool_config.recycle == 3600  # default
+        assert pool_config.max_size == 48  # 8 + 40 (default max_overflow)
+        assert pool_config.timeout == 60.0  # default
+        assert pool_config.recycle == 7200  # default
         
         print("✅ Configuration defaults test passed")
     

@@ -1,89 +1,78 @@
 """Database service for MemFuse server."""
 
-from typing import Optional, Dict, Any
+from typing import Optional
 from loguru import logger
 
 import os
 from ..utils.config import config_manager
-from ..utils.path_manager import PathManager
-from ..database import Database, SQLiteDB, PostgresDB
+from ..database import Database, PostgresDB
 
 
 class DatabaseService:
     """Database service for MemFuse server.
-    
+
     This class provides a singleton instance of the Database class
     to avoid creating multiple database connections.
     """
-    
+
     _instance: Optional[Database] = None
-    
+
     @classmethod
-    def get_instance(cls) -> Database:
+    async def get_instance(cls) -> Database:
         """Get the singleton Database instance.
-        
+
         Returns:
             Database instance
         """
         if cls._instance is None:
             logger.debug("Creating new Database instance")
-            
+
             # Get database configuration from config
             config_dict = config_manager.get_config()
             db_config = config_dict.get("database", {})
-            db_type = db_config.get("type", "sqlite")
-            
-            # Create appropriate backend based on configuration
-            if db_type == "postgres":
-                # PostgreSQL backend - check environment variables first
-                import os
-                postgres_config = db_config.get("postgres", {})
-                host = os.getenv("POSTGRES_HOST", postgres_config.get("host", "localhost"))
-                port = int(os.getenv("POSTGRES_PORT", postgres_config.get("port", 5432)))
-                database = os.getenv("POSTGRES_DB", postgres_config.get("database", "memfuse"))
-                user = os.getenv("POSTGRES_USER", postgres_config.get("user", "postgres"))
-                password = os.getenv("POSTGRES_PASSWORD", postgres_config.get("password", ""))
-                
-                try:
-                    backend = PostgresDB(host, port, database, user, password)
-                    logger.info(f"Using PostgreSQL backend at {host}:{port}/{database}")
-                except ImportError:
-                    logger.warning("PostgreSQL backend not available, falling back to SQLite")
-                    db_path = cls._get_sqlite_path(config_dict)
-                    backend = SQLiteDB(db_path)
-                    logger.info(f"Using SQLite backend at {db_path}")
-            else:
-                # SQLite backend (default)
-                db_path = cls._get_sqlite_path(config_dict)
-                backend = SQLiteDB(db_path)
-                logger.info(f"Using SQLite backend at {db_path}")
-            
+
+            # PostgreSQL backend (pgai enhanced) - check environment variables first
+            postgres_config = db_config.get("postgres", {})
+            host = os.getenv("POSTGRES_HOST", postgres_config.get("host", "localhost"))
+            port = int(os.getenv("POSTGRES_PORT", postgres_config.get("port", 5432)))
+            database = os.getenv("POSTGRES_DB", postgres_config.get("database", "memfuse"))
+            user = os.getenv("POSTGRES_USER", postgres_config.get("user", "postgres"))
+            password = os.getenv("POSTGRES_PASSWORD", postgres_config.get("password", ""))
+
+            try:
+                backend = PostgresDB(host, port, database, user, password)
+                logger.info(f"Using PostgreSQL backend (pgai enhanced) at {host}:{port}/{database}")
+            except ImportError as e:
+                logger.error(f"PostgreSQL backend not available: {e}")
+                raise RuntimeError(f"PostgreSQL backend required but not available: {e}. Please install psycopg.")
+            except Exception as e:
+                logger.error(f"Failed to connect to PostgreSQL: {e}")
+                raise RuntimeError(f"Failed to connect to PostgreSQL at {host}:{port}/{database}: {e}")
+
             cls._instance = Database(backend)
+            # Initialize database tables asynchronously
+            await cls._instance.initialize()
         return cls._instance
-        
+
     @classmethod
-    def _get_sqlite_path(cls, config_dict):
-        """Get the SQLite database path from configuration.
-        
-        Args:
-            config_dict: Configuration dictionary
-            
-        Returns:
-            SQLite database path
-        """
-        data_dir = config_dict.get("data_dir", "data")
-        db_path = os.path.join(data_dir, "metadata.db")
-        # Create directory if it doesn't exist
-        PathManager.ensure_directory(os.path.dirname(db_path))
-        return db_path
-    
-    @classmethod
-    def reset_instance(cls) -> None:
+    async def reset_instance(cls) -> None:
         """Reset the singleton Database instance.
-        
+
         This method is primarily used for testing.
         """
         if cls._instance is not None:
-            cls._instance.close()
+            await cls._instance.close()
             cls._instance = None
             logger.debug("Database instance reset")
+
+    @classmethod
+    def reset_instance_sync(cls) -> None:
+        """Reset the singleton Database instance synchronously.
+
+        This method is for testing environments where async context is not available.
+        WARNING: This does not properly close connections - use reset_instance() when possible.
+        """
+        if cls._instance is not None:
+            # Force reset without proper cleanup - only for testing
+            cls._instance = None
+            logger.warning("Database instance reset synchronously without proper cleanup")

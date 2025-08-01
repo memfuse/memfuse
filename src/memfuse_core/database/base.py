@@ -9,7 +9,7 @@ class DBBase(abc.ABC):
     """Abstract base class for database backends."""
 
     @abc.abstractmethod
-    def execute(self, query: str, params: tuple = ()):
+    async def execute(self, query: str, params: tuple = ()):
         """Execute a SQL query.
 
         Args:
@@ -22,22 +22,22 @@ class DBBase(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def commit(self):
+    async def commit(self):
         """Commit changes to the database."""
         pass
 
     @abc.abstractmethod
-    def close(self):
+    async def close(self):
         """Close the database connection."""
         pass
 
     @abc.abstractmethod
-    def create_tables(self):
+    async def create_tables(self):
         """Create database tables if they don't exist."""
         pass
 
     @abc.abstractmethod
-    def add(self, table: str, data: Dict[str, Any]) -> str:
+    async def add(self, table: str, data: Dict[str, Any]) -> str:
         """Add data to a table.
 
         Args:
@@ -50,7 +50,7 @@ class DBBase(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def select(self, table: str, conditions: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    async def select(self, table: str, conditions: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Select data from a table.
 
         Args:
@@ -63,7 +63,7 @@ class DBBase(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def select_one(self, table: str, conditions: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def select_one(self, table: str, conditions: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Select a single row from a table.
 
         Args:
@@ -76,7 +76,7 @@ class DBBase(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def update(self, table: str, data: Dict[str, Any], conditions: Dict[str, Any]) -> int:
+    async def update(self, table: str, data: Dict[str, Any], conditions: Dict[str, Any]) -> int:
         """Update data in a table.
 
         Args:
@@ -90,7 +90,7 @@ class DBBase(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def delete(self, table: str, conditions: Dict[str, Any]) -> int:
+    async def delete(self, table: str, conditions: Dict[str, Any]) -> int:
         """Delete data from a table.
 
         Args:
@@ -116,23 +116,29 @@ class Database:
             backend: Database backend
         """
         self.backend = backend
-        self.backend.create_tables()
+        # Note: create_tables will be called asynchronously after initialization
 
-    def close(self):
+    async def initialize(self):
+        """Initialize database tables asynchronously."""
+        await self.backend.create_tables()
+
+    async def close(self):
         """Close the database connection."""
-        self.backend.close()
+        await self.backend.close()
 
-    def commit(self):
+    async def commit(self):
         """Commit changes to the database."""
-        self.backend.commit()
+        await self.backend.commit()
 
     def __del__(self):
         """Close the database connection when the object is deleted."""
-        self.close()
+        # Note: Cannot use async in __del__, so this is a no-op
+        # Proper cleanup should be done explicitly via close()
+        pass
 
     # User methods
 
-    def get_or_create_user_by_name(self, name: str, description: Optional[str] = None) -> str:
+    async def get_or_create_user_by_name(self, name: str, description: Optional[str] = None) -> str:
         """Get a user by name or create if it doesn't exist.
 
         Args:
@@ -153,7 +159,7 @@ class Database:
         name = name.strip()
 
         # Check if user exists
-        user = self.get_user_by_name(name)
+        user = await self.get_user_by_name(name)
         if user is not None:
             logger.debug(f"Found existing user: {name} with ID: {user['id']}")
             return user["id"]
@@ -173,7 +179,7 @@ class Database:
         }
 
         try:
-            self.backend.add('users', data)
+            await self.backend.add('users', data)
             logger.info(f"Created new user: {name} with ID: {user_id}")
             return user_id
         except Exception as e:
@@ -182,7 +188,7 @@ class Database:
             if 'unique' in error_msg or 'constraint' in error_msg:
                 # Race condition: another process created the user between our check and insert
                 # Try to get the user again
-                user = self.get_user_by_name(name)
+                user = await self.get_user_by_name(name)
                 if user is not None:
                     logger.warning(f"User {name} was created by another process, using existing ID: {user['id']}")
                     return user["id"]
@@ -192,7 +198,7 @@ class Database:
                 # Some other database error
                 raise RuntimeError(f"Failed to create user '{name}': {e}") from e
 
-    def get_or_create_agent_by_name(self, name: str, description: Optional[str] = None) -> str:
+    async def get_or_create_agent_by_name(self, name: str, description: Optional[str] = None) -> str:
         """Get an agent by name or create if it doesn't exist.
 
         Args:
@@ -213,7 +219,7 @@ class Database:
         name = name.strip()
 
         # Check if agent exists
-        agent = self.get_agent_by_name(name)
+        agent = await self.get_agent_by_name(name)
         if agent is not None:
             logger.debug(f"Found existing agent: {name} with ID: {agent['id']}")
             return agent["id"]
@@ -231,12 +237,12 @@ class Database:
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
         }
-        
-        self.backend.add('agents', data)
+
+        await self.backend.add('agents', data)
         logger.info(f"Created new agent: {name} with ID: {agent_id}")
         return agent_id
     
-    def create_user(self, user_id: Optional[str] = None, name: Optional[str] = None, description: Optional[str] = None) -> str:
+    async def create_user(self, user_id: Optional[str] = None, name: Optional[str] = None, description: Optional[str] = None) -> str:
         """Create a new user.
 
         Args:
@@ -263,9 +269,9 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.add('users', data)
+        return await self.backend.add('users', data)
 
-    def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+    async def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get a user by ID.
 
         Args:
@@ -274,9 +280,9 @@ class Database:
         Returns:
             User data or None if not found
         """
-        return self.backend.select_one('users', {'id': user_id})
+        return await self.backend.select_one('users', {'id': user_id})
 
-    def get_user_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         """Get a user by name.
 
         Args:
@@ -285,17 +291,17 @@ class Database:
         Returns:
             User data or None if not found
         """
-        return self.backend.select_one('users', {'name': name})
+        return await self.backend.select_one('users', {'name': name})
 
-    def get_all_users(self) -> List[Dict[str, Any]]:
+    async def get_all_users(self) -> List[Dict[str, Any]]:
         """Get all users.
 
         Returns:
             List of user data
         """
-        return self.backend.select('users')
+        return await self.backend.select('users')
 
-    def update_user(self, user_id: str, name: Optional[str] = None,
+    async def update_user(self, user_id: str, name: Optional[str] = None,
                     description: Optional[str] = None) -> bool:
         """Update a user.
 
@@ -308,7 +314,7 @@ class Database:
             True if successful, False otherwise
         """
         # Get current user data
-        user = self.get_user(user_id)
+        user = await self.get_user(user_id)
         if not user:
             return False
 
@@ -325,10 +331,10 @@ class Database:
             'updated_at': now
         }
 
-        rows_updated = self.backend.update('users', data, {'id': user_id})
+        rows_updated = await self.backend.update('users', data, {'id': user_id})
         return rows_updated > 0
 
-    def delete_user(self, user_id: str) -> bool:
+    async def delete_user(self, user_id: str) -> bool:
         """Delete a user.
 
         Args:
@@ -337,10 +343,10 @@ class Database:
         Returns:
             True if successful, False otherwise
         """
-        rows_deleted = self.backend.delete('users', {'id': user_id})
+        rows_deleted = await self.backend.delete('users', {'id': user_id})
         return rows_deleted > 0
 
-    def get_user_name(self, user_id: str) -> Optional[str]:
+    async def get_user_name(self, user_id: str) -> Optional[str]:
         """Get a user's name by ID.
 
         Args:
@@ -349,22 +355,22 @@ class Database:
         Returns:
             User name or None if not found
         """
-        user = self.get_user(user_id)
+        user = await self.get_user(user_id)
         if user is None:
             return None
         return user.get("name")
 
     # Agent methods (additional)
 
-    def get_all_agents(self) -> List[Dict[str, Any]]:
+    async def get_all_agents(self) -> List[Dict[str, Any]]:
         """Get all agents.
 
         Returns:
             List of agent data
         """
-        return self.backend.select('agents')
+        return await self.backend.select('agents')
 
-    def update_agent(self, agent_id: str, name: Optional[str] = None,
+    async def update_agent(self, agent_id: str, name: Optional[str] = None,
                      description: Optional[str] = None) -> bool:
         """Update an agent.
 
@@ -377,7 +383,7 @@ class Database:
             True if successful, False otherwise
         """
         # Get current agent data
-        agent = self.get_agent(agent_id)
+        agent = await self.get_agent(agent_id)
         if not agent:
             return False
 
@@ -394,10 +400,10 @@ class Database:
             'updated_at': now
         }
 
-        rows_updated = self.backend.update('agents', data, {'id': agent_id})
+        rows_updated = await self.backend.update('agents', data, {'id': agent_id})
         return rows_updated > 0
 
-    def delete_agent(self, agent_id: str) -> bool:
+    async def delete_agent(self, agent_id: str) -> bool:
         """Delete an agent.
 
         Args:
@@ -406,10 +412,10 @@ class Database:
         Returns:
             True if successful, False otherwise
         """
-        rows_deleted = self.backend.delete('agents', {'id': agent_id})
+        rows_deleted = await self.backend.delete('agents', {'id': agent_id})
         return rows_deleted > 0
 
-    def get_agent_name(self, agent_id: str) -> Optional[str]:
+    async def get_agent_name(self, agent_id: str) -> Optional[str]:
         """Get an agent's name by ID.
 
         Args:
@@ -418,14 +424,14 @@ class Database:
         Returns:
             Agent name or None if not found
         """
-        agent = self.get_agent(agent_id)
+        agent = await self.get_agent(agent_id)
         if agent is None:
             return None
         return agent.get("name")
 
     # Agent methods
 
-    def create_agent(self, agent_id: Optional[str] = None, name: Optional[str] = None, description: Optional[str] = None) -> str:
+    async def create_agent(self, agent_id: Optional[str] = None, name: Optional[str] = None, description: Optional[str] = None) -> str:
         """Create a new agent.
 
         Args:
@@ -452,9 +458,9 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.add('agents', data)
+        return await self.backend.add('agents', data)
 
-    def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
+    async def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get an agent by ID.
 
         Args:
@@ -463,9 +469,9 @@ class Database:
         Returns:
             Agent data or None if not found
         """
-        return self.backend.select_one('agents', {'id': agent_id})
+        return await self.backend.select_one('agents', {'id': agent_id})
 
-    def get_agent_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    async def get_agent_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         """Get an agent by name.
 
         Args:
@@ -474,11 +480,11 @@ class Database:
         Returns:
             Agent data or None if not found
         """
-        return self.backend.select_one('agents', {'name': name})
+        return await self.backend.select_one('agents', {'name': name})
 
     # Session methods
 
-    def create_session(self, user_id: str, agent_id: str, name: Optional[str] = None,
+    async def create_session(self, user_id: str, agent_id: str, name: Optional[str] = None,
                        session_id: Optional[str] = None) -> str:
         """Create a new session.
 
@@ -508,9 +514,9 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.add('sessions', data)
+        return await self.backend.add('sessions', data)
 
-    def get_session_by_name(self, name: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def get_session_by_name(self, name: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get a session by name.
 
         Args:
@@ -523,12 +529,12 @@ class Database:
         """
         if user_id is not None:
             # User-scoped lookup: Filter by both name and user_id for proper data isolation
-            return self.backend.select_one('sessions', {'name': name, 'user_id': user_id})
+            return await self.backend.select_one('sessions', {'name': name, 'user_id': user_id})
         else:
             # Global lookup (backward compatibility): Use with caution in multi-user scenarios
-            return self.backend.select_one('sessions', {'name': name})
+            return await self.backend.select_one('sessions', {'name': name})
 
-    def create_session_with_name(self, user_id: str, agent_id: str, name: str) -> str:
+    async def create_session_with_name(self, user_id: str, agent_id: str, name: str) -> str:
         """Create a new session with a specific name.
 
         Args:
@@ -558,7 +564,7 @@ class Database:
         }
 
         try:
-            return self.backend.add('sessions', data)
+            return await self.backend.add('sessions', data)
         except Exception as e:
             # Check if this is a uniqueness constraint violation
             error_msg = str(e).lower()
@@ -571,7 +577,7 @@ class Database:
                 # Some other database error
                 raise RuntimeError(f"Failed to create session '{name}': {e}") from e
 
-    def get_or_create_session_by_name(self, user_id: str, agent_id: str, name: str) -> str:
+    async def get_or_create_session_by_name(self, user_id: str, agent_id: str, name: str) -> str:
         """Get a session by name or create if it doesn't exist.
 
         Args:
@@ -589,14 +595,14 @@ class Database:
             raise ValueError("Session name cannot be None")
 
         # Check if session exists for this specific user (FIXED: added user_id parameter)
-        session = self.get_session_by_name(name, user_id=user_id)
+        session = await self.get_session_by_name(name, user_id=user_id)
         if session is not None:
             return session["id"]
 
         # Create new session
-        return self.create_session_with_name(user_id, agent_id, name)
+        return await self.create_session_with_name(user_id, agent_id, name)
 
-    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get a session by ID.
 
         Args:
@@ -605,9 +611,9 @@ class Database:
         Returns:
             Session data or None if not found
         """
-        return self.backend.select_one('sessions', {'id': session_id})
+        return await self.backend.select_one('sessions', {'id': session_id})
 
-    def update_session(self, session_id: str, name: Optional[str] = None) -> bool:
+    async def update_session(self, session_id: str, name: Optional[str] = None) -> bool:
         """Update a session.
 
         Args:
@@ -618,7 +624,7 @@ class Database:
             True if successful, False otherwise
         """
         # Get current session data
-        session = self.get_session(session_id)
+        session = await self.get_session(session_id)
         if not session:
             return False
 
@@ -633,10 +639,10 @@ class Database:
             'updated_at': now
         }
 
-        rows_updated = self.backend.update('sessions', data, {'id': session_id})
+        rows_updated = await self.backend.update('sessions', data, {'id': session_id})
         return rows_updated > 0
 
-    def delete_session(self, session_id: str) -> bool:
+    async def delete_session(self, session_id: str) -> bool:
         """Delete a session.
 
         Args:
@@ -645,10 +651,10 @@ class Database:
         Returns:
             True if successful, False otherwise
         """
-        rows_deleted = self.backend.delete('sessions', {'id': session_id})
+        rows_deleted = await self.backend.delete('sessions', {'id': session_id})
         return rows_deleted > 0
 
-    def get_sessions(self, user_id: Optional[str] = None, agent_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_sessions(self, user_id: Optional[str] = None, agent_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get sessions, optionally filtered by user and/or agent.
 
         Args:
@@ -667,13 +673,13 @@ class Database:
             conditions['agent_id'] = agent_id
 
         if conditions:
-            return self.backend.select('sessions', conditions)
+            return await self.backend.select('sessions', conditions)
         else:
-            return self.backend.select('sessions')
+            return await self.backend.select('sessions')
 
     # Round methods
 
-    def create_round(self, session_id: str, round_id: Optional[str] = None) -> str:
+    async def create_round(self, session_id: str, round_id: Optional[str] = None) -> str:
         """Create a new round.
 
         Args:
@@ -698,9 +704,9 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.add('rounds', data)
+        return await self.backend.add('rounds', data)
 
-    def get_round(self, round_id: str) -> Optional[Dict[str, Any]]:
+    async def get_round(self, round_id: str) -> Optional[Dict[str, Any]]:
         """Get a round by ID.
 
         Args:
@@ -709,11 +715,11 @@ class Database:
         Returns:
             Round data or None if not found
         """
-        return self.backend.select_one('rounds', {'id': round_id})
+        return await self.backend.select_one('rounds', {'id': round_id})
 
     # Message methods
 
-    def add_message(self, round_id: str, role: str, content: str, message_id: Optional[str] = None,
+    async def add_message(self, round_id: str, role: str, content: str, message_id: Optional[str] = None,
                    created_at: Optional[str] = None, updated_at: Optional[str] = None) -> str:
         """Add a message to a round.
 
@@ -755,9 +761,9 @@ class Database:
             'updated_at': updated_at
         }
 
-        return self.backend.add('messages', data)
+        return await self.backend.add('messages', data)
 
-    def get_message(self, message_id: str) -> Optional[Dict[str, Any]]:
+    async def get_message(self, message_id: str) -> Optional[Dict[str, Any]]:
         """Get a message by ID.
 
         Args:
@@ -766,9 +772,9 @@ class Database:
         Returns:
             Message data or None if not found
         """
-        return self.backend.select_one('messages', {'id': message_id})
+        return await self.backend.select_one('messages', {'id': message_id})
 
-    def get_messages_by_round(self, round_id: str) -> List[Dict[str, Any]]:
+    async def get_messages_by_round(self, round_id: str) -> List[Dict[str, Any]]:
         """Get all messages in a round.
 
         Args:
@@ -777,9 +783,9 @@ class Database:
         Returns:
             List of message data
         """
-        return self.backend.select('messages', {'round_id': round_id})
+        return await self.backend.select('messages', {'round_id': round_id})
 
-    def update_message(self, message_id: str, content: str) -> bool:
+    async def update_message(self, message_id: str, content: str) -> bool:
         """Update a message.
 
         Args:
@@ -797,10 +803,10 @@ class Database:
             'updated_at': now
         }
 
-        rows_updated = self.backend.update('messages', data, {'id': message_id})
+        rows_updated = await self.backend.update('messages', data, {'id': message_id})
         return rows_updated > 0
 
-    def delete_message(self, message_id: str) -> bool:
+    async def delete_message(self, message_id: str) -> bool:
         """Delete a message.
 
         Args:
@@ -809,10 +815,10 @@ class Database:
         Returns:
             True if successful, False otherwise
         """
-        rows_deleted = self.backend.delete('messages', {'id': message_id})
+        rows_deleted = await self.backend.delete('messages', {'id': message_id})
         return rows_deleted > 0
 
-    def get_messages_by_session(self, session_id: str, limit: Optional[int] = None,
+    async def get_messages_by_session(self, session_id: str, limit: Optional[int] = None,
                                sort_by: str = 'timestamp', order: str = 'desc') -> List[Dict[str, Any]]:
         """Get messages for a session with optional limit and sorting.
 
@@ -823,22 +829,32 @@ class Database:
             order: Sort order, either 'asc' or 'desc' (default: 'desc')
 
         Returns:
-            List of message data from the messages table only
+            List of message data with session_id included via JOIN query
         """
-        # Get messages from traditional messages table (rounds-based) only
-        # Note: We do NOT include m0_raw table data as that contains internal processing data
-        # that should not be exposed through the API
-        messages = []
+        # Use JOIN query to get messages with session_id from rounds table
+        # This avoids the need to add session_id column to messages table
+        query = """
+        SELECT m.id, m.round_id, m.role, m.content, m.created_at, m.updated_at, r.session_id
+        FROM messages m
+        JOIN rounds r ON m.round_id = r.id
+        WHERE r.session_id = %s
+        """
 
-        # Get messages from traditional messages table (rounds-based)
-        rounds = self.backend.select('rounds', {'session_id': session_id})
-        if rounds:
-            for round_data in rounds:
-                round_messages = self.get_messages_by_round(round_data['id'])
-                # Add session_id to each message for API compatibility
-                for message in round_messages:
-                    message['session_id'] = session_id
-                messages.extend(round_messages)
+        rows = await self.backend.execute(query, (session_id,))
+
+        # Convert to list of dictionaries
+        messages = []
+        for row in rows:
+            message = {
+                'id': row['id'],
+                'round_id': row['round_id'],
+                'role': row['role'],
+                'content': row['content'],
+                'created_at': row['created_at'],
+                'updated_at': row['updated_at'],
+                'session_id': row['session_id']  # From JOIN with rounds table
+            }
+            messages.append(message)
 
         # Sort messages based on the specified field and order
         if sort_by == 'timestamp':
@@ -854,7 +870,7 @@ class Database:
 
         return messages
 
-    def get_m0_raw_by_session(self, session_id: str) -> List[Dict[str, Any]]:
+    async def get_m0_raw_by_session(self, session_id: str) -> List[Dict[str, Any]]:
         """Get messages from m0_raw table for a specific session.
 
         Args:
@@ -865,10 +881,10 @@ class Database:
         """
         import json
         from datetime import datetime
-        
+
         try:
             # Get all messages from m0_raw table
-            all_m0_raw = self.backend.select('m0_raw')
+            all_m0_raw = await self.backend.select('m0_raw')
 
             session_messages = []
             for message in all_m0_raw:
@@ -959,7 +975,7 @@ class Database:
 
     # API key methods
 
-    def create_api_key(
+    async def create_api_key(
         self,
         user_id: str,
         key: Optional[str] = None,
@@ -1003,9 +1019,9 @@ class Database:
             'expires_at': expires_at
         }
 
-        return self.backend.add('api_keys', data)
+        return await self.backend.add('api_keys', data)
 
-    def get_api_key(self, api_key_id: str) -> Optional[Dict[str, Any]]:
+    async def get_api_key(self, api_key_id: str) -> Optional[Dict[str, Any]]:
         """Get an API key by ID.
 
         Args:
@@ -1014,9 +1030,9 @@ class Database:
         Returns:
             API key data or None if not found
         """
-        return self.backend.select_one('api_keys', {'id': api_key_id})
+        return await self.backend.select_one('api_keys', {'id': api_key_id})
 
-    def get_api_key_by_key(self, key: str) -> Optional[Dict[str, Any]]:
+    async def get_api_key_by_key(self, key: str) -> Optional[Dict[str, Any]]:
         """Get an API key by key.
 
         Args:
@@ -1025,9 +1041,9 @@ class Database:
         Returns:
             API key data or None if not found
         """
-        return self.backend.select_one('api_keys', {'key': key})
+        return await self.backend.select_one('api_keys', {'key': key})
 
-    def get_api_keys_by_user(self, user_id: str) -> List[Dict[str, Any]]:
+    async def get_api_keys_by_user(self, user_id: str) -> List[Dict[str, Any]]:
         """Get all API keys for a user.
 
         Args:
@@ -1036,9 +1052,9 @@ class Database:
         Returns:
             List of API key data
         """
-        return self.backend.select('api_keys', {'user_id': user_id})
+        return await self.backend.select('api_keys', {'user_id': user_id})
 
-    def delete_api_key(self, api_key_id: str) -> bool:
+    async def delete_api_key(self, api_key_id: str) -> bool:
         """Delete an API key.
 
         Args:
@@ -1047,10 +1063,10 @@ class Database:
         Returns:
             True if successful, False otherwise
         """
-        rows_deleted = self.backend.delete('api_keys', {'id': api_key_id})
+        rows_deleted = await self.backend.delete('api_keys', {'id': api_key_id})
         return rows_deleted > 0
 
-    def validate_api_key(self, key: str) -> Optional[Dict[str, Any]]:
+    async def validate_api_key(self, key: str) -> Optional[Dict[str, Any]]:
         """Validate an API key.
 
         Args:
@@ -1059,7 +1075,7 @@ class Database:
         Returns:
             API key data if valid, None otherwise
         """
-        api_key = self.get_api_key_by_key(key)
+        api_key = await self.get_api_key_by_key(key)
 
         if api_key is None:
             return None
@@ -1075,7 +1091,7 @@ class Database:
 
     # Knowledge methods
 
-    def add_knowledge(self, user_id: str, content: str, knowledge_id: Optional[str] = None) -> str:
+    async def add_knowledge(self, user_id: str, content: str, knowledge_id: Optional[str] = None) -> str:
         """Add knowledge for a user.
 
         Args:
@@ -1102,9 +1118,9 @@ class Database:
             'updated_at': now
         }
 
-        return self.backend.add('knowledge', data)
+        return await self.backend.add('knowledge', data)
 
-    def get_knowledge(self, knowledge_id: str) -> Optional[Dict[str, Any]]:
+    async def get_knowledge(self, knowledge_id: str) -> Optional[Dict[str, Any]]:
         """Get knowledge by ID.
 
         Args:
@@ -1113,9 +1129,9 @@ class Database:
         Returns:
             Knowledge data or None if not found
         """
-        return self.backend.select_one('knowledge', {'id': knowledge_id})
+        return await self.backend.select_one('knowledge', {'id': knowledge_id})
 
-    def get_knowledge_by_user(self, user_id: str) -> List[Dict[str, Any]]:
+    async def get_knowledge_by_user(self, user_id: str) -> List[Dict[str, Any]]:
         """Get all knowledge for a user.
 
         Args:
@@ -1124,9 +1140,9 @@ class Database:
         Returns:
             List of knowledge data
         """
-        return self.backend.select('knowledge', {'user_id': user_id})
+        return await self.backend.select('knowledge', {'user_id': user_id})
 
-    def update_knowledge(self, knowledge_id: str, content: str) -> bool:
+    async def update_knowledge(self, knowledge_id: str, content: str) -> bool:
         """Update knowledge.
 
         Args:
@@ -1144,10 +1160,10 @@ class Database:
             'updated_at': now
         }
 
-        rows_updated = self.backend.update('knowledge', data, {'id': knowledge_id})
+        rows_updated = await self.backend.update('knowledge', data, {'id': knowledge_id})
         return rows_updated > 0
 
-    def delete_knowledge(self, knowledge_id: str) -> bool:
+    async def delete_knowledge(self, knowledge_id: str) -> bool:
         """Delete knowledge.
 
         Args:
@@ -1156,5 +1172,5 @@ class Database:
         Returns:
             True if successful, False otherwise
         """
-        rows_deleted = self.backend.delete('knowledge', {'id': knowledge_id})
+        rows_deleted = await self.backend.delete('knowledge', {'id': knowledge_id})
         return rows_deleted > 0

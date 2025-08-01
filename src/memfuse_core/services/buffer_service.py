@@ -5,6 +5,7 @@ and QueryBuffer components, providing improved performance and functionality.
 """
 
 import os
+import asyncio
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from omegaconf import DictConfig
 from loguru import logger
@@ -14,6 +15,7 @@ from ..buffer.write_buffer import WriteBuffer
 from ..buffer.query_buffer import QueryBuffer
 from ..buffer.speculative_buffer import SpeculativeBuffer
 from ..buffer.config_factory import BufferConfigManager
+from ..utils.token_counter import get_token_counter
 
 if TYPE_CHECKING:
     from .memory_service import MemoryService
@@ -652,14 +654,18 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             return []
         
         try:
+            logger.debug(f"BufferService.get_messages_by_session: buffer_enabled={self.buffer_enabled}, session_id={session_id}")
             if not self.buffer_enabled:
                 # Bypass mode: Delegate to MemoryService
-                return await self.memory_service.get_messages_by_session(
+                logger.debug(f"BufferService.get_messages_by_session: Delegating to MemoryService")
+                result = await self.memory_service.get_messages_by_session(
                     session_id=session_id,
                     limit=limit,
                     sort_by=sort_by,
                     order=order
                 )
+                logger.debug(f"BufferService.get_messages_by_session: MemoryService returned {len(result)} messages")
+                return result
             else:
                 # Buffer enabled mode
                 if buffer_only:
@@ -778,6 +784,84 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 )
             return []
 
+    async def _read_from_all_sources(self, message_ids: List[str]) -> Dict[str, Any]:
+        """Read specific messages from all sources (RoundBuffer, HybridBuffer, Database).
+
+        Args:
+            message_ids: List of message IDs to read
+
+        Returns:
+            Dictionary with status, code, and messages
+        """
+        try:
+            logger.info(f"BufferService._read_from_all_sources: Reading {len(message_ids)} messages")
+            found_messages = []
+
+            # Step 1: Search in RoundBuffer (highest priority)
+            if self.write_buffer:
+                round_buffer = self.write_buffer.get_round_buffer()
+                if round_buffer:
+                    for message_id in message_ids:
+                        message = round_buffer.get_message_by_id(message_id)
+                        if message:
+                            found_messages.append(message)
+                            logger.debug(f"BufferService._read_from_all_sources: Found message {message_id} in RoundBuffer")
+
+            # Step 2: Search in HybridBuffer for remaining messages
+            remaining_ids = [mid for mid in message_ids if not any(msg.get('id') == mid for msg in found_messages)]
+            if remaining_ids and self.write_buffer:
+                hybrid_buffer = self.write_buffer.get_hybrid_buffer()
+                if hybrid_buffer:
+                    for message_id in remaining_ids:
+                        message = hybrid_buffer.get_message_by_id(message_id)
+                        if message:
+                            found_messages.append(message)
+                            logger.debug(f"BufferService._read_from_all_sources: Found message {message_id} in HybridBuffer")
+
+            # Step 3: Search in Database for remaining messages
+            remaining_ids = [mid for mid in message_ids if not any(msg.get('id') == mid for msg in found_messages)]
+            if remaining_ids and self.memory_service:
+                db_result = await self.memory_service.read(remaining_ids)
+                if db_result.get("status") == "success":
+                    db_messages = db_result.get("data", {}).get("messages", [])
+                    found_messages.extend(db_messages)
+                    logger.debug(f"BufferService._read_from_all_sources: Found {len(db_messages)} messages in Database")
+
+            logger.info(f"BufferService._read_from_all_sources: Found {len(found_messages)} out of {len(message_ids)} requested messages")
+
+            # Check if all messages were found
+            found_ids = {msg.get('id') for msg in found_messages}
+            not_found_ids = [mid for mid in message_ids if mid not in found_ids]
+
+            if not_found_ids:
+                return {
+                    "status": "error",
+                    "code": 404,
+                    "data": {"not_found_ids": not_found_ids},
+                    "message": f"Some message IDs were not found",
+                    "errors": [
+                        {"field": "message_ids",
+                         "message": f"Message IDs not found: {', '.join(not_found_ids)}"}
+                    ],
+                }
+
+            return {
+                "status": "success",
+                "code": 200,
+                "data": {"messages": found_messages},
+                "message": f"Read {len(found_messages)} messages",
+                "errors": None,
+            }
+
+        except Exception as e:
+            logger.error(f"BufferService._read_from_all_sources: Error: {e}")
+            import traceback
+            logger.error(f"BufferService._read_from_all_sources: Traceback: {traceback.format_exc()}")
+            # Fallback to database-only query
+            if self.memory_service:
+                return await self.memory_service.read(message_ids)
+            return self._error_response(f"Read operation failed: {e}")
+
     def _message_belongs_to_session(self, message: Dict[str, Any], session_id: str) -> bool:
         """Check if a message belongs to the specified session.
 
@@ -840,11 +924,15 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         # RoundBuffer messages (highest priority) - overwrites others if same ID
         for msg in round_buffer_messages:
             msg_id = msg.get('id')
+            logger.debug(f"BufferService._merge_messages_from_all_sources: RoundBuffer message: id={msg_id}, content={msg.get('content', '')[:50]}...")
             if msg_id:
                 message_dict[msg_id] = msg
+            else:
+                logger.warning(f"BufferService._merge_messages_from_all_sources: RoundBuffer message missing ID: {msg}")
 
         # Convert back to list
         merged_messages = list(message_dict.values())
+        logger.debug(f"BufferService._merge_messages_from_all_sources: Final merged_messages count: {len(merged_messages)}")
 
         # Sort the merged messages
         reverse_order = (order.lower() == "desc")
@@ -966,21 +1054,499 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
     # Delegate other methods to memory service
     async def read(self, item_ids: List[str]) -> Dict[str, Any]:
         """Read items from memory."""
-        if not self.memory_service:
-            return self._error_response("No memory service available")
-        return await self.memory_service.read(item_ids)
-    
+        try:
+            logger.debug(f"BufferService.read: Reading {len(item_ids)} message IDs: {item_ids}")
+
+            if not self.buffer_enabled:
+                # Bypass mode: Delegate to MemoryService
+                logger.debug(f"BufferService.read: Delegating to MemoryService (bypass mode)")
+                return await self.memory_service.read(item_ids)
+            else:
+                # Buffer mode: Search in RoundBuffer, HybridBuffer, then Database
+                logger.debug(f"BufferService.read: Searching in all buffer sources")
+                return await self._read_from_all_sources(item_ids)
+
+        except Exception as e:
+            logger.error(f"BufferService.read: Error: {e}")
+            import traceback
+            logger.error(f"BufferService.read: Traceback: {traceback.format_exc()}")
+            return self._error_response(f"Read operation failed: {e}")
+
+    async def _update_in_buffers(self, item_ids: List[str], new_items: List[Any]) -> None:
+        """Update messages in buffers (RoundBuffer and HybridBuffer).
+
+        Args:
+            item_ids: List of message IDs to update
+            new_items: List of new message data
+        """
+        try:
+            logger.debug(f"BufferService._update_in_buffers: Updating {len(item_ids)} items in buffers")
+
+            # Update in RoundBuffer
+            if self.write_buffer:
+                round_buffer = self.write_buffer.get_round_buffer()
+                if round_buffer:
+                    await self._update_in_round_buffer(round_buffer, item_ids, new_items)
+
+                # Update in HybridBuffer
+                hybrid_buffer = self.write_buffer.get_hybrid_buffer()
+                if hybrid_buffer:
+                    await self._update_in_hybrid_buffer(hybrid_buffer, item_ids, new_items)
+
+        except Exception as e:
+            logger.error(f"BufferService._update_in_buffers: Error: {e}")
+
+    async def _update_in_round_buffer(self, round_buffer, item_ids: List[str], new_items: List[Any]) -> None:
+        """Update messages in RoundBuffer."""
+        try:
+            async with round_buffer._lock:
+                for round_messages in round_buffer.rounds:
+                    for i, message in enumerate(round_messages):
+                        message_id = message.get("id")
+                        if message_id in item_ids:
+                            # Find corresponding new item
+                            item_index = item_ids.index(message_id)
+                            if item_index < len(new_items):
+                                new_item = new_items[item_index]
+                                # Update message content and metadata
+                                round_messages[i].update(new_item)
+                                logger.debug(f"BufferService: Updated message {message_id} in RoundBuffer")
+        except Exception as e:
+            logger.error(f"BufferService._update_in_round_buffer: Error: {e}")
+
+    async def _update_in_hybrid_buffer(self, hybrid_buffer, item_ids: List[str], new_items: List[Any]) -> None:
+        """Update messages in HybridBuffer."""
+        try:
+            async with hybrid_buffer._data_lock:
+                for round_messages in hybrid_buffer.original_rounds:
+                    for i, message in enumerate(round_messages):
+                        message_id = message.get("id")
+                        if message_id in item_ids:
+                            # Find corresponding new item
+                            item_index = item_ids.index(message_id)
+                            if item_index < len(new_items):
+                                new_item = new_items[item_index]
+                                # Update message content and metadata
+                                round_messages[i].update(new_item)
+                                logger.debug(f"BufferService: Updated message {message_id} in HybridBuffer")
+        except Exception as e:
+            logger.error(f"BufferService._update_in_hybrid_buffer: Error: {e}")
+
+    async def _find_message_location(self, message_id: str) -> tuple[str, Any]:
+        """Find where a message is located and return its location and data.
+
+        Args:
+            message_id: ID of the message to find
+
+        Returns:
+            Tuple of (location, message_data) where location is:
+            - "round_buffer": Message found in RoundBuffer
+            - "hybrid_buffer": Message found in HybridBuffer
+            - "database": Message not found in buffers (assumed in database)
+            - "not_found": Message not found anywhere
+        """
+        try:
+            # Check RoundBuffer first
+            if self.write_buffer:
+                round_buffer = self.write_buffer.get_round_buffer()
+                if round_buffer:
+                    # round_buffer.rounds is List[MessageList], where MessageList is List[Dict]
+                    for round_messages in round_buffer.rounds:
+                        for message in round_messages:
+                            if isinstance(message, dict) and message.get('id') == message_id:
+                                return ("round_buffer", message)
+
+                # Check HybridBuffer
+                hybrid_buffer = self.write_buffer.get_hybrid_buffer()
+                if hybrid_buffer:
+                    # hybrid_buffer.original_rounds is List[MessageList], where MessageList is List[Dict]
+                    for round_messages in hybrid_buffer.original_rounds:
+                        for message in round_messages:
+                            if isinstance(message, dict) and message.get('id') == message_id:
+                                return ("hybrid_buffer", message)
+
+            # Not found in buffers, assume it's in database
+            return ("database", None)
+
+        except Exception as e:
+            logger.error(f"BufferService._find_message_location: Error finding message {message_id}: {e}")
+            return ("not_found", None)
+
+    async def _update_message_in_buffers(self, message_id: str, new_message: Any) -> bool:
+        """Update a single message in buffers (RoundBuffer and HybridBuffer).
+
+        Args:
+            message_id: ID of the message to update
+            new_message: New message data
+
+        Returns:
+            True if message was found and updated in buffers, False otherwise
+        """
+        try:
+            # Find message location first
+            location, _ = await self._find_message_location(message_id)
+
+            if location == "round_buffer":
+                # Update in RoundBuffer
+                round_buffer = self.write_buffer.get_round_buffer()
+                if round_buffer:
+                    for round_messages in round_buffer.rounds:
+                        for i, message in enumerate(round_messages):
+                            if isinstance(message, dict) and message.get('id') == message_id:
+                                # Preserve the original message ID and other essential fields
+                                updated_message = message.copy()
+                                updated_message.update(new_message)
+                                updated_message['id'] = message_id  # Ensure ID is preserved
+                                round_messages[i] = updated_message
+                                logger.info(f"BufferService: Updated message {message_id} in RoundBuffer")
+                                return True
+
+            elif location == "hybrid_buffer":
+                # Update in HybridBuffer
+                hybrid_buffer = self.write_buffer.get_hybrid_buffer()
+                if hybrid_buffer:
+                    for round_messages in hybrid_buffer.original_rounds:
+                        for i, message in enumerate(round_messages):
+                            if isinstance(message, dict) and message.get('id') == message_id:
+                                # Preserve the original message ID and other essential fields
+                                updated_message = message.copy()
+                                updated_message.update(new_message)
+                                updated_message['id'] = message_id  # Ensure ID is preserved
+                                round_messages[i] = updated_message
+                                logger.info(f"BufferService: Updated message {message_id} in HybridBuffer")
+                                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"BufferService._update_message_in_buffers: Error updating message {message_id}: {e}")
+            return False
+
+    async def _delete_message_from_buffers(self, message_id: str) -> bool:
+        """Delete a single message from buffers (RoundBuffer and HybridBuffer).
+
+        Args:
+            message_id: ID of the message to delete
+
+        Returns:
+            True if message was found and deleted from buffers, False otherwise
+        """
+        try:
+            # Find message location first
+            location, _ = await self._find_message_location(message_id)
+
+            if location == "round_buffer":
+                # Delete from RoundBuffer
+                round_buffer = self.write_buffer.get_round_buffer()
+                if round_buffer:
+                    for round_messages in round_buffer.rounds:
+                        for i, message in enumerate(round_messages):
+                            if isinstance(message, dict) and message.get('id') == message_id:
+                                del round_messages[i]
+                                logger.info(f"BufferService: Deleted message {message_id} from RoundBuffer")
+                                return True
+
+            elif location == "hybrid_buffer":
+                # Delete from HybridBuffer
+                hybrid_buffer = self.write_buffer.get_hybrid_buffer()
+                if hybrid_buffer:
+                    for round_messages in hybrid_buffer.original_rounds:
+                        for i, message in enumerate(round_messages):
+                            if isinstance(message, dict) and message.get('id') == message_id:
+                                del round_messages[i]
+                                logger.info(f"BufferService: Deleted message {message_id} from HybridBuffer")
+                                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"BufferService._delete_message_from_buffers: Error deleting message {message_id}: {e}")
+            return False
+
+    async def _read_message_from_buffers(self, message_id: str) -> Any:
+        """Read a single message from buffers (RoundBuffer and HybridBuffer).
+
+        Args:
+            message_id: ID of the message to read
+
+        Returns:
+            Message data if found in buffers, None otherwise
+        """
+        try:
+            location, message_data = await self._find_message_location(message_id)
+
+            if location in ["round_buffer", "hybrid_buffer"]:
+                logger.info(f"BufferService: Found message {message_id} in {location}")
+                return message_data
+
+            return None
+
+        except Exception as e:
+            logger.error(f"BufferService._read_message_from_buffers: Error reading message {message_id}: {e}")
+            return None
+
+    async def _ultra_lightweight_flush(self) -> bool:
+        """Ultra-lightweight flush that only transfers without waiting.
+
+        This approach completely avoids connection pool pressure by:
+        1. Only doing RoundBuffer -> HybridBuffer transfer
+        2. Triggering flush but not waiting for completion
+        3. No timeouts or blocking operations
+        """
+        try:
+            logger.debug(f"BufferService._ultra_lightweight_flush: Starting transfer-only flush")
+
+            if self.write_buffer:
+                # Step 1: Quick transfer from RoundBuffer to HybridBuffer
+                round_buffer = self.write_buffer.get_round_buffer()
+                if round_buffer:
+                    await round_buffer.force_transfer()
+                    logger.debug(f"BufferService._ultra_lightweight_flush: RoundBuffer transfer completed")
+
+                # Step 2: Trigger flush but don't wait (fire and forget)
+                hybrid_buffer = self.write_buffer.get_hybrid_buffer()
+                if hybrid_buffer:
+                    # Just trigger the flush, don't wait for it
+                    await hybrid_buffer.flush_to_storage()
+                    logger.debug(f"BufferService._ultra_lightweight_flush: HybridBuffer flush triggered")
+
+            logger.debug(f"BufferService._ultra_lightweight_flush: Ultra-lightweight flush completed")
+            return True
+
+        except Exception as e:
+            logger.debug(f"BufferService._ultra_lightweight_flush: Failed to flush buffers: {e}")
+            return False
+
+    async def _force_flush_buffers(self) -> bool:
+        """Force flush all buffers to database and wait for completion.
+
+        This method ensures that all buffered data is persisted to the database
+        before proceeding with update/delete operations.
+        """
+        try:
+            logger.info(f"BufferService._force_flush_buffers: Starting force flush")
+
+            if self.write_buffer:
+                # Step 1: Transfer from RoundBuffer to HybridBuffer
+                round_buffer = self.write_buffer.get_round_buffer()
+                if round_buffer:
+                    await round_buffer.force_transfer()
+                    logger.info(f"BufferService._force_flush_buffers: RoundBuffer transfer completed")
+
+                # Step 2: Force flush HybridBuffer to storage and wait for completion
+                hybrid_buffer = self.write_buffer.get_hybrid_buffer()
+                if hybrid_buffer:
+                    # Force flush and wait for completion
+                    await hybrid_buffer.force_flush()
+                    logger.info(f"BufferService._force_flush_buffers: HybridBuffer force flush completed")
+
+                # Step 3: Wait for FlushManager to complete all pending operations
+                flush_manager = self.write_buffer.get_flush_manager()
+                if flush_manager:
+                    # Wait for all pending flush operations to complete
+                    await flush_manager.wait_for_completion()
+                    logger.info(f"BufferService._force_flush_buffers: FlushManager completion wait finished")
+
+            logger.info(f"BufferService._force_flush_buffers: Force flush completed successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"BufferService._force_flush_buffers: Failed to force flush buffers: {e}")
+            return False
+
     async def update(self, item_ids: List[str], new_items: List[Any]) -> Dict[str, Any]:
         """Update items in memory."""
-        if not self.memory_service:
-            return self._error_response("No memory service available")
-        return await self.memory_service.update(item_ids, new_items)
+        logger.info(f"BufferService.update: ENTRY - Updating {len(item_ids)} items: {item_ids}")
+        try:
+            logger.info(f"BufferService.update: Starting update process")
+
+            logger.info(f"BufferService.update: buffer_enabled = {self.buffer_enabled}")
+            if not self.buffer_enabled:
+                # Bypass mode: Delegate to MemoryService
+                logger.info(f"BufferService.update: Delegating to MemoryService (bypass mode)")
+                return await self.memory_service.update(item_ids, new_items)
+            else:
+                # Buffer mode: Try to update in buffers first, then database if needed
+                logger.info(f"BufferService.update: Updating in buffer mode")
+
+                # Step 1: Try to update messages in buffers
+                buffer_updated_ids = []
+                buffer_not_found_ids = []
+
+                for i, item_id in enumerate(item_ids):
+                    if await self._update_message_in_buffers(item_id, new_items[i]):
+                        buffer_updated_ids.append(item_id)
+                        logger.info(f"BufferService.update: Updated message {item_id} in buffer")
+                    else:
+                        buffer_not_found_ids.append(item_id)
+                        logger.info(f"BufferService.update: Message {item_id} not found in buffer")
+
+                # Step 2: For messages not found in buffers, try database
+                db_result = {"status": "success", "data": {"updated_ids": buffer_updated_ids}}
+
+                if buffer_not_found_ids:
+                    logger.info(f"BufferService.update: Trying to update {len(buffer_not_found_ids)} messages in database")
+                    db_new_items = [new_items[item_ids.index(item_id)] for item_id in buffer_not_found_ids]
+                    db_update_result = await self.memory_service.update(buffer_not_found_ids, db_new_items)
+                    logger.info(f"BufferService.update: Database update result: {db_update_result}")
+
+                    if db_update_result.get("status") == "success":
+                        db_updated_ids = db_update_result.get("data", {}).get("updated_ids", [])
+                        db_result["data"]["updated_ids"].extend(db_updated_ids)
+                    else:
+                        # Some messages not found in database either
+                        not_found_ids = db_update_result.get("data", {}).get("not_found_ids", buffer_not_found_ids)
+                        if not_found_ids:
+                            db_result = {
+                                "status": "error",
+                                "code": 404,
+                                "data": {"not_found_ids": not_found_ids},
+                                "message": "Some message IDs were not found",
+                                "errors": [{"field": "message_ids", "message": f"Message IDs not found: {', '.join(not_found_ids)}"}]
+                            }
+
+                return db_result
+
+        except Exception as e:
+            logger.error(f"BufferService.update: Error: {e}")
+            import traceback
+            logger.error(f"BufferService.update: Traceback: {traceback.format_exc()}")
+            return self._error_response(f"Update operation failed: {e}")
     
     async def delete(self, item_ids: List[str]) -> Dict[str, Any]:
-        """Delete items from memory."""
+        """Delete items from memory using data location-aware strategy."""
         if not self.memory_service:
             return self._error_response("No memory service available")
-        return await self.memory_service.delete(item_ids)
+
+        if not self.buffer_enabled:
+            # Bypass mode: Delegate to MemoryService
+            logger.debug(f"BufferService.delete: Delegating to MemoryService (bypass mode)")
+            return await self.memory_service.delete(item_ids)
+        else:
+            # Buffer mode: Check data location for each message and delete accordingly
+            logger.debug(f"BufferService.delete: Deleting in buffer mode with location awareness")
+
+            buffer_deleted_ids = []
+            database_ids = []
+
+            for item_id in item_ids:
+                # Check where the message is located
+                location, _ = await self._find_message_location(item_id)
+
+                if location in ["round_buffer", "hybrid_buffer"]:
+                    # Message found in buffer - delete from buffer
+                    if await self._delete_message_from_buffers(item_id):
+                        buffer_deleted_ids.append(item_id)
+                        logger.debug(f"BufferService.delete: Deleted message {item_id} from {location}")
+                    else:
+                        logger.warning(f"BufferService.delete: Failed to delete message {item_id} from {location}")
+                elif location == "database":
+                    # Message assumed to be in database
+                    database_ids.append(item_id)
+                    logger.debug(f"BufferService.delete: Message {item_id} not in buffers, will delete from database")
+                else:
+                    # Message not found anywhere
+                    logger.debug(f"BufferService.delete: Message {item_id} not found in buffers")
+                    database_ids.append(item_id)  # Still try database as fallback
+
+            # For messages not found in buffers, delete from database
+            db_result = {"status": "success", "data": {"deleted_ids": buffer_deleted_ids}}
+
+            if database_ids:
+                logger.debug(f"BufferService.delete: Deleting {len(database_ids)} messages from database")
+                db_delete_result = await self.memory_service.delete(database_ids)
+
+                if db_delete_result.get("status") == "success":
+                    db_deleted_ids = db_delete_result.get("data", {}).get("deleted_ids", [])
+                    db_result["data"]["deleted_ids"].extend(db_deleted_ids)
+                else:
+                    # Some messages not found in database either
+                    not_found_ids = db_delete_result.get("data", {}).get("not_found_ids", database_ids)
+                    if not_found_ids:
+                        db_result = {
+                            "status": "error",
+                            "code": 404,
+                            "data": {"not_found_ids": not_found_ids},
+                            "message": "Some message IDs were not found",
+                            "errors": [{"field": "message_ids", "message": f"Message IDs not found: {', '.join(not_found_ids)}"}]
+                        }
+
+            return db_result
+
+    async def _remove_from_buffers(self, item_ids: List[str]) -> None:
+        """Remove messages from buffers after they've been deleted from database.
+
+        Args:
+            item_ids: List of message IDs to remove from buffers
+        """
+        if not self.write_buffer:
+            return
+
+        try:
+            # Remove from RoundBuffer
+            for item_id in item_ids:
+                await self._remove_message_from_round_buffer(item_id)
+
+            # TODO: Also remove from HybridBuffer if needed
+            logger.debug(f"BufferService: Removed {len(item_ids)} messages from buffers")
+        except Exception as e:
+            logger.error(f"BufferService: Error removing messages from buffers: {e}")
+
+    async def _remove_message_from_round_buffer(self, message_id: str) -> bool:
+        """Remove a specific message from RoundBuffer.
+
+        Args:
+            message_id: ID of the message to remove
+
+        Returns:
+            True if message was found and removed, False otherwise
+        """
+        try:
+            # Iterate through rounds and messages to find and remove the target message
+            # Use reverse iteration to avoid index issues when removing items
+            for round_idx in range(len(self.write_buffer.round_buffer.rounds) - 1, -1, -1):
+                round_messages = self.write_buffer.round_buffer.rounds[round_idx]
+                for msg_idx in range(len(round_messages) - 1, -1, -1):
+                    message = round_messages[msg_idx]
+                    if message.get("id") == message_id:
+                        # Remove the message from this round
+                        round_messages.pop(msg_idx)
+                        logger.debug(f"BufferService: Removed message {message_id} from round {round_idx}")
+
+                        # If the round is now empty, remove the entire round
+                        if not round_messages:
+                            self.write_buffer.round_buffer.rounds.pop(round_idx)
+                            logger.debug(f"BufferService: Removed empty round {round_idx}")
+
+                        # Update token count (recalculate for simplicity)
+                        await self._recalculate_round_buffer_tokens()
+
+                        logger.info(f"BufferService: Successfully removed message {message_id} from RoundBuffer")
+                        return True
+
+            logger.warning(f"BufferService: Message {message_id} not found in RoundBuffer")
+            return False
+        except Exception as e:
+            logger.error(f"BufferService: Error removing message {message_id} from RoundBuffer: {e}")
+            return False
+
+    async def _recalculate_round_buffer_tokens(self) -> None:
+        """Recalculate token count for RoundBuffer after message removal."""
+        try:
+            total_tokens = 0
+            token_counter = get_token_counter(self.write_buffer.round_buffer.token_model)
+
+            for round_messages in self.write_buffer.round_buffer.rounds:
+                for message in round_messages:
+                    content = message.get("content", "")
+                    if content:
+                        tokens = await token_counter.count_tokens(content)
+                        total_tokens += tokens
+
+            self.write_buffer.round_buffer.current_tokens = total_tokens
+            logger.debug(f"BufferService: Recalculated RoundBuffer tokens: {total_tokens}")
+        except Exception as e:
+            logger.error(f"BufferService: Error recalculating RoundBuffer tokens: {e}")
     
     async def add_knowledge(self, knowledge_items: List[Any]) -> Dict[str, Any]:
         """Add knowledge items to memory."""

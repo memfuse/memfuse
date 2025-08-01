@@ -34,18 +34,18 @@ async def list_users(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """List all users or get a user by name."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # If name is provided, get user by name
     if name:
-        user = ensure_user_by_name_exists(db, name)
+        user = await ensure_user_by_name_exists(db, name)
         return ApiResponse.success(
             data={"users": [user]},
             message="User retrieved successfully",
         )
 
     # Otherwise, list all users
-    users = db.get_all_users()
+    users = await db.get_all_users()
     return ApiResponse.success(
         data={"users": users},
         message="Users retrieved successfully",
@@ -61,19 +61,19 @@ async def create_user(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Create a new user."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if user with the same name already exists
-    ensure_user_name_available(db, request.name)
+    await ensure_user_name_available(db, request.name)
 
     # Create the user
-    user_id = db.create_user(
+    user_id = await db.create_user(
         name=request.name,
         description=request.description,
     )
 
     # Get the created user
-    user = db.get_user(user_id)
+    user = await db.get_user(user_id)
 
     return ApiResponse.success(
         data={"user": user},
@@ -91,10 +91,10 @@ async def get_user(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Get user details."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Validate user exists
-    user = ensure_user_exists(db, user_id)
+    user = await ensure_user_exists(db, user_id)
 
     return ApiResponse.success(
         data={"user": user},
@@ -110,13 +110,13 @@ async def update_user(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Update user details."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if user exists
-    _ = ensure_user_exists(db, user_id)
+    _ = await ensure_user_exists(db, user_id)
 
     # Update the user
-    success = db.update_user(
+    success = await db.update_user(
         user_id=user_id,
         name=request.name,
         description=request.description,
@@ -131,7 +131,7 @@ async def update_user(
         raise_api_error(error_response)
 
     # Get the updated user
-    updated_user = db.get_user(user_id)
+    updated_user = await db.get_user(user_id)
 
     return ApiResponse.success(
         data={"user": updated_user},
@@ -146,13 +146,13 @@ async def delete_user(
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> None:
     """Delete a user."""
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
 
     # Check if user exists
-    _ = ensure_user_exists(db, user_id)
+    _ = await ensure_user_exists(db, user_id)
 
     # Delete the user
-    success = db.delete_user(user_id)
+    success = await db.delete_user(user_id)
 
     if not success:
         error_response = ApiResponse.error(
@@ -183,18 +183,18 @@ async def query_memory(
     """
     from ..services.service_factory import ServiceFactory
 
-    db = DatabaseService.get_instance()
+    db = await DatabaseService.get_instance()
     logger.info("Using BufferService for query operations")
 
     # Check if user exists
     # is_valid, error_response, user = validate_user_exists(db, user_id)
     # if not is_valid:
     #     return error_response
-    user = ensure_user_exists(db, user_id)
+    user = await ensure_user_exists(db, user_id)
 
     # Validate session if provided
     if request.session_id:
-        session = db.get_session(request.session_id)
+        session = await db.get_session(request.session_id)
         if not session or session["user_id"] != user_id:
             error_response = ApiResponse.error(
                 message=f"Session '{request.session_id}' not found for user '{user_id}'",
@@ -210,7 +210,7 @@ async def query_memory(
 
     # Validate agent if provided
     if request.agent_id:
-        agent = db.get_agent(request.agent_id)
+        agent = await db.get_agent(request.agent_id)
         if not agent:
             error_response = ApiResponse.error(
                 message=f"Agent '{request.agent_id}' not found",
@@ -225,7 +225,7 @@ async def query_memory(
             raise_api_error(error_response)
 
     # Always query all sessions for the user
-    sessions = db.get_sessions(user_id=user_id, agent_id=request.agent_id)
+    sessions = await db.get_sessions(user_id=user_id, agent_id=request.agent_id)
 
     if not sessions:
         return ApiResponse.success(
@@ -348,14 +348,14 @@ async def query_memory(
                     message_map[result_id] = result
             else:
                 # Get the message from the database to verify its true session and agent
-                message = db.get_message(result_id)
+                message = await db.get_message(result_id)
                 if message:
                     # Get the actual round and session for this message
-                    round_data = db.get_round(message.get(
+                    round_data = await db.get_round(message.get(
                         "round_id")) if message.get("round_id") else None
                     if round_data and round_data.get("session_id"):
                         actual_session_id = round_data.get("session_id")
-                        actual_session = db.get_session(actual_session_id)
+                        actual_session = await db.get_session(actual_session_id)
 
                         if actual_session:
                             # Store the message with its correct metadata
@@ -426,15 +426,15 @@ async def query_memory(
             # Skip database verification for buffer results as they come from memory
             if result.get("type") == "message" and not is_buffer_result:
                 logger.info(f"Checking database for message ID: {result_id}")
-                message = db.get_message(result_id)
+                message = await db.get_message(result_id)
                 if message:
                     logger.info(f"Found message in database: {message.get('id')}")
                     # Get the actual round and session for this message
-                    round_data = db.get_round(message.get(
+                    round_data = await db.get_round(message.get(
                         "round_id")) if message.get("round_id") else None
                     if round_data and round_data.get("session_id"):
                         actual_session_id = round_data.get("session_id")
-                        actual_session = db.get_session(actual_session_id)
+                        actual_session = await db.get_session(actual_session_id)
 
                         if actual_session:
                             # Update the metadata with the correct session and agent

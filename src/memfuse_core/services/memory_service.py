@@ -2,7 +2,7 @@
 
 import asyncio
 from loguru import logger
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 
 from ..models import Item, Query, Node, QueryResult, StoreType
 from ..store.factory import StoreFactory
@@ -37,9 +37,11 @@ class MemoryService(MessageInterface):
             session: Session name (optional)
             session_id: Session ID (optional, takes precedence if provided)
         """
-        # Use the global database instance from DatabaseService
-        from .database_service import DatabaseService
-        self.db = DatabaseService.get_instance()
+        # Store parameters for async initialization
+        self.user = user
+        self.agent = agent or "agent_default"
+        self.session = session
+        self.session_id = session_id
 
         # Get configuration
         if cfg is not None:
@@ -54,56 +56,17 @@ class MemoryService(MessageInterface):
             # Otherwise, use the default configuration
             self.config = config_manager.get_config()
 
-        # Ensure user exists and get user_id
-        user_id = self.db.get_or_create_user_by_name(user)
+        # These will be set during async initialization
+        self.db = None
+        self.user_id = None
+        self.agent_id = None
+        self._async_initialized = False
 
-        # Ensure agent exists and get agent_id if provided
-        if agent is None:
-            # Use a default agent name for all users
-            agent = "agent_default"
-        agent_id = self.db.get_or_create_agent_by_name(agent)
+        # Session handling will be done in async initialization
+        self._session_id = None
 
-        # Get session_id - no longer creating sessions directly
-        if session_id is not None:
-            # If session_id is provided, use it directly
-            session_data = self.db.get_session(session_id)
-            if not session_data:
-                # Create a new session with the provided ID
-                session_id = self.db.create_session(
-                    user_id, agent_id, session_id)
-                self._session_id = session_id
-                session = session_id  # Use session_id as name
-            else:
-                self._session_id = session_id
-                session = session_data["name"]
-        elif session is not None:
-            # If session name is provided, check if it already exists for this user
-            session_data = self.db.get_session_by_name(session, user_id=user_id)
-            if session_data is not None:
-                # Session with this name already exists for this user - raise error
-                raise ValueError(
-                    f"Session with name '{session}' already exists for user '{user}'. "
-                    f"Session names must be unique within each user's scope."
-                )
-            else:
-                # Session not found, create a new one
-                session_id = self.db.create_session_with_name(
-                    user_id, agent_id, session)
-                self._session_id = session_id
-        else:
-            # For cross-session queries, we don't need a specific session
-            self._session_id = None
-
-        # Store both the names and IDs for internal use
-        self.user = user
-        self.agent = agent
-        self.session = session
-        self._user_id = user_id
-        self._agent_id = agent_id
-
-        # Store the user directory path
-        data_dir = self.config.get("data_dir", "data")
-        self.user_dir = str(PathManager.get_user_dir(data_dir, self._user_id))
+        # User directory will be set during async initialization
+        self.user_dir = None
 
         # Initialize store and retrieval (will be set in initialize method)
         self.vector_store = None
@@ -133,8 +96,64 @@ class MemoryService(MessageInterface):
             logger.warning(f"MemoryService: Error checking parallel layers config: {e}")
             return False
 
+    async def _async_init(self):
+        """Perform async initialization of database-related components."""
+        if self._async_initialized:
+            return
+
+        # Get database instance
+        from .database_service import DatabaseService
+        self.db = await DatabaseService.get_instance()
+
+        # Ensure user exists and get user_id
+        self.user_id = await self.db.get_or_create_user_by_name(self.user)
+
+        # Ensure agent exists and get agent_id
+        self.agent_id = await self.db.get_or_create_agent_by_name(self.agent)
+
+        # Handle session creation/retrieval
+        if self.session_id is not None:
+            # If session_id is provided, use it directly
+            session_data = await self.db.get_session(self.session_id)
+            if not session_data:
+                # Create a new session with the provided ID
+                session_id = await self.db.create_session(
+                    self.user_id, self.agent_id, self.session_id)
+                self._session_id = session_id
+                self.session = session_id  # Use session_id as name
+            else:
+                self._session_id = self.session_id
+                self.session = session_data["name"]
+        elif self.session is not None:
+            # If session name is provided, check if it already exists for this user
+            session_data = await self.db.get_session_by_name(self.session, user_id=self.user_id)
+            if session_data is not None:
+                # Session with this name already exists for this user - raise error
+                raise ValueError(
+                    f"Session with name '{self.session}' already exists for user '{self.user}'. "
+                    f"Session names must be unique within each user's scope."
+                )
+            else:
+                # Session not found, create a new one
+                session_id = await self.db.create_session_with_name(
+                    self.user_id, self.agent_id, self.session)
+                self._session_id = session_id
+        else:
+            # For cross-session queries, we don't need a specific session
+            self._session_id = None
+
+        # Set up user directory path now that we have user_id
+        data_dir = self.config.get("data_dir", "data")
+        self.user_dir = str(PathManager.get_user_dir(data_dir, self.user_id))
+
+        self._async_initialized = True
+
     async def initialize(self):
         """Initialize the store and retrieval components asynchronously."""
+        # First, perform async database initialization
+        if not self._async_initialized:
+            await self._async_init()
+
         # Make sure user directory exists
         PathManager.ensure_directory(self.user_dir)
 
@@ -300,7 +319,7 @@ class MemoryService(MessageInterface):
 
             # Create memory layer implementation
             self.memory_layer = MemoryLayerImpl(
-                user_id=str(self._user_id),
+                user_id=str(self.user_id),
                 config_manager=hierarchy_config_manager
             )
 
@@ -384,8 +403,8 @@ class MemoryService(MessageInterface):
             metadata = {
                 "session_id": session_id,
                 "round_id": round_id,
-                "user_id": self._user_id,
-                "agent_id": self._agent_id,
+                "user_id": self.user_id,
+                "agent_id": self.agent_id,
                 "message_ids": message_ids,
                 **kwargs
             }
@@ -428,24 +447,14 @@ class MemoryService(MessageInterface):
         session_id, round_id = await self._prepare_session_and_round(message_batch_list)
         logger.info(f"MemoryService.add_batch: Prepared session_id={session_id}, round_id={round_id}")
 
-        # Parallel processing to reduce latency
-        async def store_messages_task():
-            """Store original messages to database."""
-            return await self._store_original_messages_with_round(message_batch_list, session_id, round_id)
+        # Sequential processing to reduce connection pool pressure during flush operations
+        # Store original messages to database first
+        message_ids = await self._store_original_messages_with_round(message_batch_list, session_id, round_id)
 
-        async def process_chunks_task():
-            """Create and store chunks."""
-            chunks = await self.chunk_strategy.create_chunks(message_batch_list)
-            logger.info(f"MemoryService.add_batch: Created {len(chunks)} chunks")
-            await self._store_chunks_enhanced(chunks, session_id, round_id)
-            return chunks
-
-        # Execute both tasks in parallel
-        message_ids_task = asyncio.create_task(store_messages_task())
-        chunks_task = asyncio.create_task(process_chunks_task())
-
-        # Wait for both to complete
-        message_ids, chunks = await asyncio.gather(message_ids_task, chunks_task)
+        # Then create and store chunks
+        chunks = await self.chunk_strategy.create_chunks(message_batch_list)
+        logger.info(f"MemoryService.add_batch: Created {len(chunks)} chunks")
+        await self._store_chunks_enhanced(chunks, session_id, round_id)
 
         logger.info(f"MemoryService.add_batch: Successfully processed {len(chunks)} chunks and {len(message_ids)} messages")
 
@@ -770,19 +779,19 @@ class MemoryService(MessageInterface):
             if 'session_id' not in message['metadata']:
                 message['metadata']['session_id'] = session_id
             if 'user_id' not in message['metadata']:
-                message['metadata']['user_id'] = self._user_id
+                message['metadata']['user_id'] = self.user_id
             if 'agent_id' not in message['metadata']:
-                message['metadata']['agent_id'] = self._agent_id
+                message['metadata']['agent_id'] = self.agent_id
 
         # Create the round in database with pre-created round_id
-        self.db.create_round(session_id, round_id)
+        await self.db.create_round(session_id, round_id)
 
         # Store messages to database using helper method
-        message_ids.extend(self._store_messages_to_db(all_messages, round_id))
+        message_ids.extend(await self._store_messages_to_db(all_messages, round_id))
 
         return message_ids
 
-    def _store_messages_to_db(self, messages: List[Dict], round_id: str) -> List[str]:
+    async def _store_messages_to_db(self, messages: List[Dict], round_id: str) -> List[str]:
         """Helper method to store messages to database with proper timestamp handling.
 
         Args:
@@ -804,7 +813,7 @@ class MemoryService(MessageInterface):
 
             # Check if message already exists to avoid UNIQUE constraint failures
             if existing_id:
-                existing_message = self.db.get_message(existing_id)
+                existing_message = await self.db.get_message(existing_id)
                 if existing_message:
                     logger.debug(f"Message {existing_id} already exists in database, skipping insert")
                     message_ids.append(existing_id)
@@ -814,8 +823,22 @@ class MemoryService(MessageInterface):
             from datetime import datetime
             updated_at = datetime.now().isoformat()
 
+            # Convert created_at to proper format if it's a numeric timestamp
+            if existing_created_at is not None:
+                if isinstance(existing_created_at, (int, float)):
+                    # Convert numeric timestamp to ISO format
+                    existing_created_at = datetime.fromtimestamp(existing_created_at).isoformat()
+                elif isinstance(existing_created_at, str):
+                    # Try to parse as numeric timestamp if it's a string of digits
+                    try:
+                        timestamp = float(existing_created_at)
+                        existing_created_at = datetime.fromtimestamp(timestamp).isoformat()
+                    except (ValueError, TypeError):
+                        # If it's not a numeric string, assume it's already in correct format
+                        pass
+
             try:
-                message_id = self.db.add_message(
+                message_id = await self.db.add_message(
                     round_id=round_id,
                     role=role,
                     content=content,
@@ -876,15 +899,15 @@ class MemoryService(MessageInterface):
             if 'session_id' not in message['metadata']:
                 message['metadata']['session_id'] = session_id
             if 'user_id' not in message['metadata']:
-                message['metadata']['user_id'] = self._user_id
+                message['metadata']['user_id'] = self.user_id
             if 'agent_id' not in message['metadata']:
-                message['metadata']['agent_id'] = self._agent_id
+                message['metadata']['agent_id'] = self.agent_id
 
         # Create a new round for these messages
-        round_id = self.db.create_round(session_id)
+        round_id = await self.db.create_round(session_id)
 
         # Store messages to database using helper method
-        message_ids.extend(self._store_messages_to_db(all_messages, round_id))
+        message_ids.extend(await self._store_messages_to_db(all_messages, round_id))
 
         return message_ids
 
@@ -909,10 +932,10 @@ class MemoryService(MessageInterface):
                 metadata={
                     **chunk.metadata,  # Preserve original strategy-specific metadata
                     "type": "chunk",
-                    "user_id": self._user_id,
+                    "user_id": self.user_id,
                     "session_id": session_id,      # New: session association
                     "round_id": round_id,          # New: round association
-                    "agent_id": self._agent_id,    # New: agent association
+                    "agent_id": self.agent_id,    # New: agent association
                     "created_at": datetime.now().isoformat(),  # New: timestamp
                 }
             )
@@ -954,8 +977,10 @@ class MemoryService(MessageInterface):
             Dictionary with status, code, and messages
         """
         messages = []
+        not_found_ids = []
+
         for message_id in message_ids:
-            message = self.db.get_message(message_id)
+            message = await self.db.get_message(message_id)
             if message:
                 messages.append({
                     "id": message["id"],
@@ -964,6 +989,21 @@ class MemoryService(MessageInterface):
                     "created_at": message["created_at"],
                     "updated_at": message["updated_at"],
                 })
+            else:
+                not_found_ids.append(message_id)
+
+        # If some messages were not found, return error
+        if not_found_ids:
+            return {
+                "status": "error",
+                "code": 404,
+                "data": {"not_found_ids": not_found_ids},
+                "message": f"Some message IDs were not found",
+                "errors": [
+                    {"field": "message_ids",
+                     "message": f"Message IDs not found: {', '.join(not_found_ids)}"}
+                ],
+            }
 
         return {
             "status": "success",
@@ -993,12 +1033,21 @@ class MemoryService(MessageInterface):
         Returns:
             List of message data
         """
-        return self.db.get_messages_by_session(
-            session_id=session_id,
-            limit=limit,
-            sort_by=sort_by,
-            order=order
-        )
+        try:
+            logger.debug(f"MemoryService.get_messages_by_session: session_id={session_id}, limit={limit}, sort_by={sort_by}, order={order}")
+            messages = await self.db.get_messages_by_session(
+                session_id=session_id,
+                limit=limit,
+                sort_by=sort_by,
+                order=order
+            )
+            logger.debug(f"MemoryService.get_messages_by_session: Retrieved {len(messages)} messages")
+            return messages
+        except Exception as e:
+            logger.error(f"MemoryService.get_messages_by_session: Error: {e}")
+            import traceback
+            logger.error(f"MemoryService.get_messages_by_session: Traceback: {traceback.format_exc()}")
+            return []
 
     async def update(self, message_ids: List[str], new_messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Update messages in memory.
@@ -1020,59 +1069,78 @@ class MemoryService(MessageInterface):
             }
 
         updated_ids = []
+        not_found_ids = []
+
         for i, message_id in enumerate(message_ids):
-            message = self.db.get_message(message_id)
+            message = await self.db.get_message(message_id)
             if not message:
+                not_found_ids.append(message_id)
                 continue
 
             new_message = new_messages[i]
             content = new_message.get("content", "")
 
             # Update message in database
-            if self.db.update_message(message_id, content):
+            if await self.db.update_message(message_id, content):
                 updated_ids.append(message_id)
 
                 # Update message in vector store
-                await self.vector_store.update(message_id, Item(
-                    id=message_id,
-                    content=content,
-                    metadata={
-                        "type": "message",
-                        "role": message["role"],
-                        "user_id": self._user_id,
-                        "agent_id": self._agent_id,
-                        "session_id": self._session_id,
-                        "round_id": message["round_id"],
-                    }
-                ))
+                if self.vector_store:
+                    await self.vector_store.update(message_id, Item(
+                        id=message_id,
+                        content=content,
+                        metadata={
+                            "type": "message",
+                            "role": message["role"],
+                            "user_id": self.user_id,
+                            "agent_id": self.agent_id,
+                            "session_id": self._session_id,
+                            "round_id": message["round_id"],
+                        }
+                    ))
 
                 # Update message in graph store
-                await self.graph_store.update_node(message_id, Node(
-                    id=message_id,
-                    content=content,
-                    metadata={
-                        "type": "message",
-                        "role": message["role"],
-                        "user_id": self._user_id,
-                        "agent_id": self._agent_id,
-                        "session_id": self._session_id,
-                        "round_id": message["round_id"],
-                    }
-                ))
+                if self.graph_store:
+                    await self.graph_store.update_node(message_id, Node(
+                        id=message_id,
+                        content=content,
+                        metadata={
+                            "type": "message",
+                            "role": message["role"],
+                            "user_id": self.user_id,
+                            "agent_id": self.agent_id,
+                            "session_id": self._session_id,
+                            "round_id": message["round_id"],
+                        }
+                    ))
 
                 # Update message in keyword store
-                await self.keyword_store.update(message_id, Item(
-                    id=message_id,
-                    content=content,
-                    metadata={
-                        "type": "message",
-                        "role": message["role"],
-                        "user_id": self._user_id,
-                        "agent_id": self._agent_id,
-                        "session_id": self._session_id,
-                        "round_id": message["round_id"],
-                    }
-                ))
+                if self.keyword_store:
+                    await self.keyword_store.update(message_id, Item(
+                        id=message_id,
+                        content=content,
+                        metadata={
+                            "type": "message",
+                            "role": message["role"],
+                            "user_id": self.user_id,
+                            "agent_id": self.agent_id,
+                            "session_id": self._session_id,
+                            "round_id": message["round_id"],
+                        }
+                    ))
+
+        # Check if any messages were not found
+        if not_found_ids:
+            return {
+                "status": "error",
+                "code": 404,
+                "data": {"not_found_ids": not_found_ids},
+                "message": f"Some message IDs were not found",
+                "errors": [
+                    {"field": "message_ids",
+                     "message": f"Message IDs not found: {', '.join(not_found_ids)}"}
+                ],
+            }
 
         return {
             "status": "success",
@@ -1082,36 +1150,118 @@ class MemoryService(MessageInterface):
             "errors": None,
         }
 
-    async def delete(self, message_id: str) -> bool:
-        """Delete a message from memory.
+    async def delete(self, message_ids: Union[str, List[str]]) -> Union[bool, Dict[str, Any]]:
+        """Delete message(s) from memory.
 
-        This is a core method that deletes a message from all store components.
-        It does not include error handling or validation, which should be done
-        by the caller.
+        This method can handle both single message deletion and batch deletion.
+        For single message: returns bool
+        For multiple messages: returns Dict with status information
 
         Args:
-            message_id: Message ID to delete
+            message_ids: Message ID(s) to delete - can be str or List[str]
 
         Returns:
-            True if the message was deleted, False otherwise
+            For single message: True if the message was deleted, False otherwise
+            For multiple messages: Dictionary with status, code, and deletion results
         """
-        # Delete message from database
-        if not self.db.delete_message(message_id):
-            return False
+        # Handle single message deletion (backward compatibility)
+        if isinstance(message_ids, str):
+            message_id = message_ids
+            # Delete message from database
+            if not await self.db.delete_message(message_id):
+                return False
 
-        # Delete message from vector store
-        if self.vector_store:
-            await self.vector_store.delete(message_id)
+            # Delete message from vector store
+            if self.vector_store:
+                await self.vector_store.delete(message_id)
 
-        # Delete message from graph store
-        if self.graph_store:
-            await self.graph_store.delete_node(message_id)
+            # Delete message from graph store
+            if self.graph_store:
+                await self.graph_store.delete_node(message_id)
 
-        # Delete message from keyword store
-        if self.keyword_store:
-            await self.keyword_store.delete(message_id)
+            # Delete message from keyword store
+            if self.keyword_store:
+                await self.keyword_store.delete(message_id)
 
-        return True
+            return True
+
+        # Handle multiple message deletion
+        elif isinstance(message_ids, list):
+            deleted_ids = []
+            not_found_ids = []
+            failed_ids = []
+
+            for message_id in message_ids:
+                try:
+                    # Check if message exists first
+                    message = await self.db.get_message(message_id)
+                    if not message:
+                        not_found_ids.append(message_id)
+                        continue
+
+                    # Delete message from database
+                    if await self.db.delete_message(message_id):
+                        # Delete message from vector store
+                        if self.vector_store:
+                            await self.vector_store.delete(message_id)
+
+                        # Delete message from graph store
+                        if self.graph_store:
+                            await self.graph_store.delete_node(message_id)
+
+                        # Delete message from keyword store
+                        if self.keyword_store:
+                            await self.keyword_store.delete(message_id)
+
+                        deleted_ids.append(message_id)
+                    else:
+                        # Message exists but deletion failed
+                        failed_ids.append(message_id)
+                except Exception as e:
+                    logger.error(f"Failed to delete message {message_id}: {e}")
+                    failed_ids.append(message_id)
+
+            # If any messages were not found, return an error
+            if not_found_ids:
+                return {
+                    "status": "error",
+                    "code": 404,
+                    "data": {
+                        "deleted_ids": deleted_ids,
+                        "not_found_ids": not_found_ids,
+                        "failed_ids": failed_ids
+                    },
+                    "message": f"Some message IDs were not found: {', '.join(not_found_ids)}",
+                    "errors": [{"field": "message_ids", "message": f"Message IDs not found: {', '.join(not_found_ids)}"}],
+                }
+
+            # If there were failures but no not_found messages, return error with different code
+            if failed_ids:
+                return {
+                    "status": "error",
+                    "code": 500,
+                    "data": {
+                        "deleted_ids": deleted_ids,
+                        "failed_ids": failed_ids
+                    },
+                    "message": f"Failed to delete {len(failed_ids)} messages",
+                    "errors": [{"field": "message_ids", "message": f"Failed to delete message IDs: {', '.join(failed_ids)}"}],
+                }
+
+            # Return success response
+            return {
+                "status": "success",
+                "code": 200,
+                "data": {
+                    "deleted_ids": deleted_ids,
+                    "not_found_ids": [],
+                    "failed_ids": []
+                },
+                "message": f"Deleted {len(deleted_ids)} messages",
+                "errors": None,
+            }
+        else:
+            raise ValueError(f"message_ids must be str or List[str], got {type(message_ids)}")
 
     async def add_knowledge(self, knowledge: List[str]) -> Dict[str, Any]:
         """Add knowledge to memory.
@@ -1125,7 +1275,7 @@ class MemoryService(MessageInterface):
         knowledge_ids = []
         for item in knowledge:
             # Add knowledge to database
-            knowledge_id = self.db.add_knowledge(self._user_id, item)
+            knowledge_id = await self.db.add_knowledge(self.user_id, item)
             knowledge_ids.append(knowledge_id)
 
             # Add knowledge to vector store
@@ -1134,7 +1284,7 @@ class MemoryService(MessageInterface):
                 content=item,
                 metadata={
                     "type": "knowledge",
-                    "user_id": self._user_id,
+                    "user_id": self.user_id,
                 }
             ))
 
@@ -1144,7 +1294,7 @@ class MemoryService(MessageInterface):
                 content=item,
                 metadata={
                     "type": "knowledge",
-                    "user_id": self._user_id,
+                    "user_id": self.user_id,
                 }
             ))
 
@@ -1154,7 +1304,7 @@ class MemoryService(MessageInterface):
                 content=item,
                 metadata={
                     "type": "knowledge",
-                    "user_id": self._user_id,
+                    "user_id": self.user_id,
                 }
             ))
 
@@ -1177,7 +1327,7 @@ class MemoryService(MessageInterface):
         """
         knowledge_items = []
         for knowledge_id in knowledge_ids:
-            knowledge = self.db.get_knowledge(knowledge_id)
+            knowledge = await self.db.get_knowledge(knowledge_id)
             if knowledge:
                 knowledge_items.append({
                     "id": knowledge["id"],
@@ -1215,14 +1365,14 @@ class MemoryService(MessageInterface):
 
         updated_ids = []
         for i, knowledge_id in enumerate(knowledge_ids):
-            knowledge = self.db.get_knowledge(knowledge_id)
+            knowledge = await self.db.get_knowledge(knowledge_id)
             if not knowledge:
                 continue
 
             content = new_knowledge[i]
 
             # Update knowledge in database
-            if self.db.update_knowledge(knowledge_id, content):
+            if await self.db.update_knowledge(knowledge_id, content):
                 updated_ids.append(knowledge_id)
 
                 # Update knowledge in vector store
@@ -1231,7 +1381,7 @@ class MemoryService(MessageInterface):
                     content=content,
                     metadata={
                         "type": "knowledge",
-                        "user_id": self._user_id,
+                        "user_id": self.user_id,
                     }
                 ))
 
@@ -1241,7 +1391,7 @@ class MemoryService(MessageInterface):
                     content=content,
                     metadata={
                         "type": "knowledge",
-                        "user_id": self._user_id,
+                        "user_id": self.user_id,
                     }
                 ))
 
@@ -1251,7 +1401,7 @@ class MemoryService(MessageInterface):
                     content=content,
                     metadata={
                         "type": "knowledge",
-                        "user_id": self._user_id,
+                        "user_id": self.user_id,
                     }
                 ))
 
@@ -1277,7 +1427,7 @@ class MemoryService(MessageInterface):
             True if the knowledge item was deleted, False otherwise
         """
         # Delete knowledge from database
-        if not self.db.delete_knowledge(knowledge_id):
+        if not await self.db.delete_knowledge(knowledge_id):
             return False
 
         # Delete knowledge from vector store
@@ -1354,7 +1504,7 @@ class MemoryService(MessageInterface):
                 "include_messages": include_messages,
                 "include_knowledge": include_knowledge,
                 "include_chunks": include_chunks,
-                "user_id": self._user_id,
+                "user_id": self.user_id,
             }
         )
 
@@ -1366,7 +1516,7 @@ class MemoryService(MessageInterface):
             # Query only vector store
             all_results = await self.multi_path_retrieval.retrieve(
                 query=query_obj.text,
-                user_id=self._user_id,
+                user_id=self.user_id,
                 session_id=effective_session_id,
                 top_k=first_stage_top_k,  # Use first stage top_k value
                 use_vector=True,
@@ -1388,7 +1538,7 @@ class MemoryService(MessageInterface):
             # Query only graph store
             all_results = await self.multi_path_retrieval.retrieve(
                 query=query_obj.text,
-                user_id=self._user_id,
+                user_id=self.user_id,
                 session_id=effective_session_id,
                 top_k=first_stage_top_k,  # Use first stage top_k value
                 use_vector=False,
@@ -1410,7 +1560,7 @@ class MemoryService(MessageInterface):
             # Query only keyword store
             all_results = await self.multi_path_retrieval.retrieve(
                 query=query_obj.text,
-                user_id=self._user_id,
+                user_id=self.user_id,
                 session_id=effective_session_id,
                 top_k=first_stage_top_k,  # Use first stage top_k value
                 use_vector=False,
@@ -1473,7 +1623,7 @@ class MemoryService(MessageInterface):
             # Use the server configuration for multi-path retrieval
             all_results = await self.multi_path_retrieval.retrieve(
                 query=query_obj.text,
-                user_id=self._user_id,
+                user_id=self.user_id,
                 session_id=effective_session_id,
                 top_k=first_stage_top_k,  # Use first stage top_k value
                 use_vector=use_vector,
@@ -1503,16 +1653,16 @@ class MemoryService(MessageInterface):
         for result in all_results:
             # Get full item from database
             if result.metadata.get("type") == "message":
-                item = self.db.get_message(result.id)
+                item = await self.db.get_message(result.id)
                 if item:
                     # Get round and session information
-                    round_data = self.db.get_round(
+                    round_data = await self.db.get_round(
                         item["round_id"]) if item.get("round_id") else None
                     session_id = round_data.get(
                         "session_id") if round_data else None
 
                     # Get the actual session data to ensure correct metadata
-                    actual_session = self.db.get_session(
+                    actual_session = await self.db.get_session(
                         session_id) if session_id else None
 
                     # Create result dictionary with metadata
@@ -1525,7 +1675,7 @@ class MemoryService(MessageInterface):
                         "created_at": item["created_at"],
                         "updated_at": item["updated_at"],
                         "metadata": {
-                            "user_id": self._user_id,
+                            "user_id": self.user_id,
                             "agent_id": actual_session["agent_id"] if actual_session else None,
                             "session_id": session_id,
                             "session_name": actual_session["name"] if actual_session else None,
@@ -1539,7 +1689,7 @@ class MemoryService(MessageInterface):
                     }
                     result_dicts.append(result_dict)
             elif result.metadata.get("type") == "knowledge":
-                item = self.db.get_knowledge(result.id)
+                item = await self.db.get_knowledge(result.id)
                 if item:
                     # Create result dictionary with metadata
                     result_dict = {
@@ -1551,7 +1701,7 @@ class MemoryService(MessageInterface):
                         "created_at": item["created_at"],
                         "updated_at": item["updated_at"],
                         "metadata": {
-                            "user_id": self._user_id,
+                            "user_id": self.user_id,
                             "agent_id": None,  # Knowledge is not associated with agents
                             "session_id": None,  # Knowledge is not associated with sessions
                             "level": 0,  # Default level is 0
