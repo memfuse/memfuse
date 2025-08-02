@@ -1,3 +1,0 @@
-"""
-Buffer integration tests.
-"""
