@@ -87,7 +87,11 @@ class FlushManager:
         flush_interval: float = 60.0,
         enable_auto_flush: bool = True,
         memory_service_handler: Optional[Callable] = None,
-        qdrant_handler: Optional[Callable] = None
+        qdrant_handler: Optional[Callable] = None,
+        # P2 OPTIMIZATION: Batch processing configuration
+        enable_batch_processing: bool = True,
+        batch_size: int = 5,
+        batch_timeout: float = 2.0
     ):
         """Initialize the flush manager.
 
@@ -99,12 +103,20 @@ class FlushManager:
             enable_auto_flush: Whether to enable automatic flushing
             memory_service_handler: Handler for MemoryService operations
             qdrant_handler: Handler for Qdrant operations (legacy, will be removed)
+            enable_batch_processing: Whether to enable batch processing optimization
+            batch_size: Maximum number of tasks to batch together
+            batch_timeout: Maximum time to wait for batch completion
         """
         self.max_workers = max_workers
         self.max_queue_size = max_queue_size
         self.default_timeout = default_timeout
         self.flush_interval = flush_interval
         self.enable_auto_flush = enable_auto_flush
+
+        # P2 OPTIMIZATION: Batch processing configuration
+        self.enable_batch_processing = enable_batch_processing
+        self.batch_size = batch_size
+        self.batch_timeout = batch_timeout
 
         # Storage handlers
         self.memory_service_handler = memory_service_handler

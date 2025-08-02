@@ -108,6 +108,9 @@ class ServiceInitializer:
         if memory_service is None:
             return False
 
+        # 5. Warmup common service instances for better performance
+        await self._warmup_service_instances(cfg)
+
         logger.info("Business services initialized")
         return True
 
@@ -276,6 +279,43 @@ class ServiceInitializer:
         except Exception as e:
             logger.error(f"Failed to initialize memory service: {e}")
             return None
+
+    async def _warmup_service_instances(self, cfg: DictConfig) -> bool:
+        """Warmup common service instances for better performance.
+
+        Args:
+            cfg: Configuration from Hydra
+
+        Returns:
+            True if warmup successful, False otherwise
+        """
+        try:
+            logger.info("Starting service instance warmup...")
+
+            from .service_factory import ServiceFactory
+
+            # Configure warmup based on configuration
+            warmup_config = cfg.get("performance", {}).get("service_warmup", {})
+            enabled = warmup_config.get("enabled", True)
+            common_users = warmup_config.get("common_users", ["user_default", "alice", "bob", "demo_user"])
+
+            ServiceFactory.configure_warmup(enabled=enabled, common_users=common_users)
+
+            if enabled:
+                # Perform warmup
+                success = await ServiceFactory.warmup_common_services(cfg)
+                if success:
+                    logger.info("Service instance warmup completed successfully")
+                else:
+                    logger.warning("Service instance warmup completed with some failures")
+                return success
+            else:
+                logger.info("Service instance warmup disabled")
+                return True
+
+        except Exception as e:
+            logger.warning(f"Service instance warmup failed: {e}")
+            return False
 
     async def shutdown_all_services(self) -> bool:
         """Shutdown all services gracefully.

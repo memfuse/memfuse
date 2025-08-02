@@ -114,7 +114,8 @@ class ContextualChunkStrategy(ChunkStrategy):
                     "session_id": session_id,
                     "gpt_enhanced": False,
                     "context_window_size": 0,
-                    "context_chunk_ids": []
+                    "context_chunk_ids": [],
+                    "word_count": self._count_words(chunk_content)
                 }
                 enhanced_chunks.append(ChunkData(
                     content=chunk_content,
@@ -570,7 +571,8 @@ class ContextualChunkStrategy(ChunkStrategy):
             "session_id": session_id,
             "has_context": len(context_chunks) > 0,
             "context_window_size": len(context_chunks),
-            "context_chunk_ids": [chunk.chunk_id for chunk in context_chunks]
+            "context_chunk_ids": [chunk.chunk_id for chunk in context_chunks],
+            "word_count": self._count_words(chunk_content)
         }
 
         # Add contextual description if LLM provider is available

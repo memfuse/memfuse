@@ -238,6 +238,8 @@ class HybridBuffer:
     async def _process_rounds_immediately(self, rounds: List[MessageList]) -> None:
         """Immediately process rounds, generate chunks and embeddings stored to VectorCache.
 
+        P2 OPTIMIZATION: Implements parallel embedding generation for better performance.
+
         Args:
             rounds: List of rounds to process
         """
@@ -255,24 +257,91 @@ class HybridBuffer:
             chunks = await self.chunk_strategy.create_chunks(rounds)
             logger.info(f"HybridBuffer: Created {len(chunks)} chunks")
 
-            # Immediately generate embeddings and store to VectorCache
-            logger.info(f"HybridBuffer: Generating embeddings for {len(chunks)} chunks...")
-            for i, chunk in enumerate(chunks):
-                embedding = await self._generate_embedding(chunk.content)
-
-                # Add to VectorCache
-                self.chunks.append(chunk)
-                self.embeddings.append(embedding)
-                self.total_chunks_created += 1
-
-                if (i + 1) % 10 == 0:  # Log progress every 10 chunks
-                    logger.debug(f"HybridBuffer: Generated {i + 1}/{len(chunks)} embeddings")
+            # P2 OPTIMIZATION: Parallel embedding generation
+            if chunks:
+                await self._generate_embeddings_parallel(chunks)
 
             logger.info(f"HybridBuffer: Completed immediate processing - VectorCache now contains {len(self.chunks)} chunks")
 
         except Exception as e:
             logger.error(f"HybridBuffer: Error in immediate processing: {e}")
             # Even if error occurs, ensure data flow continues
+
+    async def _generate_embeddings_parallel(self, chunks: List[Any]) -> None:
+        """Generate embeddings for chunks in parallel for better performance.
+
+        P2 OPTIMIZATION: Replaces sequential embedding generation with concurrent processing.
+        Uses semaphore to control concurrency and prevent resource exhaustion.
+
+        Args:
+            chunks: List of chunks to generate embeddings for
+        """
+        if not chunks:
+            return
+
+        logger.info(f"HybridBuffer: Generating embeddings for {len(chunks)} chunks in parallel...")
+
+        # P2 OPTIMIZATION: Dynamic concurrency control based on chunk count and system resources
+        # Scale concurrency based on chunk count but cap at reasonable limits
+        if len(chunks) <= 5:
+            max_concurrent_embeddings = len(chunks)  # Small batches: full parallelism
+        elif len(chunks) <= 20:
+            max_concurrent_embeddings = min(10, len(chunks))  # Medium batches: up to 10 concurrent
+        else:
+            max_concurrent_embeddings = 15  # Large batches: cap at 15 to prevent resource exhaustion
+
+        semaphore = asyncio.Semaphore(max_concurrent_embeddings)
+
+        async def generate_single_embedding(chunk_index: int, chunk: Any) -> tuple[int, Any, Any]:
+            """Generate embedding for a single chunk with semaphore control."""
+            async with semaphore:
+                try:
+                    embedding = await self._generate_embedding(chunk.content)
+                    return chunk_index, chunk, embedding
+                except Exception as e:
+                    logger.error(f"HybridBuffer: Failed to generate embedding for chunk {chunk_index}: {e}")
+                    # Return None embedding to maintain order
+                    return chunk_index, chunk, None
+
+        # Create tasks for parallel embedding generation
+        embedding_tasks = [
+            generate_single_embedding(i, chunk)
+            for i, chunk in enumerate(chunks)
+        ]
+
+        # Execute all embedding tasks concurrently
+        start_time = asyncio.get_event_loop().time()
+        results = await asyncio.gather(*embedding_tasks, return_exceptions=True)
+        end_time = asyncio.get_event_loop().time()
+
+        # Process results and update VectorCache
+        successful_embeddings = 0
+        # Sort results by chunk_index to maintain order
+        valid_results = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"HybridBuffer: Embedding generation task failed: {result}")
+                continue
+            valid_results.append(result)
+
+        # Sort by chunk index to maintain order
+        valid_results.sort(key=lambda x: x[0])
+
+        for chunk_index, chunk, embedding in valid_results:
+            if embedding is not None:
+                # Add to VectorCache in original order
+                self.chunks.append(chunk)
+                self.embeddings.append(embedding)
+                self.total_chunks_created += 1
+                successful_embeddings += 1
+
+        processing_time = end_time - start_time
+        logger.info(f"HybridBuffer: Parallel embedding generation completed - "
+                    f"{successful_embeddings}/{len(chunks)} successful in {processing_time:.3f}s "
+                    f"(avg: {processing_time / len(chunks):.3f}s per chunk)")
+
+        if successful_embeddings < len(chunks):
+            logger.warning(f"HybridBuffer: {len(chunks) - successful_embeddings} embedding generations failed")
 
     async def _load_chunk_strategy(self) -> None:
         """Lazy load the chunk strategy with configuration support."""

@@ -284,16 +284,38 @@ class M1EpisodicLayer(MemoryLayer):
             # Form episodes from data (placeholder for LLM integration)
             episodes = await self._form_episodes(data, metadata)
 
-            # Convert episodes to ChunkData objects and store
+            # Convert episodes to ChunkData objects and store in parallel
+            # P3 OPTIMIZATION: Parallel episode storage to eliminate sequential bottleneck
             processed_items = []
             if episodes and self.storage_manager:
                 episode_chunks = self._convert_episodes_to_chunks(episodes, metadata)
-                for chunk in episode_chunks:
-                    episode_id = await self.storage_manager.write_to_backend(
-                        StorageType.VECTOR, chunk, metadata
-                    )
-                    if episode_id:
-                        processed_items.append(episode_id)
+
+                if episode_chunks:
+                    # P3 OPTIMIZATION: Create parallel tasks for episode storage
+                    async def store_episode_chunk(chunk: Any) -> Optional[str]:
+                        """Store a single episode chunk with error handling."""
+                        try:
+                            return await self.storage_manager.write_to_backend(
+                                StorageType.VECTOR, chunk, metadata
+                            )
+                        except Exception as e:
+                            logger.error(f"M1EpisodicLayer: Failed to store episode chunk: {e}")
+                            return None
+
+                    # Execute all episode storage tasks in parallel
+                    storage_tasks = [store_episode_chunk(chunk) for chunk in episode_chunks]
+                    episode_ids = await asyncio.gather(*storage_tasks, return_exceptions=True)
+
+                    # Process results and collect successful IDs
+                    for episode_id in episode_ids:
+                        if isinstance(episode_id, Exception):
+                            logger.error(f"M1EpisodicLayer: Episode storage task failed: {episode_id}")
+                            continue
+                        if episode_id:
+                            processed_items.append(episode_id)
+
+                    logger.info(f"M1EpisodicLayer: Parallel episode storage completed, "
+                               f"successful: {len(processed_items)}/{len(episode_chunks)}")
             
             processing_time = time.time() - start_time
             # M1 layer should succeed even if no episodes are formed (e.g., for short content)
@@ -599,58 +621,79 @@ class M2SemanticLayer(MemoryLayer):
             entities, relationships = await self._extract_entities_and_relationships(data, metadata)
             logger.debug(f"M2SemanticLayer: Extracted {len(entities)} facts, {len(relationships)} relationships from data: {type(data)}")
 
-            # Convert entities and relationships to ChunkData objects and store
+            # Convert entities and relationships to ChunkData objects and store in parallel
+            # P3 OPTIMIZATION: Parallel entity and relationship storage to eliminate sequential bottleneck
             processed_items = []
             if self.storage_manager and (entities or relationships):
-                # Convert and store entities
-                entity_chunks = self._convert_entities_to_chunks(entities, metadata)
-                for chunk in entity_chunks:
-                    # Try graph storage first, fallback to vector storage if graph is not available
-                    entity_id = None
+                # P3 OPTIMIZATION: Create parallel storage tasks for entities and relationships
+                async def store_entity_chunk(chunk: Any) -> Optional[str]:
+                    """Store a single entity chunk with fallback storage strategy."""
                     try:
-                        entity_id = await self.storage_manager.write_to_backend(
-                            StorageType.GRAPH, chunk, metadata
-                        )
-                        logger.debug(f"M2SemanticLayer: Successfully stored fact to graph storage: {entity_id}")
-                    except Exception as e:
-                        logger.debug(f"M2SemanticLayer: Graph storage not available, using vector storage: {e}")
+                        # Try graph storage first, fallback to vector storage if graph is not available
                         try:
+                            entity_id = await self.storage_manager.write_to_backend(
+                                StorageType.GRAPH, chunk, metadata
+                            )
+                            logger.debug(f"M2SemanticLayer: Successfully stored fact to graph storage: {entity_id}")
+                            return entity_id
+                        except Exception as e:
+                            logger.debug(f"M2SemanticLayer: Graph storage not available, using vector storage: {e}")
                             entity_id = await self.storage_manager.write_to_backend(
                                 StorageType.VECTOR, chunk, metadata
                             )
                             logger.debug(f"M2SemanticLayer: Successfully stored fact to vector storage: {entity_id}")
-                        except Exception as ve:
-                            logger.error(f"M2SemanticLayer: Failed to store fact to vector storage: {ve}")
-
-                    if entity_id:
-                        processed_items.append(entity_id)
-                    else:
-                        logger.warning(f"M2SemanticLayer: Failed to store fact chunk: {chunk.chunk_id}")
-
-                # Convert and store relationships
-                relationship_chunks = self._convert_relationships_to_chunks(relationships, metadata)
-                for chunk in relationship_chunks:
-                    # Try graph storage first, fallback to vector storage if graph is not available
-                    rel_id = None
-                    try:
-                        rel_id = await self.storage_manager.write_to_backend(
-                            StorageType.GRAPH, chunk, metadata
-                        )
-                        logger.debug(f"M2SemanticLayer: Successfully stored relationship to graph storage: {rel_id}")
+                            return entity_id
                     except Exception as e:
-                        logger.debug(f"M2SemanticLayer: Graph storage not available, using vector storage: {e}")
+                        logger.error(f"M2SemanticLayer: Failed to store entity chunk: {e}")
+                        return None
+
+                async def store_relationship_chunk(chunk: Any) -> Optional[str]:
+                    """Store a single relationship chunk with fallback storage strategy."""
+                    try:
+                        # Try graph storage first, fallback to vector storage if graph is not available
                         try:
+                            rel_id = await self.storage_manager.write_to_backend(
+                                StorageType.GRAPH, chunk, metadata
+                            )
+                            logger.debug(f"M2SemanticLayer: Successfully stored relationship to graph storage: {rel_id}")
+                            return rel_id
+                        except Exception as e:
+                            logger.debug(f"M2SemanticLayer: Graph storage not available, using vector storage: {e}")
                             rel_id = await self.storage_manager.write_to_backend(
                                 StorageType.VECTOR, chunk, metadata
                             )
                             logger.debug(f"M2SemanticLayer: Successfully stored relationship to vector storage: {rel_id}")
-                        except Exception as ve:
-                            logger.error(f"M2SemanticLayer: Failed to store relationship to vector storage: {ve}")
+                            return rel_id
+                    except Exception as e:
+                        logger.error(f"M2SemanticLayer: Failed to store relationship chunk: {e}")
+                        return None
 
-                    if rel_id:
-                        processed_items.append(rel_id)
-                    else:
-                        logger.warning(f"M2SemanticLayer: Failed to store relationship chunk: {chunk.chunk_id}")
+                # Create parallel tasks for all entities and relationships
+                storage_tasks = []
+
+                # Add entity storage tasks
+                entity_chunks = self._convert_entities_to_chunks(entities, metadata)
+                storage_tasks.extend([store_entity_chunk(chunk) for chunk in entity_chunks])
+
+                # Add relationship storage tasks
+                relationship_chunks = self._convert_relationships_to_chunks(relationships, metadata)
+                storage_tasks.extend([store_relationship_chunk(chunk) for chunk in relationship_chunks])
+
+                # Execute all storage tasks in parallel
+                if storage_tasks:
+                    storage_results = await asyncio.gather(*storage_tasks, return_exceptions=True)
+
+                    # Process results and collect successful IDs
+                    for result in storage_results:
+                        if isinstance(result, Exception):
+                            logger.error(f"M2SemanticLayer: Storage task failed: {result}")
+                            continue
+                        if result:
+                            processed_items.append(result)
+
+                    logger.info(f"M2SemanticLayer: Parallel storage completed, "
+                               f"successful: {len(processed_items)}/{len(storage_tasks)} "
+                               f"(entities: {len(entity_chunks)}, relationships: {len(relationship_chunks)})")
             
             processing_time = time.time() - start_time
             success = len(processed_items) > 0

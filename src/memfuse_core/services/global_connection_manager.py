@@ -10,18 +10,24 @@ Design Principles:
 - Configuration-driven: Reads from config hierarchy
 - Resource efficiency: Shared pools across all users
 - Proper lifecycle management: Cleanup and monitoring
+- Lock-free optimization: Read-write locks for high concurrency
+- Connection warmup: Pre-created pools for common databases
 """
 
 import asyncio
 import weakref
-from typing import Dict, Optional, Any, Set
+import time
+from typing import Dict, Optional, Any, Set, List
 from loguru import logger
 from dataclasses import dataclass
 from threading import Lock
 
+from ..monitoring.performance_monitor import get_performance_monitor
+
 try:
     from psycopg_pool import AsyncConnectionPool
     from pgvector.psycopg import register_vector_async
+    from urllib.parse import urlparse, urlunparse, urlencode, parse_qs
     PSYCOPG_AVAILABLE = True
 except ImportError:
     PSYCOPG_AVAILABLE = False
@@ -29,11 +35,84 @@ except ImportError:
     logger.warning("psycopg dependencies not available for global connection manager")
 
 
+class AsyncRWLock:
+    """Async read-write lock for high-concurrency scenarios."""
+
+    def __init__(self):
+        self._readers = 0
+        self._writers = 0
+        self._read_ready = asyncio.Condition()
+        self._write_ready = asyncio.Condition()
+
+    async def acquire_read(self):
+        """Acquire read lock."""
+        async with self._read_ready:
+            while self._writers > 0:
+                await self._read_ready.wait()
+            self._readers += 1
+
+    async def release_read(self):
+        """Release read lock."""
+        async with self._read_ready:
+            self._readers -= 1
+            if self._readers == 0:
+                self._read_ready.notify_all()
+                async with self._write_ready:
+                    self._write_ready.notify_all()
+
+    async def acquire_write(self):
+        """Acquire write lock."""
+        async with self._write_ready:
+            while self._writers > 0 or self._readers > 0:
+                await self._write_ready.wait()
+            self._writers += 1
+
+    async def release_write(self):
+        """Release write lock."""
+        async with self._write_ready:
+            self._writers -= 1
+            self._write_ready.notify_all()
+            async with self._read_ready:
+                self._read_ready.notify_all()
+
+    def reader(self):
+        """Context manager for read lock."""
+        return _ReadLockContext(self)
+
+    def writer(self):
+        """Context manager for write lock."""
+        return _WriteLockContext(self)
+
+
+class _ReadLockContext:
+    def __init__(self, lock: AsyncRWLock):
+        self._lock = lock
+
+    async def __aenter__(self):
+        await self._lock.acquire_read()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self._lock.release_read()
+
+
+class _WriteLockContext:
+    def __init__(self, lock: AsyncRWLock):
+        self._lock = lock
+
+    async def __aenter__(self):
+        await self._lock.acquire_write()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self._lock.release_write()
+
+
 @dataclass
 class ConnectionPoolConfig:
     """Configuration for PostgreSQL connection pools."""
-    min_size: int = 15  # Reasonable minimum for dual-write mode
-    max_size: int = 50  # Higher max to support concurrent operations
+    min_size: int = 5   # Conservative minimum for testing compatibility
+    max_size: int = 20  # Conservative maximum for testing compatibility
     timeout: float = 60.0  # Longer timeout for complex operations
     recycle: int = 7200  # 2 hours recycle time (match config)
     connection_timeout: float = 30.0  # Reasonable connection timeout
@@ -74,9 +153,9 @@ class ConnectionPoolConfig:
             logger.debug(f"ConnectionPoolConfig: Found store.database.postgres config")
             postgres_config.update(config["store"]["database"]["postgres"])
         
-        # Extract values with defaults matching database/default.yaml
-        pool_size = postgres_config.get("pool_size", 20)  # Match database config default
-        max_overflow = postgres_config.get("max_overflow", 40)  # Match database config default
+        # Extract values with conservative defaults to avoid connection exhaustion
+        pool_size = postgres_config.get("pool_size", 5)   # Conservative default
+        max_overflow = postgres_config.get("max_overflow", 10)  # Conservative default
         max_size = pool_size + max_overflow
         
         logger.debug(f"ConnectionPoolConfig: min_size={pool_size}, max_size={max_size}, "
@@ -98,22 +177,23 @@ class ConnectionPoolConfig:
 class GlobalConnectionManager:
     """
     Tier 1 Global Singleton: PostgreSQL Connection Pool Manager
-    
+
     This class implements the singleton pattern for managing PostgreSQL connection
     pools across the entire MemFuse application. It ensures that all services,
     users, and stores share connection pools based on database URL.
-    
+
     Features:
     - Single connection pool per database URL
     - Configuration-driven pool sizing
     - Automatic cleanup and lifecycle management
     - Connection monitoring and statistics
-    - Thread-safe operations
+    - Lock-free high-concurrency operations with read-write locks
+    - Connection pool warmup for common databases
     """
-    
+
     _instance: Optional['GlobalConnectionManager'] = None
     _lock = Lock()
-    
+
     def __init__(self):
         """Initialize the global connection manager."""
         if not PSYCOPG_AVAILABLE:
@@ -122,10 +202,17 @@ class GlobalConnectionManager:
         self._pools: Dict[str, AsyncConnectionPool] = {}
         self._pool_configs: Dict[str, ConnectionPoolConfig] = {}
         self._store_references: Dict[str, Set[weakref.ref]] = {}
-        self._async_lock = None  # Will be created when needed
+        self._warm_pools: Dict[str, AsyncConnectionPool] = {}  # Pre-warmed pools
+        self._rw_lock = AsyncRWLock()  # Replace single async lock with read-write lock
         self._initialized = False
+        self._warmup_completed = False
 
-        logger.info("GlobalConnectionManager: Singleton instance created")
+        # P4 OPTIMIZATION: Health check optimization
+        self._health_check_cache: Dict[str, float] = {}  # db_url -> last_check_time
+        self._health_check_interval = 300.0  # 5 minutes between health checks
+        self._performance_monitor = get_performance_monitor()
+
+        logger.info("GlobalConnectionManager: Optimized singleton instance created")
     
     def __new__(cls) -> 'GlobalConnectionManager':
         """Ensure singleton pattern with thread safety."""
@@ -149,10 +236,12 @@ class GlobalConnectionManager:
         """
         Get or create a shared connection pool for the database URL.
 
-        This method implements the core singleton pattern for connection pools:
-        - One pool per unique database URL
-        - Configuration-driven pool settings
+        This method implements optimized connection pool access:
+        - Lock-free fast path for existing pools (read lock only)
+        - Write lock only when creating new pools
+        - Connection pool warmup for common databases
         - Automatic reference tracking for cleanup
+        - P4 OPTIMIZATION: Performance monitoring and health check optimization
 
         Args:
             db_url: Database connection URL
@@ -162,99 +251,187 @@ class GlobalConnectionManager:
         Returns:
             Shared AsyncConnectionPool instance
         """
-        # Create async lock if not already created
-        if self._async_lock is None:
-            self._async_lock = asyncio.Lock()
+        # P4 OPTIMIZATION: Track connection pool access performance
+        async with self._performance_monitor.track_operation("connection_pool_access", {"db_url": self._mask_url(db_url)}):
+            # Fast path: Check existing pools with read lock only
+            async with self._rw_lock.reader():
+                if db_url in self._pools:
+                    pool = self._pools[db_url]
+                    try:
+                        if not pool.closed:
+                            # Add store reference for tracking (this is safe under read lock)
+                            if store_ref is not None:
+                                self._add_store_reference_safe(db_url, store_ref)
 
-        async with self._async_lock:
-            # Check if pool already exists
-            if db_url in self._pools:
-                pool = self._pools[db_url]
+                            logger.debug(f"GlobalConnectionManager: Fast path - reusing pool for {self._mask_url(db_url)}")
+                            return pool
+                    except Exception as e:
+                        logger.debug(f"GlobalConnectionManager: Pool check failed, will recreate: {e}")
+                        # Fall through to slow path
 
-                # Check if pool is closed or invalid (but don't test database connectivity)
-                # This preserves pool sharing while still detecting truly broken pools
-                try:
-                    if pool.closed:
-                        logger.warning(f"GlobalConnectionManager: Pool is closed for {self._mask_url(db_url)}, recreating")
-                        # Remove closed pool
-                        del self._pools[db_url]
+            # Slow path: Create or recreate pool with write lock
+            async with self._rw_lock.writer():
+                # Double-check under write lock (pool might have been created by another thread)
+                if db_url in self._pools:
+                    pool = self._pools[db_url]
+                    try:
+                        if not pool.closed:
+                            # Add store reference for tracking
+                            if store_ref is not None:
+                                self._add_store_reference(db_url, store_ref)
+
+                            logger.debug(f"GlobalConnectionManager: Double-check - reusing pool for {self._mask_url(db_url)}")
+                            return pool
+                        else:
+                            # Pool is closed, remove it
+                            logger.warning(f"GlobalConnectionManager: Removing closed pool for {self._mask_url(db_url)}")
+                            del self._pools[db_url]
+                            if db_url in self._store_references:
+                                del self._store_references[db_url]
+                    except Exception as e:
+                        logger.warning(f"GlobalConnectionManager: Error checking pool, removing: {e}")
+                        try:
+                            await pool.close()
+                        except Exception:
+                            pass
+                        if db_url in self._pools:
+                            del self._pools[db_url]
                         if db_url in self._store_references:
                             del self._store_references[db_url]
-                        # Continue to create new pool below
-                    else:
-                        # Pool exists and is not closed, reuse it
-                        # Add store reference for tracking
-                        if store_ref is not None:
-                            self._add_store_reference(db_url, store_ref)
 
-                        logger.debug(f"GlobalConnectionManager: Reusing existing pool for {self._mask_url(db_url)}")
-                        return pool
+                # Create new pool
+                logger.info(f"GlobalConnectionManager: Creating new pool for {self._mask_url(db_url)}")
 
-                except Exception as e:
-                    logger.warning(f"GlobalConnectionManager: Error checking pool status for {self._mask_url(db_url)}: {e}")
-                    # If we can't even check the pool status, it's probably broken
+                # Get pool configuration from MemFuse config
+                if config is None:
+                    # Try to get config from global config manager
                     try:
-                        await pool.close()
-                    except Exception:
-                        pass
-                    del self._pools[db_url]
-                    if db_url in self._store_references:
-                        del self._store_references[db_url]
-                    # Continue to create new pool below
-            
-            # Create new pool
-            logger.info(f"GlobalConnectionManager: Creating new pool for {self._mask_url(db_url)}")
+                        from ..utils.config import config_manager
+                        config = config_manager.get_config() or {}
+                    except Exception as e:
+                        logger.warning(f"Could not get global config: {e}")
+                        config = {}
 
-            # Get pool configuration from MemFuse config
-            if config is None:
-                # Try to get config from global config manager
+                logger.info(f"GlobalConnectionManager: Creating pool config from config type={type(config)}")
+                pool_config = ConnectionPoolConfig.from_memfuse_config(config)
+                logger.info(f"GlobalConnectionManager: Pool config created: min_size={pool_config.min_size}, max_size={pool_config.max_size}")
+                self._pool_configs[db_url] = pool_config
+
+                # Create the pool with enhanced connection parameters
+                # Add keepalive parameters to the connection URL
+                enhanced_db_url = self._enhance_db_url_with_keepalives(db_url, pool_config)
+
+                pool = AsyncConnectionPool(
+                    enhanced_db_url,
+                    min_size=pool_config.min_size,
+                    max_size=pool_config.max_size,
+                    open=False,
+                    configure=self._configure_connection,
+                    timeout=pool_config.connection_timeout
+                )
+
+                # Open the pool
                 try:
-                    from ..utils.config import config_manager
-                    config = config_manager.get_config() or {}
+                    await asyncio.wait_for(pool.open(), timeout=pool_config.timeout)
+                    logger.info(f"GlobalConnectionManager: Pool opened successfully "
+                               f"(min={pool_config.min_size}, max={pool_config.max_size})")
+                except asyncio.TimeoutError:
+                    logger.error(f"GlobalConnectionManager: Pool opening timed out for {self._mask_url(db_url)}")
+                    raise
                 except Exception as e:
-                    logger.warning(f"Could not get global config: {e}")
-                    config = {}
+                    logger.error(f"GlobalConnectionManager: Failed to open pool: {e}")
+                    raise
 
-            logger.info(f"GlobalConnectionManager: Creating pool config from config type={type(config)}")
-            pool_config = ConnectionPoolConfig.from_memfuse_config(config)
-            logger.info(f"GlobalConnectionManager: Pool config created: min_size={pool_config.min_size}, max_size={pool_config.max_size}")
-            self._pool_configs[db_url] = pool_config
-            
-            # Create the pool with enhanced connection parameters
-            # Add keepalive parameters to the connection URL
-            enhanced_db_url = self._enhance_db_url_with_keepalives(db_url, pool_config)
+                # Store the pool
+                self._pools[db_url] = pool
+                self._store_references[db_url] = set()
 
-            pool = AsyncConnectionPool(
-                enhanced_db_url,
-                min_size=pool_config.min_size,
-                max_size=pool_config.max_size,
-                open=False,
-                configure=self._configure_connection,
-                timeout=pool_config.connection_timeout
-            )
-            
-            # Open the pool
+                # Add store reference for tracking
+                if store_ref is not None:
+                    self._add_store_reference(db_url, store_ref)
+
+                return pool
+
+    async def warmup_common_pools(self, common_db_urls: Optional[List[str]] = None):
+        """Pre-warm connection pools for common database URLs."""
+        if self._warmup_completed:
+            logger.debug("GlobalConnectionManager: Pool warmup already completed")
+            return
+
+        if common_db_urls is None:
+            # Try to get common URLs from config
             try:
-                await asyncio.wait_for(pool.open(), timeout=pool_config.timeout)
-                logger.info(f"GlobalConnectionManager: Pool opened successfully "
-                           f"(min={pool_config.min_size}, max={pool_config.max_size})")
-            except asyncio.TimeoutError:
-                logger.error(f"GlobalConnectionManager: Pool opening timed out for {self._mask_url(db_url)}")
-                raise
+                from ..utils.config import config_manager
+                config = config_manager.get_config() or {}
+                database_config = config.get("database", {})
+
+                # Build common URLs from config
+                common_db_urls = []
+                if "url" in database_config:
+                    common_db_urls.append(database_config["url"])
+
+                # Add any additional common patterns
+                postgres_config = database_config.get("postgres", {})
+                if postgres_config:
+                    host = postgres_config.get("host", "localhost")
+                    port = postgres_config.get("port", 5432)
+                    database = postgres_config.get("database", "memfuse")
+                    user = postgres_config.get("user", "postgres")
+                    password = postgres_config.get("password", "")
+
+                    if password:
+                        url = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+                    else:
+                        url = f"postgresql://{user}@{host}:{port}/{database}"
+
+                    if url not in common_db_urls:
+                        common_db_urls.append(url)
+
             except Exception as e:
-                logger.error(f"GlobalConnectionManager: Failed to open pool: {e}")
-                raise
-            
-            # Store the pool
-            self._pools[db_url] = pool
-            self._store_references[db_url] = set()
-            
-            # Add store reference for tracking
-            if store_ref is not None:
-                self._add_store_reference(db_url, store_ref)
-            
-            return pool
-    
+                logger.warning(f"GlobalConnectionManager: Could not determine common URLs from config: {e}")
+                common_db_urls = []
+
+        if not common_db_urls:
+            logger.info("GlobalConnectionManager: No common database URLs to warm up")
+            self._warmup_completed = True
+            return
+
+        logger.info(f"GlobalConnectionManager: Starting warmup for {len(common_db_urls)} database URLs")
+
+        warmup_tasks = []
+        for db_url in common_db_urls:
+            task = asyncio.create_task(self._warmup_single_pool(db_url))
+            warmup_tasks.append(task)
+
+        # Wait for all warmup tasks to complete
+        results = await asyncio.gather(*warmup_tasks, return_exceptions=True)
+
+        successful = sum(1 for r in results if not isinstance(r, Exception))
+        failed = len(results) - successful
+
+        logger.info(f"GlobalConnectionManager: Pool warmup completed - {successful} successful, {failed} failed")
+        self._warmup_completed = True
+
+    async def _warmup_single_pool(self, db_url: str):
+        """Warm up a single connection pool."""
+        try:
+            logger.debug(f"GlobalConnectionManager: Warming up pool for {self._mask_url(db_url)}")
+
+            # Create the pool without store reference
+            pool = await self.get_connection_pool(db_url)
+
+            # Test the pool with a simple query
+            conn = await pool.getconn()
+            try:
+                await conn.execute("SELECT 1")
+                logger.debug(f"GlobalConnectionManager: Pool warmup successful for {self._mask_url(db_url)}")
+            finally:
+                await pool.putconn(conn)
+
+        except Exception as e:
+            logger.warning(f"GlobalConnectionManager: Pool warmup failed for {self._mask_url(db_url)}: {e}")
+            raise
+
     def _enhance_db_url_with_keepalives(self, db_url: str, config: ConnectionPoolConfig) -> str:
         """Add keepalive parameters to database URL for better connection stability."""
         try:
@@ -284,33 +461,81 @@ class GlobalConnectionManager:
             return db_url
 
     async def _configure_connection(self, conn):
-        """Configure a new connection with pgvector support."""
+        """
+        Configure a new connection with pgvector support.
+
+        P4 OPTIMIZATION: Optimized health check with caching to reduce overhead.
+        """
+        # P4 OPTIMIZATION: Check if we need to perform health check
+        conn_info = str(conn.info.dsn) if hasattr(conn, 'info') and hasattr(conn.info, 'dsn') else "unknown"
+        current_time = time.time()
+
+        # Check if we've recently performed health check for this connection type
+        last_check = self._health_check_cache.get(conn_info, 0)
+        if current_time - last_check < self._health_check_interval:
+            logger.debug(f"GlobalConnectionManager: Skipping health check for {conn_info} (cached)")
+            return
+
         try:
-            await register_vector_async(conn)
-            logger.debug("GlobalConnectionManager: pgvector registered on connection")
+            # Perform pgvector registration with performance tracking
+            async with self._performance_monitor.track_operation("pgvector_registration", {"conn_info": conn_info}):
+                await register_vector_async(conn)
+
+            # Update health check cache
+            self._health_check_cache[conn_info] = current_time
+            logger.debug(f"GlobalConnectionManager: pgvector registered on connection {conn_info}")
         except Exception as e:
-            logger.warning(f"GlobalConnectionManager: Failed to register pgvector: {e}")
+            logger.warning(f"GlobalConnectionManager: Failed to register pgvector on {conn_info}: {e}")
     
     def _add_store_reference(self, db_url: str, store_ref: Any):
         """Add a weak reference to a store using this pool."""
         if db_url not in self._store_references:
             self._store_references[db_url] = set()
-        
+
         # Create weak reference with cleanup callback
         def cleanup_ref(ref):
             if db_url in self._store_references:
                 self._store_references[db_url].discard(ref)
                 logger.debug(f"GlobalConnectionManager: Cleaned up store reference for {self._mask_url(db_url)}")
-        
+
         weak_ref = weakref.ref(store_ref, cleanup_ref)
         self._store_references[db_url].add(weak_ref)
-        
+
         logger.debug(f"GlobalConnectionManager: Added store reference for {self._mask_url(db_url)} "
                     f"(total refs: {len(self._store_references[db_url])})")
+
+    def _add_store_reference_safe(self, db_url: str, store_ref: Any):
+        """Thread-safe version of _add_store_reference for use under read locks."""
+        try:
+            # Initialize the set if it doesn't exist (this is thread-safe for dict access)
+            if db_url not in self._store_references:
+                # Use a lock-free approach: create the set if missing
+                # This is safe because dict access is atomic in Python
+                if db_url not in self._store_references:
+                    self._store_references[db_url] = set()
+
+            # Create weak reference with cleanup callback
+            def cleanup_ref(ref):
+                # This cleanup will be called later and doesn't need immediate consistency
+                if db_url in self._store_references:
+                    self._store_references[db_url].discard(ref)
+                    logger.debug(f"GlobalConnectionManager: Cleaned up store reference for {self._mask_url(db_url)}")
+
+            weak_ref = weakref.ref(store_ref, cleanup_ref)
+
+            # Add the reference to the set (set.add is thread-safe)
+            self._store_references[db_url].add(weak_ref)
+
+            logger.debug(f"GlobalConnectionManager: Added store reference for {self._mask_url(db_url)} "
+                        f"(total refs: {len(self._store_references[db_url])})")
+
+        except Exception as e:
+            logger.debug(f"GlobalConnectionManager: Could not add store reference safely: {e}")
+            # This is non-critical, so we continue
     
     async def close_pool(self, db_url: str, force: bool = False):
         """Close a specific connection pool."""
-        async with self._async_lock:
+        async with self._rw_lock.writer():
             if db_url not in self._pools:
                 logger.debug(f"GlobalConnectionManager: Pool for {self._mask_url(db_url)} not found")
                 return
@@ -341,13 +566,14 @@ class GlobalConnectionManager:
     async def close_all_pools(self, force: bool = False):
         """Close all connection pools."""
         logger.info("GlobalConnectionManager: Closing all connection pools...")
-        
+
         # Get list of URLs to avoid modifying dict during iteration
-        db_urls = list(self._pools.keys())
-        
+        async with self._rw_lock.reader():
+            db_urls = list(self._pools.keys())
+
         for db_url in db_urls:
             await self.close_pool(db_url, force=force)
-        
+
         logger.info("GlobalConnectionManager: All connection pools closed")
     
     def _get_active_references(self, db_url: str) -> int:
@@ -413,3 +639,18 @@ def get_global_connection_manager() -> GlobalConnectionManager:
     if _global_connection_manager is None:
         _global_connection_manager = GlobalConnectionManager.get_instance()
     return _global_connection_manager
+
+
+async def warmup_global_connection_pools(common_db_urls: Optional[List[str]] = None):
+    """Warm up global connection pools for better performance.
+
+    This function should be called during application startup to pre-create
+    connection pools for common database URLs, reducing latency for the first
+    database operations.
+
+    Args:
+        common_db_urls: List of database URLs to warm up. If None, will try
+                       to determine from configuration.
+    """
+    manager = get_global_connection_manager()
+    await manager.warmup_common_pools(common_db_urls)

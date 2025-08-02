@@ -53,6 +53,19 @@ This directory contains technical documentation for major optimizations and arch
 - Automatic embedding generation on data insertion
 - Custom pgai-like implementation without external dependencies
 
+### [Performance Optimization Project](performance/)
+**Problem**: Critical performance bottlenecks causing 60-80% API response delays
+**Solution**: Four-phase comprehensive optimization addressing all major bottlenecks
+**Impact**: 60-80% API response time reduction, 2-3x throughput improvement, 90% connection latency reduction
+
+**Key Achievements**:
+- **Phase 1**: AsyncRWLock connection pools, service pre-caching
+- **Phase 2**: Parallel embedding generation (9.3x speedup), async buffer processing
+- **Phase 3**: True parallel memory layer processing, unified storage management
+- **Phase 4**: Performance monitoring, health check optimization
+
+**📁 Complete Documentation**: See **[performance/](performance/)** directory for comprehensive project documentation including implementation guides, phase-by-phase details, and performance analysis.
+
 ## Architecture Principles
 
 ### Design Philosophy

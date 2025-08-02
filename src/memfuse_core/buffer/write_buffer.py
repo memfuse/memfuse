@@ -131,6 +131,8 @@ class WriteBuffer:
     async def add_batch(self, message_batch_list: MessageBatchList, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Optimized batch processing with intelligent coordination.
 
+        P2 OPTIMIZATION: Enhanced with pipeline processing and parallel operations.
+
         Args:
             message_batch_list: List of lists of messages
             session_id: Session ID for context
@@ -143,17 +145,27 @@ class WriteBuffer:
 
         start_time = time.time()
 
-        # 1. Batch preprocessing and validation
-        processed_batch = await self._preprocess_batch(message_batch_list, session_id)
+        # P2 OPTIMIZATION: Pipeline processing with parallel operations
+        # Run preprocessing and token calculation in parallel
+        preprocessing_task = asyncio.create_task(self._preprocess_batch(message_batch_list, session_id))
 
-        # 2. Batch token calculation (single operation)
-        total_tokens = await self._calculate_batch_tokens(processed_batch)
+        # Start session analysis early (can run in parallel with preprocessing)
+        session_changes = self._detect_session_changes(message_batch_list)
 
-        # 3. Intelligent session and transfer management
-        session_changes = self._detect_session_changes(processed_batch)
-        transfer_strategy = self._plan_transfer_strategy(total_tokens, session_changes)
+        # Wait for preprocessing to complete
+        processed_batch = await preprocessing_task
 
-        # 4. Execute optimized batch strategy
+        # Run token calculation and transfer planning in parallel
+        token_calculation_task = asyncio.create_task(self._calculate_batch_tokens(processed_batch))
+        transfer_strategy = self._plan_transfer_strategy_async(session_changes)
+
+        # Wait for token calculation
+        total_tokens = await token_calculation_task
+
+        # Update transfer strategy with token information
+        transfer_strategy = self._finalize_transfer_strategy(transfer_strategy, total_tokens)
+
+        # Execute optimized batch strategy
         execution_result = await self._execute_batch_strategy(processed_batch, transfer_strategy)
 
         # 5. Update statistics
@@ -533,3 +545,51 @@ class WriteBuffer:
         logger.info(f"WriteBuffer: Batch processing completed in {processing_time:.3f}s, "
                    f"strategy: {execution_result.get('strategy', 'unknown')}, "
                    f"transfers: {execution_result.get('transfers', 0)}")
+
+    # P2 OPTIMIZATION: Pipeline processing helper methods
+
+    def _plan_transfer_strategy_async(self, session_changes: List) -> Dict[str, Any]:
+        """Asynchronous version of transfer strategy planning.
+
+        This method can run in parallel with token calculation.
+
+        Args:
+            session_changes: List of session change information
+
+        Returns:
+            Preliminary transfer strategy (will be finalized with token info)
+        """
+        if len(session_changes) > 1:
+            return {
+                "type": "session_grouped",
+                "groups": session_changes,
+                "reason": "multiple_sessions",
+                "finalized": False
+            }
+        else:
+            return {
+                "type": "sequential",
+                "reason": "standard_processing",
+                "finalized": False
+            }
+
+    def _finalize_transfer_strategy(self, preliminary_strategy: Dict[str, Any], total_tokens: int) -> Dict[str, Any]:
+        """Finalize transfer strategy with token information.
+
+        Args:
+            preliminary_strategy: Strategy from _plan_transfer_strategy_async
+            total_tokens: Total tokens calculated for the batch
+
+        Returns:
+            Finalized transfer strategy
+        """
+        strategy = preliminary_strategy.copy()
+        strategy["finalized"] = True
+
+        # Apply token-based optimizations
+        if total_tokens > self.round_buffer.max_tokens * 2:
+            # Large batch: use bulk transfer
+            strategy["type"] = "bulk_transfer"
+            strategy["reason"] = f"large_batch_tokens ({total_tokens} > {self.round_buffer.max_tokens * 2})"
+
+        return strategy

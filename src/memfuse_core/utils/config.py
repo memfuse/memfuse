@@ -23,6 +23,16 @@ def _get_config() -> Dict[str, Any]:
     Returns:
         Configuration dictionary
     """
+    # Try to use global config manager first for better performance
+    try:
+        from .global_config_manager import get_global_config_manager
+        global_config = get_global_config_manager()
+        if global_config.is_initialized():
+            return global_config.get_raw_config()
+    except ImportError:
+        pass
+    
+    # Fallback to legacy config manager
     return config_manager.get_config()
 
 
@@ -106,8 +116,12 @@ def get_top_k() -> int:
     Returns:
         The top_k value
     """
-    config = _get_config()
-    return config.get("store", {}).get("top_k", 5)
+    try:
+        from .global_config_manager import get_config
+        return get_config("store.top_k", 5)
+    except ImportError:
+        config = _get_config()
+        return config.get("store", {}).get("top_k", 5)
 
 
 def get_similarity_threshold() -> float:
@@ -116,8 +130,12 @@ def get_similarity_threshold() -> float:
     Returns:
         The similarity threshold value
     """
-    config = _get_config()
-    return config.get("store", {}).get("similarity_threshold", 0.3)
+    try:
+        from .global_config_manager import get_config
+        return get_config("store.similarity_threshold", 0.3)
+    except ImportError:
+        config = _get_config()
+        return config.get("store", {}).get("similarity_threshold", 0.3)
 
 
 def get_embedding_dim(model_name: Optional[str] = None) -> int:
@@ -129,21 +147,38 @@ def get_embedding_dim(model_name: Optional[str] = None) -> int:
     Returns:
         The embedding dimension
     """
-    config = _get_config()
-    embedding_dim = config.get("embedding", {}).get("dimension", 384)
+    try:
+        from .global_config_manager import get_config, get_config_section
+        embedding_dim = get_config("embedding.dimension", 384)
 
-    # Check if model-specific dimension is available
-    if model_name is not None:
-        # Get model-specific dimension from config
-        models = config.get("embedding", {}).get("models", {})
-        if model_name in models:
-            model_config = models[model_name]
-            if "dimension" in model_config:
-                model_dim = model_config["dimension"]
-                if isinstance(model_dim, int) and model_dim > 0:
-                    return model_dim
+        # Check if model-specific dimension is available
+        if model_name is not None:
+            # Get model-specific dimension from config
+            models = get_config_section("embedding").get("models", {})
+            if model_name in models:
+                model_config = models[model_name]
+                if "dimension" in model_config:
+                    model_dim = model_config["dimension"]
+                    if isinstance(model_dim, int) and model_dim > 0:
+                        return model_dim
 
-    return embedding_dim
+        return embedding_dim
+    except ImportError:
+        config = _get_config()
+        embedding_dim = config.get("embedding", {}).get("dimension", 384)
+
+        # Check if model-specific dimension is available
+        if model_name is not None:
+            # Get model-specific dimension from config
+            models = config.get("embedding", {}).get("models", {})
+            if model_name in models:
+                model_config = models[model_name]
+                if "dimension" in model_config:
+                    model_dim = model_config["dimension"]
+                    if isinstance(model_dim, int) and model_dim > 0:
+                        return model_dim
+
+        return embedding_dim
 
 
 def get_graph_relation() -> str:

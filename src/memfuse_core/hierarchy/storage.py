@@ -5,6 +5,7 @@ This module provides a centralized storage manager that coordinates
 access to multiple storage backends (vector, graph, keyword, SQL).
 """
 
+import asyncio
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from loguru import logger
@@ -428,22 +429,60 @@ class UnifiedStorageManager(StorageManager):
         return self.backends.get(storage_type)
     
     async def write_to_all(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> Dict[StorageType, Optional[str]]:
-        """Write data to all available storage backends."""
-        results = {}
-        
-        for storage_type, backend in self.backends.items():
+        """Write data to all available storage backends in parallel.
+
+        P3 OPTIMIZATION: Parallel storage backend writes to eliminate synchronization bottlenecks.
+        """
+        if not self.backends:
+            logger.warning("UnifiedStorageManager: No backends available for write_to_all")
+            return {}
+
+        # P3 OPTIMIZATION: Create parallel tasks for all storage backends
+        async def write_to_backend_task(storage_type: StorageType, backend: StoreBackendAdapter) -> tuple[StorageType, Optional[str]]:
+            """Write to a single backend with error handling."""
             try:
                 item_id = await backend.write(data, metadata)
-                results[storage_type] = item_id
                 logger.debug(f"UnifiedStorageManager: Wrote to {storage_type.value}: {item_id}")
-                
+                return storage_type, item_id
             except Exception as e:
                 logger.error(f"UnifiedStorageManager: Write failed for {storage_type.value}: {e}")
-                results[storage_type] = None
-                self.error_count += 1
-        
+                return storage_type, None
+
+        # Create tasks for all backends
+        tasks = [
+            write_to_backend_task(storage_type, backend)
+            for storage_type, backend in self.backends.items()
+        ]
+
+        # Execute all writes in parallel
+        start_time = asyncio.get_event_loop().time()
+        task_results = await asyncio.gather(*tasks, return_exceptions=True)
+        end_time = asyncio.get_event_loop().time()
+
+        # Process results
+        results = {}
+        error_count = 0
+
+        for result in task_results:
+            if isinstance(result, Exception):
+                logger.error(f"UnifiedStorageManager: Backend write task failed: {result}")
+                error_count += 1
+                continue
+
+            storage_type, item_id = result
+            results[storage_type] = item_id
+            if item_id is None:
+                error_count += 1
+
+        # Update statistics
         self.write_count += 1
+        self.error_count += error_count
         self.last_operation_time = datetime.utcnow()
+
+        processing_time = end_time - start_time
+        logger.info(f"UnifiedStorageManager: Parallel write to {len(self.backends)} backends completed in {processing_time:.3f}s, "
+                   f"successful: {len([r for r in results.values() if r is not None])}/{len(self.backends)}")
+
         return results
     
     async def write_to_backend(self, storage_type: StorageType, data: Any, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:

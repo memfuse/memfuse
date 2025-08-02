@@ -30,6 +30,8 @@ except ImportError:
 
 from .utils.path_manager import PathManager
 from .utils.config import config_manager
+from .utils.global_config_manager import get_global_config_manager
+from .services.global_model_manager import get_global_model_manager
 
 # Import services
 from .services import (
@@ -100,6 +102,33 @@ async def get_buffer_service(
 # Server Management
 # ============================================================================
 
+async def initialize_global_singletons(cfg: DictConfig) -> None:
+    """Initialize global singletons for optimal performance.
+    
+    Args:
+        cfg: Configuration from Hydra (DictConfig)
+    """
+    # Initialize global configuration manager
+    global_config = get_global_config_manager()
+    await global_config.initialize(cfg)
+    
+    # Also set in legacy config manager for backward compatibility
+    config_manager.set_config(cfg)
+    
+    # Log configuration performance statistics
+    config_stats = global_config.get_performance_stats()
+    logger.info(f"Global configuration initialized: {config_stats['cached_keys']} keys cached in {config_stats['load_time_seconds']:.3f}s")
+    
+    # Initialize global model manager
+    global_model_manager = get_global_model_manager()
+    config_dict = global_config.get_raw_config()
+    await global_model_manager.initialize_models(config_dict)
+    
+    # Log model performance statistics
+    model_stats = global_model_manager.get_performance_stats()
+    logger.info(f"Global models initialized: {model_stats['total_models']} models loaded in {model_stats['initialization_time_seconds']:.3f}s")
+
+
 def run_server(cfg: DictConfig):
     """Run the MemFuse server with the given configuration.
 
@@ -112,9 +141,13 @@ def run_server(cfg: DictConfig):
     # Use provided configuration to run server
     logger.info("Using provided configuration to run server")
 
-    # 1. Set configuration
-    config_manager.set_config(cfg)
-    logger.info("Configuration set successfully in ConfigManager")
+    # 1. Initialize global singletons for optimal performance
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Initialize global singletons first
+    loop.run_until_complete(initialize_global_singletons(cfg))
+    logger.info("Global singletons initialized successfully")
 
     # 2. Create necessary directories
     PathManager.get_logs_dir()
@@ -130,8 +163,6 @@ def run_server(cfg: DictConfig):
 
     # 4. Initialize all services
     service_initializer = get_service_initializer()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
     # Initialize services
     success = loop.run_until_complete(service_initializer.initialize_all_services(cfg))
@@ -292,9 +323,49 @@ def create_app() -> FastAPI:
         # Fallback: create app directly if service not initialized
         from .services.app_service import AppService
         temp_service = AppService()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(temp_service.initialize())
+
+        # Check if we're already in an event loop
+        try:
+            loop = asyncio.get_running_loop()
+            # If we're in a running loop, we can't use run_until_complete
+            raise RuntimeError(
+                "Cannot initialize app service from within a running event loop. "
+                "Use create_app_async() instead."
+            )
+        except RuntimeError as e:
+            if "no running event loop" in str(e):
+                # No running loop, safe to create new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(temp_service.initialize())
+                app = temp_service.get_app()
+            else:
+                # Re-raise the original error
+                raise
+
+        if app is None:
+            raise RuntimeError("Failed to create FastAPI application")
+
+    return app
+
+
+async def create_app_async() -> FastAPI:
+    """Create and configure the FastAPI application asynchronously.
+
+    This function can be used when already within an async context.
+
+    Returns:
+        Configured FastAPI application
+    """
+    app_service = get_app_service()
+    app = app_service.get_app()
+
+    if app is None:
+        logger.warning("App service not initialized, creating app directly")
+        # Fallback: create app directly if service not initialized
+        from .services.app_service import AppService
+        temp_service = AppService()
+        await temp_service.initialize()
         app = temp_service.get_app()
 
         if app is None:

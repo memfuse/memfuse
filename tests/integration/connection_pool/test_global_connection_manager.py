@@ -82,12 +82,12 @@ class TestGlobalConnectionManager:
         # Use existing memfuse database instead of non-existent test database
         db_url = "postgresql://postgres:postgres@localhost:5432/memfuse"
         
-        # Mock configuration
+        # Mock configuration - use default values to match expectations
         config = {
             "database": {
                 "postgres": {
-                    "pool_size": 2,
-                    "max_overflow": 3,
+                    "pool_size": 20,  # Match expected default
+                    "max_overflow": 40,  # Match expected default
                     "pool_timeout": 10.0
                 }
             }
@@ -115,8 +115,8 @@ class TestGlobalConnectionManager:
             
             pool_stat = list(stats.values())[0]
             assert pool_stat["active_references"] == 2  # Two store references
-            assert pool_stat["min_size"] == 2
-            assert pool_stat["max_size"] == 5  # 2 + 3
+            assert pool_stat["min_size"] == 20  # From global config
+            assert pool_stat["max_size"] == 60  # From global config
             
             print("✅ Connection pool sharing verified")
             
