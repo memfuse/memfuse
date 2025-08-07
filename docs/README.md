@@ -2,35 +2,69 @@
 
 ## Overview
 
-This directory contains comprehensive documentation for the MemFuse system, organized by functional areas and architectural components.
+Comprehensive documentation for the MemFuse system architecture and implementation.
 
 ## Documentation Structure
 
-### 📁 Architecture (`/architecture/`)
+### API Documentation (`/api/`)
 
-Core architectural documentation for system components:
+REST API resources and endpoints:
+- **[agents.md](api/resources/agents.md)** - Agent management
+- **[knowledge.md](api/resources/knowledge.md)** - Knowledge operations  
+- **[memory.md](api/resources/memory.md)** - Memory management
+- **[messages.md](api/resources/messages.md)** - Message handling
+- **[sessions.md](api/resources/sessions.md)** - Session management
+- **[users.md](api/resources/users.md)** - User operations
 
-- **[`buffer.md`](architecture/buffer.md)** - Buffer system architecture and implementation
-  - WriteBuffer, RoundBuffer, HybridBuffer, QueryBuffer components
-  - Data flow pipelines and processing strategies
-  - Configuration, performance, and monitoring
+### Architecture Documentation (`/architecture/`)
 
-- **[`chunking.md`](architecture/chunking.md)** - Chunking system architecture and strategies
-  - ChunkStrategy implementations and selection guide
-  - Store integration and unified interfaces
-  - LLM integration and contextual retrieval
+#### Buffer System (`/architecture/buffer/`)
+- **[README.md](architecture/buffer/README.md)** - Buffer system overview
+- **[overview.md](architecture/buffer/overview.md)** - Architecture overview and bypass mechanism
+- **[write_buffer.md](architecture/buffer/write_buffer.md)** - WriteBuffer abstraction
+- **[query_buffer.md](architecture/buffer/query_buffer.md)** - QueryBuffer and multi-level caching
+- **[speculative_buffer.md](architecture/buffer/speculative_buffer.md)** - SpeculativeBuffer design
+- **[configuration.md](architecture/buffer/configuration.md)** - Configuration guide
+- **[bypass_mechanism.md](architecture/buffer/bypass_mechanism.md)** - Bypass functionality
+- **[performance.md](architecture/buffer/performance.md)** - Performance analysis
+- **[buffer_only_parameter.md](architecture/buffer/buffer_only_parameter.md)** - Query-time controls
+- **[caching.md](architecture/buffer/caching.md)** - Caching strategies
 
-### 📁 Archive (`/archive/`)
+#### Core Architecture
+- **[chunking.md](architecture/chunking.md)** - Chunking system architecture
+- **[memory.md](architecture/memory.md)** - Memory layer architecture
+- **[rag.md](architecture/rag.md)** - RAG system architecture
 
-Historical documentation and implementation records:
+#### PgAI Integration (`/architecture/pgai/`)
+- **[overview.md](architecture/pgai/overview.md)** - PgAI integration overview
+- **[multi_layer.md](architecture/pgai/multi_layer.md)** - Multi-layer processing
 
-- `buffer_*.md` - Previous buffer implementation documentation
-- `sdk_buffer_integration.md` - SDK integration documentation
-- `chunking_legacy.md` - Original chunking documentation
+### Optimization Documentation (`/optimization/`)
 
-### 📁 Assets (`/assets/`)
+Performance optimization guides:
+- **[README.md](optimization/README.md)** - Optimization overview
+- **[connection_pool.md](optimization/connection_pool.md)** - Connection pool optimization
+- **[singleton.md](optimization/singleton.md)** - Singleton pattern implementation
+- **[pgai_trigger.md](optimization/pgai_trigger.md)** - PgAI trigger optimization
 
-Documentation assets and resources:
+#### Buffer Optimization (`/optimization/buffer/`)
+- **[abstraction.md](optimization/buffer/abstraction.md)** - Buffer abstraction patterns
+- **[flush.md](optimization/buffer/flush.md)** - Flush optimization
+
+#### Performance Analysis (`/optimization/performance/`)
+- **[README.md](optimization/performance/README.md)** - Performance overview
+- **[analysis_and_plan.md](optimization/performance/analysis_and_plan.md)** - Performance analysis
+- **[design.md](optimization/performance/design.md)** - Performance design
+- **[implementation_guide.md](optimization/performance/implementation_guide.md)** - Implementation guide
+- **[phase1_connection_pool.md](optimization/performance/phase1_connection_pool.md)** - Phase 1: Connection pool
+- **[phase2_buffer_system.md](optimization/performance/phase2_buffer_system.md)** - Phase 2: Buffer system
+- **[phase3_memory_layers.md](optimization/performance/phase3_memory_layers.md)** - Phase 3: Memory layers
+- **[phase4_advanced.md](optimization/performance/phase4_advanced.md)** - Phase 4: Advanced features
+
+#### Parallel Processing
+- **[parallel_processing.md](optimization/parallel_processing.md)** - Parallel processing optimization
+
+### Assets (`/assets/`)
 
 - `logo.png` - MemFuse logo and branding assets
 
@@ -38,189 +72,37 @@ Documentation assets and resources:
 
 ### For Developers
 
-1. **Understanding the System**: Start with [`architecture/buffer.md`](architecture/buffer.md) for core buffer concepts
-2. **Chunking Implementation**: Review [`architecture/chunking.md`](architecture/chunking.md) for data processing
-3. **Historical Context**: Check `/archive/` for implementation evolution
+1. **Buffer System**: Start with [`architecture/buffer/README.md`](architecture/buffer/README.md)
+2. **API Reference**: Check [`api/resources/`](api/resources/) for endpoint documentation
+3. **Performance**: Review [`optimization/README.md`](optimization/README.md) for optimization guides
 
 ### For Architects
 
-1. **System Design**: Review architectural documents for component interactions
-2. **Performance Characteristics**: Understand latency and throughput patterns
-3. **Integration Patterns**: Learn service integration strategies
+1. **System Overview**: Read [`architecture/buffer/overview.md`](architecture/buffer/overview.md)
+2. **Memory Architecture**: Review [`architecture/memory.md`](architecture/memory.md)
+3. **Performance Design**: Check [`optimization/performance/design.md`](optimization/performance/design.md)
 
-## Architecture Summary
+## Key Features
 
-### Core Components
-
-| Component | Purpose | Documentation |
-|-----------|---------|---------------|
-| **WriteBuffer** | Unified entry point for message processing | [`buffer.md`](architecture/buffer.md#writebuffer---unified-entry-point) |
-| **RoundBuffer** | Token-based FIFO buffering | [`buffer.md`](architecture/buffer.md#roundbuffer---token-based-fifo) |
-| **HybridBuffer** | Dual-format storage management | [`buffer.md`](architecture/buffer.md#hybridbuffer---dual-format-storage) |
-| **QueryBuffer** | Intelligent query processing | [`buffer.md`](architecture/buffer.md#querybuffer---intelligent-query-processing) |
-| **ChunkStrategy** | Pluggable chunking algorithms | [`chunking.md`](architecture/chunking.md#chunking-strategies) |
-| **Store Layer** | Unified storage interface | [`chunking.md`](architecture/chunking.md#storage-integration) |
-
-### Key Features
-
-- ✅ **Unified Architecture**: WriteBuffer as single entry point
-- ✅ **Intelligent Buffering**: Token and size-based thresholds
-- ✅ **Flexible Chunking**: Multiple strategy implementations
-- ✅ **Multi-Store Support**: Vector, Keyword, and Graph storage
-- ✅ **Performance Optimization**: Parallel processing and caching
-- ✅ **LLM Integration**: Contextual enhancement capabilities
+- **Multi-Layer Buffer System**: WriteBuffer, QueryBuffer, SpeculativeBuffer with bypass capability
+- **Advanced Memory Architecture**: M0/M1/M2 memory layers with parallel processing
+- **Performance Optimized**: Connection pooling, parallel processing, and intelligent caching
+- **Comprehensive API**: RESTful services for all system components
+- **Pluggable Storage**: Support for multiple storage backends
+- **Production Ready**: Extensive configuration and monitoring capabilities
 
 ## Documentation Standards
 
-### Writing Guidelines
-
 - **Language**: All documentation in English
-- **Structure**: Clear hierarchical organization with proper headings
+- **Structure**: Clear hierarchical organization with consistent formatting
 - **Diagrams**: Mermaid flowcharts for architectural visualization
 - **Code Examples**: Practical implementation examples
-- **API Documentation**: Comprehensive interface descriptions
+- **Configuration**: YAML configuration examples with explanations
 
-### Diagram Standards
+## Contributing
 
-```mermaid
-graph TB
-    A[Component A] --> B[Component B]
-    B --> C[Component C]
-    
-    style A fill:#e1f5fe
-    style B fill:#f3e5f5
-    style C fill:#e8f5e8
-```
-
-**Color Coding**:
-- Blue (`#e1f5fe`): Input/Client components
-- Purple (`#f3e5f5`): Processing components  
-- Green (`#e8f5e8`): Storage/Output components
-
-## Architecture Overview
-
-### System Components
-
-```mermaid
-graph TB
-    subgraph "Client Layer"
-        A[API Clients] --> B[REST API]
-    end
-    
-    subgraph "Service Layer"
-        B --> C[BufferService]
-        B --> D[MemoryService]
-    end
-    
-    subgraph "Buffer System"
-        C --> E[WriteBuffer]
-        C --> F[QueryBuffer]
-        E --> G[RoundBuffer]
-        E --> H[HybridBuffer]
-    end
-    
-    subgraph "Processing System"
-        D --> I[ChunkStrategy]
-        I --> J[ChunkData]
-    end
-    
-    subgraph "Storage System"
-        J --> K[VectorStore]
-        J --> L[KeywordStore]
-        J --> M[GraphStore]
-    end
-    
-    style A fill:#e1f5fe
-    style C fill:#f3e5f5
-    style D fill:#f3e5f5
-    style E fill:#f3e5f5
-    style F fill:#f3e5f5
-    style K fill:#e8f5e8
-    style L fill:#e8f5e8
-    style M fill:#e8f5e8
-```
-
-### Key Design Principles
-
-1. **Unified Interfaces**: Consistent APIs across components
-2. **Separation of Concerns**: Clear component boundaries
-3. **Performance Optimization**: Intelligent batching and caching
-4. **Extensibility**: Pluggable strategies and providers
-5. **Observability**: Comprehensive monitoring and metrics
-
-## Contributing to Documentation
-
-### Adding New Documentation
-
-1. **Location**: Place in appropriate subdirectory (`/architecture/`, `/api/`, etc.)
-2. **Naming**: Use descriptive, lowercase filenames with hyphens
-3. **Structure**: Follow established template patterns
-4. **Review**: Ensure technical accuracy and clarity
-
-### Updating Existing Documentation
-
-1. **Accuracy**: Keep documentation synchronized with code changes
-2. **Versioning**: Note significant architectural changes
-3. **Backward Compatibility**: Maintain links and references
-4. **Testing**: Verify code examples and configurations
-
-### Documentation Templates
-
-#### Architecture Document Template
-
-```markdown
-# Component Name Architecture
-
-## Overview
-Brief description of the component and its purpose.
-
-## Core Architecture
-System components and their relationships.
-
-## Implementation Details
-Technical implementation specifics.
-
-## Configuration
-Configuration options and parameters.
-
-## Performance Characteristics
-Latency, throughput, and resource usage.
-
-## Integration Patterns
-How the component integrates with other systems.
-
-## Future Enhancements
-Planned improvements and extensions.
-```
-
-## Maintenance
-
-### Regular Updates
-
-- **Quarterly Reviews**: Ensure documentation accuracy
-- **Release Synchronization**: Update with major releases
-- **Performance Metrics**: Update benchmarks and characteristics
-- **API Changes**: Document interface modifications
-
-### Quality Assurance
-
-- **Technical Review**: Verify implementation accuracy
-- **Editorial Review**: Ensure clarity and consistency
-- **Link Validation**: Check internal and external references
-- **Example Testing**: Validate code examples and configurations
-
-## Support
-
-### Getting Help
-
-- **Technical Questions**: Review architecture documentation
-- **Implementation Issues**: Check code examples and patterns
-- **Performance Concerns**: Review performance characteristics
-- **Integration Problems**: Consult integration patterns
-
-### Feedback
-
-- **Documentation Issues**: Report inaccuracies or unclear sections
-- **Missing Information**: Request additional documentation
-- **Improvement Suggestions**: Propose enhancements
-- **New Requirements**: Suggest new documentation needs
+1. Place documentation in appropriate subdirectories
+2. Use descriptive, lowercase filenames with hyphens
+3. Follow established template patterns
+4. Ensure technical accuracy and test configurations
+5. Update cross-references between related documents

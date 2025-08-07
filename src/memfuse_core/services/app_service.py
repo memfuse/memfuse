@@ -11,7 +11,7 @@ from omegaconf import DictConfig
 from loguru import logger
 
 from .base_service import BaseService
-from ..utils.config import config_manager
+from ..utils.global_config_manager import get_global_config_manager
 
 
 class AppService(BaseService):
@@ -76,7 +76,8 @@ class AppService(BaseService):
         from ..api import health, users, agents, sessions, messages, knowledge, api_keys, chunks
         from ..utils.auth import RateLimitMiddleware
         
-        # Get configuration
+        # Get configuration from unified config manager
+        config_manager = get_global_config_manager()
         config_dict = config_manager.get_config()
         cfg = config_dict if config_dict else {}
         

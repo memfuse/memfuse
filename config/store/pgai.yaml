@@ -132,12 +132,12 @@ store:
   
   # Multi-path retrieval configuration
   multi_path:
-    keyword_weight: 0.2
-    vector_weight: 0.5
-    graph_weight: 0.3
-    use_keyword: true
-    use_vector: true
-    use_graph: false
+    keyword_weight: 0.0
+    vector_weight: 1.0
+    graph_weight: 0.0
+    use_keyword: false  # Temporarily disabled for testing
+    use_vector: true    # Only use vector store
+    use_graph: false    # Temporarily disabled for testing
     fusion_strategy: "rrf"
 
 # =============================================================================
@@ -213,6 +213,15 @@ memory_layers:
       queue_timeout: 30.0
       max_concurrent_extractions: 3
       fallback_on_failure: true  # Continue M0 processing if M1 fails
+    
+    # M0-first writing strategy optimization
+    m0_first_strategy:
+      enabled: true                     # Enable M0-first writing
+      immediate_response: true          # Return immediately after M0 write
+      background_processing: true       # Process M1/M2 in background
+      timeout_per_layer: 10.0          # Reduced timeout for M0 write
+      max_background_retries: 2         # Retries for background processing
+      m0_priority_mode: true            # Enable M0-priority + async M1/M2 architecture
 
   # M2 layer configuration (Semantic Memory)
   m2:
@@ -411,8 +420,9 @@ storage_backends:
 # Development environment settings
 development:
   pgai:
-    vectorizer_worker_enabled: false  # Disable worker in dev for simplicity
-    auto_embedding: false             # Manual embedding control in dev
+    vectorizer_worker_enabled: true   # Enable worker in dev
+    auto_embedding: true              # Enable auto embedding in dev
+    immediate_trigger: true           # Enable immediate trigger
   database:
     pool_size: 5                      # Smaller pool for dev
   performance:

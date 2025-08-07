@@ -252,6 +252,54 @@ class WriteBuffer:
     
 
 
+    async def shutdown(self) -> None:
+        """Gracefully shutdown WriteBuffer and all its components.
+        
+        Optimized shutdown sequence:
+        1. FlushManager (critical for async task cleanup)
+        2. HybridBuffer (may have pending operations)
+        3. RoundBuffer (simple memory cleanup)
+        """
+        logger.info("WriteBuffer: Shutdown initiated")
+        
+        shutdown_tasks = []
+        
+        try:
+            # Critical: Shutdown FlushManager first to clean up async tasks
+            if hasattr(self.flush_manager, 'shutdown'):
+                shutdown_tasks.append(("FlushManager", self.flush_manager.shutdown()))
+                
+            # Then shutdown HybridBuffer if it has async cleanup
+            if hasattr(self.hybrid_buffer, 'shutdown'):
+                shutdown_tasks.append(("HybridBuffer", self.hybrid_buffer.shutdown()))
+            
+            # Execute shutdowns concurrently where possible
+            if shutdown_tasks:
+                logger.info(f"WriteBuffer: Executing {len(shutdown_tasks)} concurrent shutdowns")
+                results = await asyncio.gather(
+                    *[task for _, task in shutdown_tasks],
+                    return_exceptions=True
+                )
+                
+                # Check results and log any errors
+                for i, (component_name, _) in enumerate(shutdown_tasks):
+                    if isinstance(results[i], Exception):
+                        logger.error(f"WriteBuffer: Error shutting down {component_name}: {results[i]}")
+                    else:
+                        logger.info(f"WriteBuffer: {component_name} shutdown completed")
+            
+            # Finally clear RoundBuffer (synchronous operation)
+            if hasattr(self.round_buffer, 'clear'):
+                await self.round_buffer.clear()
+                logger.info("WriteBuffer: RoundBuffer cleared")
+                
+            logger.info("WriteBuffer: All components shutdown successfully")
+            
+        except Exception as e:
+            logger.error(f"WriteBuffer: Critical error during shutdown: {e}")
+            # Don't re-raise to prevent blocking the shutdown process
+            # The error has been logged for debugging
+
     async def clear_all(self) -> Dict[str, Any]:
         """Clear all buffers (for testing purposes).
         

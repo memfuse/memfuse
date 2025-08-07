@@ -90,8 +90,23 @@ class StoreBackendAdapter(StorageBackend):
                 if not db_data:
                     logger.warning("StoreBackendAdapter: No valid data to write to database")
                     return ""
-                table_name = self._get_table_name_for_storage_type()
-                return self.store.add(table_name, db_data)
+
+                # Use ChunkData metadata if available, otherwise use passed metadata
+                table_metadata = metadata
+                logger.info(f"StorageAdapter: Data type: {type(data)}, hasattr metadata: {hasattr(data, 'metadata')}")
+                if hasattr(data, 'metadata') and data.metadata:
+                    table_metadata = data.metadata
+                    logger.info(f"StorageAdapter: Using ChunkData metadata: {table_metadata}")
+                elif isinstance(data, dict) and 'metadata' in data:
+                    table_metadata = data['metadata']
+                    logger.info(f"StorageAdapter: Using dict metadata: {table_metadata}")
+                else:
+                    logger.info(f"StorageAdapter: Using passed metadata: {table_metadata}")
+                    if hasattr(data, 'metadata'):
+                        logger.info(f"StorageAdapter: ChunkData metadata exists but is: {data.metadata}")
+
+                table_name = self._get_table_name_for_storage_type(table_metadata)
+                return await self.store.add(table_name, db_data)
 
             else:
                 raise NotImplementedError(f"Storage type {self.storage_type.value} not supported")
@@ -108,7 +123,65 @@ class StoreBackendAdapter(StorageBackend):
         from datetime import datetime
 
         # Handle different data types
-        if hasattr(data, 'id') and hasattr(data, 'content'):
+        if isinstance(data, ChunkData):
+            # ChunkData object (from M1, M2 layers)
+            # Determine content field name based on layer
+            layer = "M0"  # Default
+            if data.metadata and "layer" in data.metadata:
+                layer = data.metadata["layer"]
+            elif metadata and "layer" in metadata:
+                layer = metadata["layer"]
+
+            # Map layer to content field name
+            content_field_mapping = {
+                "M0": "content",
+                "M1": "episode_content",
+                "M2": "semantic_content",
+                "M3": "procedural_content"
+            }
+            content_field = content_field_mapping.get(layer, "content")
+
+            db_data = {
+                'id': data.chunk_id or str(uuid.uuid4()),
+                content_field: data.content,
+                'created_at': datetime.now(),
+                'updated_at': datetime.now()
+            }
+
+            # Add ChunkData metadata
+            if data.metadata:
+                db_data['metadata'] = data.metadata
+            elif metadata:
+                db_data['metadata'] = metadata
+
+            logger.debug(f"StoreBackendAdapter: Prepared ChunkData for database: id={db_data['id']}, layer={layer}, content_field={content_field}, content_length={len(data.content)}")
+
+        elif isinstance(data, dict):
+            # Dictionary data (e.g., from M0 raw records)
+            db_data = {
+                'id': data.get('id', str(uuid.uuid4())),
+                'content': data.get('content', ''),
+                'created_at': datetime.now(),
+                'updated_at': datetime.now()
+            }
+
+            # Add M0-specific fields if present
+            if 'session_id' in data:
+                db_data['session_id'] = data['session_id']
+            if 'user_id' in data:
+                db_data['user_id'] = data['user_id']
+            if 'message_role' in data:
+                db_data['message_role'] = data['message_role']
+            if 'round_id' in data:
+                db_data['round_id'] = data['round_id']
+
+            # Add metadata
+            if 'metadata' in data:
+                db_data['metadata'] = data['metadata']
+            elif metadata:
+                db_data['metadata'] = metadata
+
+        elif hasattr(data, 'id') and hasattr(data, 'content'):
             # Item-like object
             db_data = {
                 'id': data.id or str(uuid.uuid4()),
@@ -158,17 +231,40 @@ class StoreBackendAdapter(StorageBackend):
 
         return db_data
 
-    def _get_table_name_for_storage_type(self) -> str:
-        """Get the appropriate table name for the storage type."""
-        # Map storage types to table names
-        table_mapping = {
-            StorageType.SQL: "m0_raw",  # Default table for SQL storage (M0 layer)
-            StorageType.VECTOR: "vector_data",
-            StorageType.KEYWORD: "keyword_data",
-            StorageType.GRAPH: "graph_data"
-        }
+    def _get_table_name_for_storage_type(self, metadata: Optional[Dict[str, Any]] = None) -> str:
+        """Get the appropriate table name for the storage type based on layer."""
+        # Determine layer from metadata
+        layer = "M0"  # Default to M0
+        if metadata:
+            # Check for layer in metadata
+            if "layer" in metadata:
+                layer = metadata["layer"]
+            # Check for layer in nested metadata
+            elif "metadata" in metadata and isinstance(metadata["metadata"], dict):
+                layer = metadata["metadata"].get("layer", "M0")
 
-        return table_mapping.get(self.storage_type, "data")
+        # Map storage types and layers to table names
+        if self.storage_type == StorageType.SQL:
+            layer_table_mapping = {
+                "M0": "m0_raw",
+                "M1": "m1_episodic",
+                "M2": "m2_semantic",
+                "M3": "m3_procedural"
+            }
+            table_name = layer_table_mapping.get(layer, "m0_raw")
+
+            # Debug logging
+            logger.info(f"StorageAdapter: Selecting table for layer '{layer}' -> '{table_name}' (metadata: {metadata})")
+
+            return table_name
+        else:
+            # For non-SQL storage types, use generic names
+            table_mapping = {
+                StorageType.VECTOR: "vector_data",
+                StorageType.KEYWORD: "keyword_data",
+                StorageType.GRAPH: "graph_data"
+            }
+            return table_mapping.get(self.storage_type, "data")
 
     def _prepare_data_for_store(self, data: Any) -> List[ChunkData]:
         """Prepare data for store interface, ensuring it's a list of ChunkData objects."""
@@ -360,11 +456,36 @@ class UnifiedStorageManager(StorageManager):
             # Validate configuration structure
             self._validate_storage_config()
 
+            # Get global multi_path configuration to determine which stores to enable
+            from ..utils.config import config_manager
+            global_config = config_manager.get_config()
+            multi_path_config = global_config.get("store", {}).get("multi_path", {})
+            
+            # Determine which storage types should be enabled based on multi_path config
+            enabled_storage_types = set()
+            if multi_path_config.get("use_vector", True):
+                enabled_storage_types.add(StorageType.VECTOR)
+            if multi_path_config.get("use_keyword", False):
+                enabled_storage_types.add(StorageType.KEYWORD)
+            if multi_path_config.get("use_graph", False):
+                enabled_storage_types.add(StorageType.GRAPH)
+            
+            # Always enable SQL storage for database operations
+            enabled_storage_types.add(StorageType.SQL)
+            
+            logger.info(f"UnifiedStorageManager: Enabled storage types based on multi_path config: {[st.value for st in enabled_storage_types]}")
+
             # Initialize each configured storage backend
             for storage_name, storage_config in self.config.items():
                 try:
                     # Validate that this is a supported storage type
                     storage_type = StorageType(storage_name)
+                    
+                    # Skip initialization if this storage type is not enabled
+                    if storage_type not in enabled_storage_types:
+                        logger.info(f"UnifiedStorageManager: Skipping {storage_type.value} backend (disabled by multi_path configuration)")
+                        continue
+                    
                     backend = await self._create_backend(storage_type, storage_config)
 
                     if backend and await backend.initialize():
@@ -554,10 +675,29 @@ class UnifiedStorageManager(StorageManager):
     async def _create_backend(self, storage_type: StorageType, config: Dict[str, Any]) -> Optional[StorageBackend]:
         """Create a storage backend from configuration with unified config hierarchy."""
         try:
+            # Check if this storage type should be enabled based on multi_path config
+            from ..utils.config import config_manager
+            global_config = config_manager.get_config()
+            multi_path_config = global_config.get("store", {}).get("multi_path", {})
+            
+            # Check if this storage type is enabled
+            should_enable = False
+            if storage_type == StorageType.VECTOR and multi_path_config.get("use_vector", True):
+                should_enable = True
+            elif storage_type == StorageType.KEYWORD and multi_path_config.get("use_keyword", False):
+                should_enable = True
+            elif storage_type == StorageType.GRAPH and multi_path_config.get("use_graph", False):
+                should_enable = True
+            elif storage_type == StorageType.SQL:
+                should_enable = True  # Always enable SQL storage
+            
+            if not should_enable:
+                logger.info(f"UnifiedStorageManager: Skipping {storage_type.value} backend creation (disabled by multi_path configuration)")
+                return None
+
             # This would integrate with the existing StoreFactory
             from ..store.factory import StoreFactory
             from ..models.core import StoreBackend
-            from ..utils.config import config_manager
 
             # Get unified configuration with proper hierarchy
             unified_config = self._get_unified_backend_config(storage_type, config)

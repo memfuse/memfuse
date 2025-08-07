@@ -11,16 +11,26 @@ postgres:
   database: ${oc.env:POSTGRES_DB,memfuse}
   user: ${oc.env:POSTGRES_USER,postgres}
   password: ${oc.env:POSTGRES_PASSWORD,postgres}
-  # Global connection pool settings (shared across all stores)
-  # Optimized for dual-write mode (BufferService + MemoryService + pgai)
-  pool_size: 20          # Minimum connections in pool (optimized for concurrent operations)
-  max_overflow: 40       # Additional connections beyond pool_size (increased for dual-write)
-  pool_timeout: 60.0     # Timeout for getting connection from pool (increased for complex ops)
-  pool_recycle: 7200     # Recycle connections after 2 hours (prevent stale connections)
-  connection_timeout: 30.0  # Connection establishment timeout
-  keepalives_idle: 600   # TCP keepalive idle time (10 minutes)
-  keepalives_interval: 30  # TCP keepalive interval
-  keepalives_count: 3    # TCP keepalive count
+  # HIGH-PERFORMANCE: Optimized for high-throughput streaming scenarios
+  # Increased connection pool for better concurrency
+  pool_size: 20          # Reasonable base pool for streaming
+  max_overflow: 30       # Moderate burst capacity (total 50 connections)
+  pool_timeout: 2.0      # Very fast timeout for quick failure detection
+  pool_recycle: 600      # 10-minute recycle for better connection reuse
+  connection_timeout: 2.0  # Fast connection establishment
+  keepalives_idle: 60    # 60-second idle detection for stability
+  keepalives_interval: 10  # 10-second keepalive checks
+  keepalives_count: 3    # 3 failed checks before disconnect
+  
+  # Smart connection management settings for high performance
+  smart_cleanup:
+    enabled: true
+    min_idle_connections: 20       # Keep more idle connections for quick access
+    max_idle_connections: 30       # Allow more idle connections for high throughput
+    idle_timeout_seconds: 120      # Longer timeout for better connection reuse
+    cleanup_interval_seconds: 30   # Less frequent cleanup for performance
+    burst_threshold: 50            # Higher burst threshold for streaming
+    burst_cooldown_seconds: 60     # Longer cooldown for sustained high load
 
 
 # pgai specific configuration

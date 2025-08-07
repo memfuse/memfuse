@@ -164,33 +164,74 @@ class FlushManager:
             return False
     
     async def shutdown(self) -> None:
-        """Gracefully shutdown the flush manager."""
+        """Gracefully shutdown the flush manager.
+        
+        Optimized shutdown sequence:
+        1. Set shutdown flag to prevent new tasks
+        2. Cancel auto-flush task with proper error handling
+        3. Cancel all worker tasks concurrently
+        4. Wait for graceful completion with timeout
+        """
+        if self._shutdown:
+            logger.debug("FlushManager: Already shutting down")
+            return
+            
         logger.info("FlushManager shutdown initiated")
+        
+        # Set shutdown flag first to stop accepting new tasks
         self._shutdown = True
         
-        # Cancel auto-flush task
-        if self.auto_flush_task:
-            self.auto_flush_task.cancel()
-            try:
-                await self.auto_flush_task
-            except asyncio.CancelledError:
-                pass
+        # Cancel auto-flush task with improved error handling
+        await self._cancel_auto_flush_task()
         
-        # Wait for queue to empty (with timeout)
-        try:
-            await asyncio.wait_for(self.task_queue.join(), timeout=30.0)
-        except asyncio.TimeoutError:
-            logger.warning("FlushManager shutdown: queue did not empty within timeout")
-        
-        # Cancel all workers
-        for worker in self.workers:
-            worker.cancel()
-        
-        # Wait for workers to finish
-        if self.workers:
-            await asyncio.gather(*self.workers, return_exceptions=True)
+        # Cancel and wait for all worker tasks
+        await self._cancel_and_wait_workers()
         
         logger.info("FlushManager shutdown completed")
+
+    async def _cancel_auto_flush_task(self) -> None:
+        """Cancel auto-flush task with proper error handling."""
+        if not self.auto_flush_task or self.auto_flush_task.done():
+            return
+            
+        self.auto_flush_task.cancel()
+        try:
+            await asyncio.wait_for(self.auto_flush_task, timeout=2.0)
+        except asyncio.CancelledError:
+            logger.debug("FlushManager: Auto-flush task cancelled successfully")
+        except asyncio.TimeoutError:
+            logger.warning("FlushManager: Auto-flush task cancellation timeout")
+        except Exception as e:
+            logger.warning(f"FlushManager: Error cancelling auto-flush task: {e}")
+
+    async def _cancel_and_wait_workers(self) -> None:
+        """Cancel all worker tasks and wait for completion."""
+        if not self.workers:
+            return
+            
+        # Cancel all active workers
+        active_workers = [w for w in self.workers if not w.done()]
+        if not active_workers:
+            logger.debug("FlushManager: No active workers to cancel")
+            self.workers.clear()
+            return
+            
+        logger.info(f"FlushManager: Cancelling {len(active_workers)} active workers")
+        for worker in active_workers:
+            worker.cancel()
+        
+        # Wait for workers to finish with timeout
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*active_workers, return_exceptions=True),
+                timeout=3.0  # Reduced timeout for faster shutdown
+            )
+            logger.info(f"FlushManager: All {len(active_workers)} workers cancelled gracefully")
+        except asyncio.TimeoutError:
+            logger.warning(f"FlushManager: {len(active_workers)} workers did not finish within 3s timeout")
+        
+        # Clear workers list
+        self.workers.clear()
     
     def set_handlers(
         self,
@@ -374,37 +415,70 @@ class FlushManager:
 
     async def _worker_loop(self, worker_name: str) -> None:
         """Main worker loop for processing flush tasks.
-
+        
+        Optimized worker loop with:
+        - Fast shutdown detection
+        - Efficient task processing
+        - Proper error handling and logging
+        
         Args:
             worker_name: Name of the worker for logging
         """
         logger.info(f"FlushManager worker started: {worker_name}")
 
-        while not self._shutdown:
-            try:
-                # Get task from queue with timeout
+        try:
+            while not self._shutdown:
                 try:
-                    _, _, task = await asyncio.wait_for(
+                    # Fast timeout for responsive shutdown (0.3s instead of 0.5s)
+                    task_data = await asyncio.wait_for(
                         self.task_queue.get(),
-                        timeout=1.0
+                        timeout=0.3
                     )
+                    
+                    # Early shutdown check before processing
+                    if self._shutdown:
+                        # Put task back if we're shutting down
+                        try:
+                            self.task_queue.put_nowait(task_data)
+                        except asyncio.QueueFull:
+                            logger.debug(f"FlushManager worker {worker_name}: Queue full during shutdown, dropping task")
+                        break
+                    
+                    _, _, task = task_data
+                    
+                    # Process the task
+                    await self._process_task(task, worker_name)
+                    
+                    # Mark task as done
+                    self.task_queue.task_done()
+
                 except asyncio.TimeoutError:
+                    # Check shutdown more frequently, continue if not shutting down
+                    if self._shutdown:
+                        break
+                    continue
+                    
+                except asyncio.CancelledError:
+                    logger.info(f"FlushManager worker cancelled: {worker_name}")
+                    break
+                    
+                except Exception as e:
+                    logger.error(f"FlushManager worker error in {worker_name}: {e}")
+                    # Mark task as done even on error to prevent queue deadlock
+                    try:
+                        self.task_queue.task_done()
+                    except ValueError:
+                        pass  # Task was already marked done or queue is empty
+                    
+                    # Continue processing other tasks unless critical error
                     continue
 
-                # Process the task
-                await self._process_task(task, worker_name)
-
-                # Mark task as done
-                self.task_queue.task_done()
-
-            except asyncio.CancelledError:
-                logger.info(f"FlushManager worker cancelled: {worker_name}")
-                break
-            except Exception as e:
-                logger.error(f"FlushManager worker error in {worker_name}: {e}")
-                # Continue processing other tasks
-
-        logger.info(f"FlushManager worker stopped: {worker_name}")
+        except asyncio.CancelledError:
+            logger.info(f"FlushManager worker {worker_name} cancelled during shutdown")
+        except Exception as e:
+            logger.error(f"FlushManager worker {worker_name} critical error: {e}")
+        finally:
+            logger.info(f"FlushManager worker stopped: {worker_name}")
 
     async def _process_task(self, task: FlushTask, worker_name: str) -> None:
         """Process a single flush task.

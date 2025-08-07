@@ -819,7 +819,8 @@ class Database:
         return rows_deleted > 0
 
     async def get_messages_by_session(self, session_id: str, limit: Optional[int] = None,
-                               sort_by: str = 'timestamp', order: str = 'desc') -> List[Dict[str, Any]]:
+                               sort_by: str = 'timestamp', order: str = 'desc',
+                               buffer_only: Optional[bool] = None) -> List[Dict[str, Any]]:
         """Get messages for a session with optional limit and sorting.
 
         Args:
@@ -827,6 +828,7 @@ class Database:
             limit: Maximum number of messages to return (optional)
             sort_by: Field to sort by, either 'timestamp' or 'id' (default: 'timestamp')
             order: Sort order, either 'asc' or 'desc' (default: 'desc')
+            buffer_only: Ignored in Database (for compatibility with BufferService)
 
         Returns:
             List of message data with session_id included via JOIN query

@@ -9,19 +9,18 @@
 CREATE TABLE IF NOT EXISTS m0_raw (
     -- Primary identification
     id TEXT PRIMARY KEY,
-    
+
     -- Raw content (original data without processing)
     content TEXT NOT NULL,
-    
+
     -- Flexible metadata storage (includes session_id, user_id, etc.)
     metadata JSONB DEFAULT '{}'::jsonb,
-    
-    -- PgAI embedding infrastructure
-    embedding VECTOR(384),  -- 384-dimensional embedding vector
-    needs_embedding BOOLEAN DEFAULT TRUE,  -- Flag for automatic embedding generation
-    retry_count INTEGER DEFAULT 0,  -- Number of embedding retry attempts
-    last_retry_at TIMESTAMP,  -- Timestamp of last retry attempt
-    retry_status TEXT DEFAULT 'pending' CHECK (retry_status IN ('pending', 'processing', 'completed', 'failed')),
+
+    -- Source tracking for M1 processing
+    session_id TEXT,  -- Session context
+    user_id TEXT,     -- User context
+    message_role TEXT, -- user/assistant/system
+    round_id TEXT,    -- Conversation round identifier
     
     -- Audit timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -72,38 +71,39 @@ CREATE TRIGGER trigger_update_m0_raw_updated_at
     EXECUTE FUNCTION update_m0_raw_updated_at();
 
 -- =============================================================================
--- PGAI IMMEDIATE TRIGGER SUPPORT
+-- M1 PROCESSING TRIGGER SUPPORT
 -- =============================================================================
 
--- Function to handle immediate embedding notifications
-CREATE OR REPLACE FUNCTION notify_m0_raw_embedding_needed()
+-- Function to handle M1 processing notifications
+CREATE OR REPLACE FUNCTION notify_m1_processing_needed()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Only notify if the record actually needs embedding
-    IF NEW.needs_embedding = TRUE AND NEW.content IS NOT NULL THEN
-        PERFORM pg_notify('embedding_needed_m0_raw', NEW.id);
+    -- Notify M1 layer that new raw data is available for processing
+    IF NEW.content IS NOT NULL THEN
+        PERFORM pg_notify('m1_processing_needed', NEW.id);
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- Trigger for immediate embedding notifications
-DROP TRIGGER IF EXISTS trigger_m0_raw_embedding_notification ON m0_raw;
-CREATE TRIGGER trigger_m0_raw_embedding_notification
-    AFTER INSERT OR UPDATE OF needs_embedding ON m0_raw
+-- Trigger for M1 processing notification
+DROP TRIGGER IF EXISTS trigger_m0_m1_processing_notification ON m0_raw;
+CREATE TRIGGER trigger_m0_m1_processing_notification
+    AFTER INSERT ON m0_raw
     FOR EACH ROW
-    EXECUTE FUNCTION notify_m0_raw_embedding_needed();
+    EXECUTE FUNCTION notify_m1_processing_needed();
 
 -- =============================================================================
 -- COMMENTS AND DOCUMENTATION
 -- =============================================================================
 
-COMMENT ON TABLE m0_raw IS 'M0 Raw Data Memory Layer - Stores original unprocessed data with automatic embedding generation';
+COMMENT ON TABLE m0_raw IS 'M0 Raw Data Memory Layer - Stores original unprocessed data without any processing or embedding';
 COMMENT ON COLUMN m0_raw.id IS 'Unique identifier for the raw data record';
 COMMENT ON COLUMN m0_raw.content IS 'Original raw content without any processing';
-COMMENT ON COLUMN m0_raw.metadata IS 'Flexible JSONB metadata including session_id, user_id, and other context';
-COMMENT ON COLUMN m0_raw.embedding IS '384-dimensional vector embedding for similarity search';
-COMMENT ON COLUMN m0_raw.needs_embedding IS 'Flag indicating if this record needs embedding generation';
-COMMENT ON COLUMN m0_raw.retry_count IS 'Number of embedding generation retry attempts';
+COMMENT ON COLUMN m0_raw.metadata IS 'Flexible JSONB metadata including additional context information';
+COMMENT ON COLUMN m0_raw.session_id IS 'Session context for this raw data record';
+COMMENT ON COLUMN m0_raw.user_id IS 'User context for this raw data record';
+COMMENT ON COLUMN m0_raw.message_role IS 'Message role: user, assistant, or system';
+COMMENT ON COLUMN m0_raw.round_id IS 'Conversation round identifier for grouping related messages';
 COMMENT ON COLUMN m0_raw.last_retry_at IS 'Timestamp of the last embedding retry attempt';
 COMMENT ON COLUMN m0_raw.retry_status IS 'Current status of embedding generation process';

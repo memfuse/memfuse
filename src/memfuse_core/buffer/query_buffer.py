@@ -145,44 +145,13 @@ class QueryBuffer(BufferComponentInterface):
             return cached_result[:top_k]
 
         self.cache_misses += 1
-        logger.info("QueryBuffer: Cache miss, querying storage and hybrid buffer")
-        
+        logger.info("QueryBuffer: Cache miss, using intelligent query routing")
+
         try:
-            # Get results from storage
-            storage_results = []
-            if self.retrieval_handler:
-                storage_results = await self.retrieval_handler(query_text, top_k * 2)  # Get more for better sorting
-                self.total_storage_results += len(storage_results or [])
-                logger.info(f"QueryBuffer: Got {len(storage_results or [])} results from storage")
-
-            # Use modular BufferRetrieval for unified buffer querying
-            buffer_results = await self.buffer_retrieval.retrieve(
-                query=query_text,
-                user_id=None,  # QueryBuffer doesn't track user_id
-                session_id=None,  # QueryBuffer doesn't track session_id
-                top_k=top_k,
-                hybrid_buffer=hybrid_buffer or self.hybrid_buffer,
-                round_buffer=self.round_buffer
+            # Use intelligent query routing for better performance
+            final_results = await self._intelligent_query_routing(
+                query_text, top_k, sort_by, order, hybrid_buffer, use_rerank
             )
-
-            # Update statistics
-            self.total_hybrid_results += len([r for r in buffer_results if r.get('metadata', {}).get('source', '').startswith('hybrid')])
-
-            # Combine and sort results from all sources
-            all_results = await self._combine_and_sort_results(
-                storage_results or [],
-                buffer_results,
-                [],  # round_results now included in buffer_results
-                sort_by,
-                order
-            )
-
-            # Apply internal reranking if enabled and handler available
-            if use_rerank and self.rerank_handler and all_results:
-                all_results = await self._internal_rerank(all_results, query_text)
-
-            # Limit results
-            final_results = all_results[:top_k]
 
             # Update cache
             await self._update_cache(cache_key, final_results)
@@ -191,14 +160,173 @@ class QueryBuffer(BufferComponentInterface):
             async with self._lock:
                 self._items = final_results.copy()
 
-            logger.info(f"QueryBuffer: Returning {len(final_results)} results (reranked: {use_rerank and self.rerank_handler is not None})")
+            logger.info(f"QueryBuffer: Returning {len(final_results)} results")
             return final_results
 
         except Exception as e:
-            logger.error(f"QueryBuffer: Query error: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"QueryBuffer: Query failed: {e}")
             return []
+
+    async def _intelligent_query_routing(
+        self,
+        query_text: str,
+        top_k: int,
+        sort_by: str,
+        order: str,
+        hybrid_buffer=None,
+        use_rerank: bool = True
+    ) -> List[Any]:
+        """Intelligent query routing with Buffer-first optimization.
+
+        Strategy:
+        1. Always check Buffer first (fastest, most recent data)
+        2. If Buffer has sufficient results, return early
+        3. Otherwise, query storage to supplement
+        4. Apply smart result merging
+        """
+        # Step 1: Query Buffer first (fastest path)
+        buffer_results = await self.buffer_retrieval.retrieve(
+            query=query_text,
+            user_id=None,
+            session_id=None,
+            top_k=top_k * 2,  # Get more for better selection
+            hybrid_buffer=hybrid_buffer or self.hybrid_buffer,
+            round_buffer=self.round_buffer
+        )
+
+        logger.info(f"QueryBuffer: Got {len(buffer_results)} results from buffers")
+
+        # Step 2: Check if Buffer results are sufficient
+        buffer_quality_score = self._assess_buffer_quality(buffer_results, query_text)
+
+        if buffer_quality_score >= 0.7 and len(buffer_results) >= top_k:
+            # Buffer has high-quality results, use Buffer-only path
+            logger.info("QueryBuffer: Buffer-only path - sufficient high-quality results")
+            final_results = await self._process_buffer_only_results(
+                buffer_results, top_k, sort_by, order, query_text, use_rerank
+            )
+        else:
+            # Need to supplement with storage results
+            logger.info("QueryBuffer: Hybrid path - supplementing with storage")
+            final_results = await self._process_hybrid_results(
+                buffer_results, query_text, top_k, sort_by, order, use_rerank
+            )
+
+        return final_results
+
+    def _assess_buffer_quality(self, buffer_results: List[Any], query_text: str) -> float:
+        """Assess the quality of buffer results for the given query.
+
+        Returns:
+            Quality score between 0.0 and 1.0
+        """
+        if not buffer_results:
+            return 0.0
+
+        # Simple quality assessment based on:
+        # 1. Number of results
+        # 2. Average score
+        # 3. Recency of results
+
+        total_score = 0.0
+        recent_count = 0
+        import time
+        current_time = time.time()
+
+        for result in buffer_results:
+            # Score component
+            score = result.get('score', 0.0)
+            total_score += score
+
+            # Recency component (results from last 5 minutes get bonus)
+            timestamp = result.get('metadata', {}).get('timestamp', 0)
+            if current_time - timestamp < 300:  # 5 minutes
+                recent_count += 1
+
+        # Calculate quality metrics
+        avg_score = total_score / len(buffer_results) if buffer_results else 0.0
+        recency_ratio = recent_count / len(buffer_results) if buffer_results else 0.0
+
+        # Combined quality score
+        quality_score = (avg_score * 0.6) + (recency_ratio * 0.4)
+
+        logger.debug(f"QueryBuffer: Buffer quality assessment - avg_score={avg_score:.2f}, recency_ratio={recency_ratio:.2f}, quality={quality_score:.2f}")
+
+        return min(quality_score, 1.0)
+
+    async def _process_buffer_only_results(
+        self,
+        buffer_results: List[Any],
+        top_k: int,
+        sort_by: str,
+        order: str,
+        query_text: str,
+        use_rerank: bool
+    ) -> List[Any]:
+        """Process results using Buffer-only path."""
+        # Sort buffer results
+        sorted_results = self._sort_results(buffer_results, sort_by, order)
+
+        # Apply reranking if enabled
+        if use_rerank and self.rerank_handler and sorted_results:
+            sorted_results = await self._internal_rerank(sorted_results, query_text)
+
+        # Update statistics
+        self.total_hybrid_results += len([r for r in sorted_results if r.get('metadata', {}).get('source', '').startswith('hybrid')])
+
+        return sorted_results[:top_k]
+
+    async def _process_hybrid_results(
+        self,
+        buffer_results: List[Any],
+        query_text: str,
+        top_k: int,
+        sort_by: str,
+        order: str,
+        use_rerank: bool
+    ) -> List[Any]:
+        """Process results using hybrid Buffer + Storage path."""
+        # Query storage for additional results
+        storage_results = []
+        if self.retrieval_handler:
+            # Request fewer storage results since we have buffer results
+            storage_top_k = max(top_k - len(buffer_results), top_k // 2)
+            storage_results = await self.retrieval_handler(query_text, storage_top_k)
+            self.total_storage_results += len(storage_results or [])
+            logger.info(f"QueryBuffer: Got {len(storage_results or [])} results from storage")
+
+        # Combine and sort results with Buffer priority
+        all_results = await self._combine_and_sort_results(
+            storage_results or [],
+            buffer_results,
+            [],  # round_results now included in buffer_results
+            sort_by,
+            order
+        )
+
+        # Apply internal reranking if enabled and handler available
+        if use_rerank and self.rerank_handler and all_results:
+            all_results = await self._internal_rerank(all_results, query_text)
+
+        # Update statistics
+        self.total_hybrid_results += len([r for r in buffer_results if r.get('metadata', {}).get('source', '').startswith('hybrid')])
+
+        return all_results[:top_k]
+
+    def _sort_results(self, results: List[Any], sort_by: str, order: str) -> List[Any]:
+        """Sort results by the specified criteria."""
+        if sort_by == "score":
+            results.sort(
+                key=lambda x: x.get("score", 0.0),
+                reverse=(order == "desc")
+            )
+        elif sort_by == "timestamp":
+            results.sort(
+                key=lambda x: self._normalize_timestamp_for_sorting(x.get("created_at", "")),
+                reverse=(order == "desc")
+            )
+
+        return results
 
     async def _combine_and_sort_results(
         self,

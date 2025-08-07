@@ -53,9 +53,9 @@ CREATE INDEX IF NOT EXISTS idx_m1_source_id ON m1_episodic (source_id);
 CREATE INDEX IF NOT EXISTS idx_m1_source_session ON m1_episodic (source_session_id);
 CREATE INDEX IF NOT EXISTS idx_m1_source_user ON m1_episodic (source_user_id);
 
--- Fact classification indexes (flexible for any fact_type values)
-CREATE INDEX IF NOT EXISTS idx_m1_fact_type ON m1_episodic (fact_type) WHERE fact_type IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_m1_fact_category_gin ON m1_episodic USING gin (fact_category);
+-- Episode classification indexes (flexible for any episode_type values)
+CREATE INDEX IF NOT EXISTS idx_m1_episode_type ON m1_episodic (episode_type) WHERE episode_type IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_m1_episode_category_gin ON m1_episodic USING gin (episode_category);
 CREATE INDEX IF NOT EXISTS idx_m1_confidence ON m1_episodic (confidence);
 
 -- Embedding processing indexes (for automatic embedding generation)
@@ -106,7 +106,7 @@ CREATE OR REPLACE FUNCTION notify_m1_embedding_needed()
 RETURNS TRIGGER AS $$
 BEGIN
     -- Only notify if needs_embedding is TRUE and content exists
-    IF NEW.needs_embedding = TRUE AND NEW.fact_content IS NOT NULL THEN
+    IF NEW.needs_embedding = TRUE AND NEW.episode_content IS NOT NULL THEN
         PERFORM pg_notify('embedding_needed', 'm1_episodic:' || NEW.id::text);
     END IF;
     RETURN NEW;
@@ -126,8 +126,8 @@ CREATE TRIGGER trigger_m1_embedding_notification
 
 -- Additional check constraints for data quality
 ALTER TABLE m1_episodic
-    ADD CONSTRAINT check_fact_content_not_empty
-    CHECK (length(trim(fact_content)) > 0);
+    ADD CONSTRAINT check_episode_content_not_empty
+    CHECK (length(trim(episode_content)) > 0);
 
 ALTER TABLE m1_episodic
     ADD CONSTRAINT check_retry_count_non_negative
@@ -141,9 +141,9 @@ COMMENT ON TABLE m1_episodic IS 'M1 Episodic Memory Layer - stores episodic memo
 
 COMMENT ON COLUMN m1_episodic.id IS 'Unique identifier for the episodic memory';
 COMMENT ON COLUMN m1_episodic.source_id IS 'Reference to the M0 raw data record this episode was extracted from';
-COMMENT ON COLUMN m1_episodic.fact_content IS 'The episodic memory content';
-COMMENT ON COLUMN m1_episodic.fact_type IS 'Open-ended classification of episodic memory type, extensible for any categorization system';
-COMMENT ON COLUMN m1_episodic.fact_category IS 'Flexible JSONB categorization system for complex episodic memory classification';
+COMMENT ON COLUMN m1_episodic.episode_content IS 'The episodic memory content';
+COMMENT ON COLUMN m1_episodic.episode_type IS 'Open-ended classification of episodic memory type, extensible for any categorization system';
+COMMENT ON COLUMN m1_episodic.episode_category IS 'Flexible JSONB categorization system for complex episodic memory classification';
 COMMENT ON COLUMN m1_episodic.confidence IS 'Confidence score for episodic memory extraction (0.0 to 1.0)';
 COMMENT ON COLUMN m1_episodic.entities IS 'JSON array of entities mentioned in the episodic memory';
 COMMENT ON COLUMN m1_episodic.temporal_info IS 'JSON object containing temporal information (dates, times, etc.)';

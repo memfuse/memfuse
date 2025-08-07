@@ -352,39 +352,71 @@ class ServiceFactory:
     async def cleanup_all_services(cls) -> None:
         """Cleanup all service instances and shared resources.
 
+        Optimized cleanup with concurrent operations where safe.
+        
         This method should be called during application shutdown to ensure
         proper cleanup of connection pools and other shared resources.
         """
         logger.info("Cleaning up all service instances...")
 
-        # Close all memory services
+        # Step 1: Shutdown memory services (can be done concurrently)
+        memory_shutdown_tasks = []
         for user, memory_service in cls._memory_service_instances.items():
-            try:
-                if hasattr(memory_service, 'close'):
-                    await memory_service.close()
-                logger.debug(f"Closed memory service for user {user}")
-            except Exception as e:
-                logger.error(f"Error closing memory service for user {user}: {e}")
+            async def shutdown_memory_service(service_user, service):
+                try:
+                    if hasattr(service, 'shutdown'):
+                        await service.shutdown()
+                        logger.debug(f"Shutdown memory service for user {service_user}")
+                    elif hasattr(service, 'close'):
+                        await service.close()
+                        logger.debug(f"Closed memory service for user {service_user}")
+                except Exception as e:
+                    logger.error(f"Error shutting down memory service for user {service_user}: {e}")
+            
+            memory_shutdown_tasks.append(shutdown_memory_service(user, memory_service))
 
-        # Close all buffer services
+        if memory_shutdown_tasks:
+            logger.info(f"ServiceFactory: Shutting down {len(memory_shutdown_tasks)} memory services concurrently")
+            await asyncio.gather(*memory_shutdown_tasks, return_exceptions=True)
+
+        # Step 2: Shutdown buffer services (critical - contains FlushManager)
+        buffer_shutdown_tasks = []
         for user, buffer_service in cls._buffer_service_instances.items():
-            try:
-                if hasattr(buffer_service, 'close'):
-                    await buffer_service.close()
-                logger.debug(f"Closed buffer service for user {user}")
-            except Exception as e:
-                logger.error(f"Error closing buffer service for user {user}: {e}")
+            async def shutdown_buffer_service(service_user, service):
+                try:
+                    if hasattr(service, 'shutdown'):
+                        await service.shutdown()
+                        logger.debug(f"Shutdown buffer service for user {service_user}")
+                    elif hasattr(service, 'close'):
+                        await service.close()
+                        logger.debug(f"Closed buffer service for user {service_user}")
+                except Exception as e:
+                    logger.error(f"Error shutting down buffer service for user {service_user}: {e}")
+            
+            buffer_shutdown_tasks.append(shutdown_buffer_service(user, buffer_service))
 
-        # Close all memory service proxies
+        if buffer_shutdown_tasks:
+            logger.info(f"ServiceFactory: Shutting down {len(buffer_shutdown_tasks)} buffer services concurrently")
+            await asyncio.gather(*buffer_shutdown_tasks, return_exceptions=True)
+
+        # Step 3: Shutdown memory service proxies (can be done concurrently)
+        proxy_shutdown_tasks = []
         for user, proxy in cls._memory_service_proxy_instances.items():
-            try:
-                if hasattr(proxy, 'close'):
-                    await proxy.close()
-                logger.debug(f"Closed memory service proxy for user {user}")
-            except Exception as e:
-                logger.error(f"Error closing memory service proxy for user {user}: {e}")
+            async def shutdown_proxy(service_user, service_proxy):
+                try:
+                    if hasattr(service_proxy, 'close'):
+                        await service_proxy.close()
+                        logger.debug(f"Closed memory service proxy for user {service_user}")
+                except Exception as e:
+                    logger.error(f"Error closing memory service proxy for user {service_user}: {e}")
+            
+            proxy_shutdown_tasks.append(shutdown_proxy(user, proxy))
 
-        # Close global connection pools (Tier 1 Singleton cleanup)
+        if proxy_shutdown_tasks:
+            logger.info(f"ServiceFactory: Closing {len(proxy_shutdown_tasks)} service proxies concurrently")
+            await asyncio.gather(*proxy_shutdown_tasks, return_exceptions=True)
+
+        # Step 4: Close global connection pools (final step)
         try:
             from .global_connection_manager import get_global_connection_manager
             connection_manager = get_global_connection_manager()
@@ -393,7 +425,7 @@ class ServiceFactory:
         except Exception as e:
             logger.error(f"Error closing global connection pools: {e}")
 
-        # Clear all cached instances
+        # Step 5: Clear all cached instances
         cls._memory_service_instances.clear()
         cls._buffer_service_instances.clear()
         cls._memory_service_proxy_instances.clear()
@@ -517,7 +549,7 @@ class ServiceFactory:
         buffer_services = len(cls._buffer_service_instances)
 
         logger.info(f"ServiceFactory: Cache statistics - MemoryServices: {memory_services}, "
-                   f"MemoryProxies: {memory_proxies}, BufferServices: {buffer_services}")
+                    f"MemoryProxies: {memory_proxies}, BufferServices: {buffer_services}")
 
     @classmethod
     def configure_warmup(cls, enabled: bool = True, common_users: Optional[List[str]] = None) -> None:

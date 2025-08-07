@@ -45,6 +45,8 @@ class MiniLMEncoder(EncoderBase):
             existing_model: An existing SentenceTransformer model instance to reuse
             **kwargs: Additional arguments
         """
+        logger.info(f"MiniLMEncoder: Initializing with model_name={model_name}, cache_size={cache_size}, existing_model={existing_model is not None}")
+        
         # Get configuration
         from ...utils.config import config_manager
         from omegaconf import OmegaConf
@@ -54,7 +56,10 @@ class MiniLMEncoder(EncoderBase):
 
         # Use model from config if not specified
         if model_name is None:
-            model_name = cfg.embedding.model
+            if hasattr(cfg, 'embedding') and hasattr(cfg.embedding, 'model'):
+                model_name = cfg.embedding.model
+            else:
+                model_name = "all-MiniLM-L6-v2"  # Default model
 
         # Validate that this is a MiniLM model
         if not self._is_minilm_model(model_name):
@@ -66,22 +71,43 @@ class MiniLMEncoder(EncoderBase):
         if existing_model is not None:
             # Don't log here to avoid duplicate logs
             self.model = existing_model
+            logger.info(f"MiniLMEncoder: Using existing model: {type(existing_model)}")
         else:
-            # Load the model
+            # Try to get global model instance first
             try:
-                logger.info(f"Loading MiniLM embedding model: {model_name}")
+                from ...services.global_model_manager import get_global_model_manager
+                global_model_manager = get_global_model_manager()
+                global_model = global_model_manager.get_embedding_model()
+                
+                if global_model is not None:
+                    # Check if the global model is another MiniLMEncoder
+                    if hasattr(global_model, 'model') and hasattr(global_model.model, 'encode'):
+                        # Use the underlying SentenceTransformer model
+                        self.model = global_model.model
+                        logger.info(f"MiniLMEncoder: Using underlying model from global MiniLMEncoder: {model_name}")
+                    else:
+                        # Use the global model directly (should be SentenceTransformer)
+                        self.model = global_model
+                        logger.info(f"MiniLMEncoder: Using global embedding model: {model_name}")
+                else:
+                    # Load the model locally
+                    logger.info(f"MiniLMEncoder: Loading MiniLM embedding model: {model_name}")
+                    # Ensure correct model name format (remove sentence-transformers/ prefix if present)
+                    clean_model_name = model_name.replace("sentence-transformers/", "")
+
+                    self.model = SentenceTransformer(clean_model_name, trust_remote_code=False)
+                    self.model_name = clean_model_name
+                    logger.info(f"MiniLMEncoder: Successfully loaded model {clean_model_name}")
+            except Exception as e:
+                logger.warning(f"MiniLMEncoder: Could not get global model: {e}, loading locally")
+                # Load the model locally as fallback
+                logger.info(f"MiniLMEncoder: Loading MiniLM embedding model: {model_name}")
                 # Ensure correct model name format (remove sentence-transformers/ prefix if present)
                 clean_model_name = model_name.replace("sentence-transformers/", "")
 
                 self.model = SentenceTransformer(clean_model_name, trust_remote_code=False)
                 self.model_name = clean_model_name
-                logger.info(f"Successfully loaded model {clean_model_name}")
-            except Exception as e:
-                logger.error(f"Error loading model {model_name}: {e}")
-                # Use hardcoded default as last resort
-                logger.warning("Using hardcoded default: all-MiniLM-L6-v2")
-                self.model_name = "all-MiniLM-L6-v2"
-                self.model = SentenceTransformer("all-MiniLM-L6-v2", trust_remote_code=False)
+                logger.info(f"MiniLMEncoder: Successfully loaded model {clean_model_name}")
 
         # Set up caching
         self.cache = Cache[str, np.ndarray](max_size=cache_size)
@@ -93,6 +119,11 @@ class MiniLMEncoder(EncoderBase):
             if hasattr(self.model, "half"):
                 self.model.half()
                 logger.info("Successfully converted embedding model to FP16 precision")
+        
+        # Verify that the encoder is properly initialized
+        logger.info(f"MiniLMEncoder: Initialization complete. Model type: {type(self.model)}")
+        logger.info(f"MiniLMEncoder: Has encode_text method: {hasattr(self, 'encode_text')}")
+        logger.info(f"MiniLMEncoder: Has encode method: {hasattr(self.model, 'encode')}")
 
     def _is_minilm_model(self, model_name: str) -> bool:
         """Check if the model is a MiniLM model.
@@ -237,3 +268,19 @@ class MiniLMEncoder(EncoderBase):
             model: Model instance to use
         """
         self.model = model
+
+    async def encode(self, text: str, **kwargs) -> np.ndarray:
+        """Fallback encode method for compatibility with BufferRetrieval.
+        
+        This method provides backward compatibility for code that expects
+        an 'encode' method instead of 'encode_text'. It simply delegates
+        to the encode_text method to maintain consistent behavior.
+        
+        Args:
+            text: Text to encode
+            **kwargs: Additional keyword arguments (ignored for compatibility)
+            
+        Returns:
+            Embedding vector
+        """
+        return await self.encode_text(text)

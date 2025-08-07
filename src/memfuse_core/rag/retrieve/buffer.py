@@ -55,8 +55,12 @@ class BufferRetrieval(BaseRetrieval):
             async with self._encoder_lock:
                 if self.encoder is None:
                     try:
+                        logger.debug(f"BufferRetrieval: Creating encoder '{self.encoder_name}' with config: {self.encoder_config}")
                         self.encoder = EncoderRegistry.create(self.encoder_name, **self.encoder_config)
                         logger.info(f"BufferRetrieval: Initialized {self.encoder_name} encoder")
+                        logger.debug(f"BufferRetrieval: Encoder type: {type(self.encoder)}")
+                        logger.debug(f"BufferRetrieval: Encoder has encode_text: {hasattr(self.encoder, 'encode_text')}")
+                        logger.debug(f"BufferRetrieval: Encoder has encode: {hasattr(self.encoder, 'encode')}")
                     except Exception as e:
                         logger.error(f"BufferRetrieval: Failed to initialize encoder {self.encoder_name}: {e}")
                         raise
@@ -133,7 +137,37 @@ class BufferRetrieval(BaseRetrieval):
             
             # Get encoder and generate query embedding
             encoder = await self._get_encoder()
-            query_embedding = await encoder.encode_text(query)
+            logger.debug(f"BufferRetrieval: Encoder type: {type(encoder)}")
+            logger.debug(f"BufferRetrieval: Encoder methods: {[method for method in dir(encoder) if not method.startswith('_')]}")
+            
+            # Check if encoder has encode_text method
+            if hasattr(encoder, 'encode_text'):
+                query_embedding = await encoder.encode_text(query)
+                if hasattr(query_embedding, 'tolist'):
+                    query_embedding = query_embedding.tolist()
+                elif hasattr(query_embedding, '__iter__') and not isinstance(query_embedding, list):
+                    query_embedding = list(query_embedding)
+                # If it's already a list or scalar, keep as-is
+            elif hasattr(encoder, 'model') and hasattr(encoder.model, 'encode'):
+                # Fallback to model's encode method - use async call
+                query_embedding = await asyncio.to_thread(encoder.model.encode, query)
+                if hasattr(query_embedding, 'tolist'):
+                    query_embedding = query_embedding.tolist()
+                elif hasattr(query_embedding, '__iter__') and not isinstance(query_embedding, list):
+                    query_embedding = list(query_embedding)
+            elif hasattr(encoder, 'encode'):
+                # Direct encode method (less common) - use async call
+                if asyncio.iscoroutinefunction(encoder.encode):
+                    query_embedding = await encoder.encode(query)
+                else:
+                    query_embedding = await asyncio.to_thread(encoder.encode, query)
+                if hasattr(query_embedding, 'tolist'):
+                    query_embedding = query_embedding.tolist()
+                elif hasattr(query_embedding, '__iter__') and not isinstance(query_embedding, list):
+                    query_embedding = list(query_embedding)
+            else:
+                logger.error("BufferRetrieval: Encoder has neither encode_text nor encode method")
+                return []
             
             # Calculate similarities
             similarities = []

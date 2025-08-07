@@ -227,6 +227,14 @@ class GlobalConfigManager:
         
         return self._config.get(section, {})
     
+    def get_config(self) -> Dict[str, Any]:
+        """Get the full configuration dictionary.
+        
+        Returns:
+            Complete configuration dictionary
+        """
+        return self._config or {}
+    
     def get_raw_config(self) -> Dict[str, Any]:
         """Get the raw configuration dictionary.
         

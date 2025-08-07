@@ -131,13 +131,14 @@ class HybridRetrieval(BaseRetrieval):
         use_graph = kwargs.get("use_graph", True)
         use_keyword = kwargs.get("use_keyword", True)
 
-        # Query all stores
+        # Query stores - temporarily disable keyword and graph stores for testing
+        # Only use vector store as requested
         results = await self._query(
             query_obj,
             top_k=top_k,
-            use_vector=use_vector,
-            use_graph=use_graph,
-            use_keyword=use_keyword
+            use_vector=True,   # Always enable vector store
+            use_graph=False,   # Disable graph store temporarily
+            use_keyword=False  # Disable keyword store temporarily
         )
 
         # Check if we have any results
@@ -320,6 +321,277 @@ class HybridRetrieval(BaseRetrieval):
 
         return all_results
 
+    async def _query_with_intelligent_routing(
+        self,
+        query: Query,
+        top_k: int = 5,
+        use_vector: bool = True,
+        use_graph: bool = True,
+        use_keyword: bool = True
+    ) -> List[QueryResult]:
+        """Query stores using intelligent routing based on query analysis.
+        
+        This method implements the intelligent query routing by:
+        1. Analyzing query characteristics
+        2. Selecting optimal stores and weights
+        3. Applying optimization hints
+        4. Executing parallel or sequential queries based on strategy
+        
+        Args:
+            query: Query to execute
+            top_k: Number of results to return
+            use_vector: Whether to use vector store
+            use_graph: Whether to use graph store
+            use_keyword: Whether to use keyword store
+            
+        Returns:
+            List of query results
+        """
+        # Get intelligent routing decision
+        routing_decision = await self._analyze_query_routing(
+            query.text, 
+            query.metadata
+        )
+        
+        # Apply routing decision to store selection
+        optimized_weights = routing_decision["store_weights"]
+        optimization_hints = routing_decision["optimization_hints"]
+        
+        # Adjust top_k based on optimization hints
+        effective_top_k = optimization_hints.get("top_k_override", top_k)
+        
+        # Fast path optimization for simple queries
+        if optimization_hints.get("fast_path", False):
+            return await self._fast_path_query(query, effective_top_k, optimized_weights)
+        
+        # Check cache first with routing-aware key
+        routing_aware_key = f"{query.text}_{effective_top_k}_{routing_decision['strategy']}"
+        if routing_aware_key in self.query_cache:
+            logger.debug(f"Cache hit for routed query: {query.text}")
+            return self.query_cache[routing_aware_key]
+        
+        all_results = []
+        store_tasks = []
+        
+        # Query vector store with routing optimization
+        if use_vector and self.vector_store:
+            vector_weight = optimized_weights.get(StoreType.VECTOR, 0.0)
+            if vector_weight > 0:
+                store_tasks.append((
+                    "vector",
+                    self._query_store_with_optimization(
+                        self.vector_store, query, effective_top_k, 
+                        optimization_hints, "vector"
+                    )
+                ))
+        
+        # Query graph store with routing optimization
+        if use_graph and self.graph_store:
+            graph_weight = optimized_weights.get(StoreType.GRAPH, 0.0)
+            if graph_weight > 0:
+                store_tasks.append((
+                    "graph",
+                    self._query_store_with_optimization(
+                        self.graph_store, query, effective_top_k,
+                        optimization_hints, "graph"
+                    )
+                ))
+        
+        # Query keyword store with routing optimization
+        if use_keyword and self.keyword_store:
+            keyword_weight = optimized_weights.get(StoreType.KEYWORD, 0.0)
+            if keyword_weight > 0:
+                store_tasks.append((
+                    "keyword",
+                    self._query_store_with_optimization(
+                        self.keyword_store, query, effective_top_k,
+                        optimization_hints, "keyword"
+                    )
+                ))
+        
+        # Execute queries in parallel for performance
+        if store_tasks:
+            try:
+                results_by_store = await asyncio.gather(
+                    *[task for _, task in store_tasks],
+                    return_exceptions=True
+                )
+                
+                # Process results and apply store-specific optimizations
+                for (store_type, _), results in zip(store_tasks, results_by_store):
+                    if isinstance(results, Exception):
+                        logger.error(f"Error querying {store_type} store: {results}")
+                    else:
+                        # Apply routing-specific optimizations to results
+                        optimized_results = self._apply_routing_optimizations(
+                            results, store_type, optimization_hints, optimized_weights
+                        )
+                        all_results.extend(optimized_results)
+                        
+            except Exception as e:
+                logger.error(f"Error in parallel query execution: {e}")
+        
+        # Update cache with routing-aware key
+        if len(self.query_cache) >= self.cache_size:
+            oldest_key = next(iter(self.query_cache))
+            del self.query_cache[oldest_key]
+        
+        self.query_cache[routing_aware_key] = all_results
+        
+        return all_results
+    
+    async def _query_store_with_optimization(
+        self,
+        store: Any,
+        query: Query,
+        top_k: int,
+        optimization_hints: Dict[str, Any],
+        store_type: str
+    ) -> List[QueryResult]:
+        """Query a single store with routing-specific optimizations."""
+        try:
+            # Apply store-specific optimizations
+            if optimization_hints.get("prefer_exact_matches") and store_type == "keyword":
+                # For exact match preference, increase top_k temporarily
+                top_k = int(top_k * 1.5)
+            
+            if optimization_hints.get("enable_semantic_expansion") and store_type == "vector":
+                # For semantic expansion, add broader search terms
+                # This could be enhanced with query expansion logic
+                pass
+            
+            if optimization_hints.get("prioritize_sequential_data") and store_type == "graph":
+                # For procedural queries, prioritize sequential patterns
+                # This could be enhanced with graph traversal optimizations
+                pass
+            
+            # Execute the query
+            results = await self._query_store(store, query, top_k)
+            
+            # Apply freshness optimization if needed
+            if optimization_hints.get("freshness_priority") == "high":
+                results = self._apply_freshness_boost(results, optimization_hints.get("recency_boost", 0.0))
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error querying {store_type} store with optimization: {e}")
+            return []
+    
+    def _apply_routing_optimizations(
+        self,
+        results: List[QueryResult],
+        store_type: str,
+        optimization_hints: Dict[str, Any],
+        store_weights: Dict[StoreType, float]
+    ) -> List[QueryResult]:
+        """Apply routing-specific optimizations to query results."""
+        optimized_results = []
+        
+        for result in results:
+            # Apply store weight adjustment
+            weight = store_weights.get(StoreType(store_type), 1.0)
+            adjusted_score = result.score * weight
+            
+            # Create optimized result
+            optimized_result = QueryResult(
+                id=result.id,
+                content=result.content,
+                metadata=result.metadata.copy(),
+                score=adjusted_score,
+                store_type=result.store_type
+            )
+            
+            # Add routing information to metadata
+            if "retrieval" not in optimized_result.metadata:
+                optimized_result.metadata["retrieval"] = {}
+            
+            optimized_result.metadata["retrieval"]["routing_strategy"] = "intelligent"
+            optimized_result.metadata["retrieval"]["store_weight"] = weight
+            optimized_result.metadata["retrieval"]["optimization_hints"] = optimization_hints
+            
+            optimized_results.append(optimized_result)
+        
+        return optimized_results
+    
+    def _apply_freshness_boost(self, results: List[QueryResult], boost_factor: float) -> List[QueryResult]:
+        """Apply freshness boost to results based on timestamps."""
+        import time
+        current_time = time.time()
+        
+        boosted_results = []
+        for result in results:
+            # Check if result has timestamp information
+            created_at = result.metadata.get("created_at")
+            if created_at:
+                try:
+                    # Parse timestamp and calculate age
+                    if isinstance(created_at, str):
+                        # Try to parse ISO format
+                        from datetime import datetime
+                        created_time = datetime.fromisoformat(created_at.replace('Z', '+00:00')).timestamp()
+                    else:
+                        created_time = float(created_at)
+                    
+                    # Calculate age in hours
+                    age_hours = (current_time - created_time) / 3600
+                    
+                    # Apply freshness boost (newer content gets higher score)
+                    freshness_multiplier = 1.0 + (boost_factor * max(0, 1.0 - age_hours / 24))
+                    boosted_score = result.score * freshness_multiplier
+                    
+                    # Create boosted result
+                    boosted_result = QueryResult(
+                        id=result.id,
+                        content=result.content,
+                        metadata=result.metadata.copy(),
+                        score=boosted_score,
+                        store_type=result.store_type
+                    )
+                    
+                    # Add freshness information
+                    boosted_result.metadata["retrieval"]["freshness_boost"] = freshness_multiplier
+                    boosted_results.append(boosted_result)
+                    
+                except Exception as e:
+                    logger.debug(f"Could not apply freshness boost: {e}")
+                    boosted_results.append(result)
+            else:
+                boosted_results.append(result)
+        
+        return boosted_results
+    
+    async def _fast_path_query(
+        self,
+        query: Query,
+        top_k: int,
+        store_weights: Dict[StoreType, float]
+    ) -> List[QueryResult]:
+        """Fast path for simple queries - uses primary store only."""
+        # Determine primary store based on weights
+        primary_store_type = max(store_weights.items(), key=lambda x: x[1])[0]
+        
+        # Select the appropriate store
+        if primary_store_type == StoreType.VECTOR and self.vector_store:
+            store = self.vector_store
+        elif primary_store_type == StoreType.GRAPH and self.graph_store:
+            store = self.graph_store
+        elif primary_store_type == StoreType.KEYWORD and self.keyword_store:
+            store = self.keyword_store
+        else:
+            # Fallback to first available store
+            store = self.vector_store or self.graph_store or self.keyword_store
+        
+        if store:
+            try:
+                results = await self._query_store(store, query, top_k)
+                logger.debug(f"Fast path query completed using {primary_store_type}")
+                return results
+            except Exception as e:
+                logger.error(f"Fast path query failed: {e}")
+        
+        return []
+
     async def _query_store(
         self,
         store: Any,
@@ -447,6 +719,123 @@ class HybridRetrieval(BaseRetrieval):
         merged_results.sort(key=lambda x: x.score, reverse=True)
 
         return merged_results[:top_k]
+
+    async def _analyze_query_routing(
+        self, 
+        query: str, 
+        user_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Analyze query characteristics to determine optimal routing strategy.
+        
+        This method implements intelligent query routing by:
+        1. Analyzing query type (factual, conceptual, procedural)
+        2. Checking query complexity and length
+        3. Considering user context and session history
+        4. Evaluating data freshness requirements
+        5. Selecting optimal store combination
+        
+        Args:
+            query: The query text to analyze
+            user_context: Optional user context for personalization
+            
+        Returns:
+            Dictionary with routing decisions and strategy
+        """
+        import re
+        
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+        routing_decision = {
+            "strategy": "multi_path",
+            "primary_store": None,
+            "store_weights": self.weights.copy(),
+            "optimization_hints": {},
+            "query_analysis": {}
+        }
+        
+        # Query type analysis
+        query_analysis = {}
+        
+        # Factual queries (prefer vector + keyword)
+        factual_patterns = [
+            r'\b(what|when|where|who|which|how many|how much)\b',
+            r'\b(define|definition|meaning of)\b',
+            r'\b(list of|examples of)\b'
+        ]
+        
+        # Conceptual queries (prefer vector + graph)
+        conceptual_patterns = [
+            r'\b(why|how does|explain|describe|compare|contrast)\b',
+            r'\b(relationship between|difference between)\b',
+            r'\b(similar to|like|analogy)\b'
+        ]
+        
+        # Procedural queries (prefer graph + recent data)
+        procedural_patterns = [
+            r'\b(how to|steps to|process for)\b',
+            r'\b(tutorial|guide|instructions)\b',
+            r'\b(way to|method for)\b'
+        ]
+        
+        # Analyze query patterns
+        query_analysis["is_factual"] = any(re.search(pattern, query_lower) for pattern in factual_patterns)
+        query_analysis["is_conceptual"] = any(re.search(pattern, query_lower) for pattern in conceptual_patterns)
+        query_analysis["is_procedural"] = any(re.search(pattern, query_lower) for pattern in procedural_patterns)
+        
+        # Query complexity analysis
+        query_analysis["word_count"] = len(query_words)
+        query_analysis["char_count"] = len(query)
+        query_analysis["complexity"] = "simple" if len(query_words) <= 5 else "complex"
+        
+        # Freshness requirement analysis
+        fresh_patterns = [r'\b(recent|latest|new|current|today|now)\b', r'\b(update|changed|happened)\b']
+        query_analysis["needs_fresh_data"] = any(re.search(pattern, query_lower) for pattern in fresh_patterns)
+        
+        # Personalization analysis
+        personal_patterns = [r'\b(my|mine|I|me)\b', r'\b(profile|settings|preferences)\b']
+        query_analysis["is_personal"] = any(re.search(pattern, query_lower) for pattern in personal_patterns)
+        
+        routing_decision["query_analysis"] = query_analysis
+        
+        # Apply routing logic based on analysis
+        if query_analysis["is_factual"]:
+            routing_decision["strategy"] = "vector_keyword_primary"
+            routing_decision["store_weights"][StoreType.VECTOR] = 0.6
+            routing_decision["store_weights"][StoreType.KEYWORD] = 0.3
+            routing_decision["store_weights"][StoreType.GRAPH] = 0.1
+            routing_decision["optimization_hints"]["prefer_exact_matches"] = True
+            
+        elif query_analysis["is_conceptual"]:
+            routing_decision["strategy"] = "vector_graph_primary"
+            routing_decision["store_weights"][StoreType.VECTOR] = 0.5
+            routing_decision["store_weights"][StoreType.GRAPH] = 0.4
+            routing_decision["store_weights"][StoreType.KEYWORD] = 0.1
+            routing_decision["optimization_hints"]["enable_semantic_expansion"] = True
+            
+        elif query_analysis["is_procedural"]:
+            routing_decision["strategy"] = "graph_vector_primary"
+            routing_decision["store_weights"][StoreType.GRAPH] = 0.5
+            routing_decision["store_weights"][StoreType.VECTOR] = 0.4
+            routing_decision["store_weights"][StoreType.KEYWORD] = 0.1
+            routing_decision["optimization_hints"]["prioritize_sequential_data"] = True
+            
+        # Apply freshness optimization
+        if query_analysis["needs_fresh_data"]:
+            routing_decision["optimization_hints"]["freshness_priority"] = "high"
+            routing_decision["optimization_hints"]["recency_boost"] = 0.2
+            
+        # Apply personalization
+        if query_analysis["is_personal"] and user_context:
+            routing_decision["optimization_hints"]["personalize_results"] = True
+            routing_decision["optimization_hints"]["user_context"] = user_context
+            
+        # Complexity-based optimization
+        if query_analysis["complexity"] == "simple":
+            routing_decision["optimization_hints"]["fast_path"] = True
+            routing_decision["optimization_hints"]["top_k_override"] = min(top_k, 3)
+        
+        logger.info(f"Query routing decision: {routing_decision['strategy']} for query: {query[:50]}...")
+        return routing_decision
 
     async def _find_similar_chunks(
         self,

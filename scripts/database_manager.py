@@ -50,30 +50,106 @@ OPTIONAL_EXTENSIONS_SQL = [
     # "CREATE EXTENSION IF NOT EXISTS pgai;"  # Not needed - we have our own implementation
 ]
 
-INDEXES_SQL = [
-    "CREATE INDEX IF NOT EXISTS m0_raw_needs_embedding_idx ON m0_raw (needs_embedding) WHERE needs_embedding = TRUE;",
-    "CREATE INDEX IF NOT EXISTS m0_raw_retry_status_idx ON m0_raw (retry_status);",
-    "CREATE INDEX IF NOT EXISTS m0_raw_retry_count_idx ON m0_raw (retry_count);",
-    "CREATE INDEX IF NOT EXISTS m0_raw_created_at_idx ON m0_raw (created_at);",
-    "CREATE INDEX IF NOT EXISTS m0_raw_embedding_idx ON m0_raw USING hnsw (embedding vector_cosine_ops);"
+M0_INDEXES_SQL = [
+    "CREATE INDEX IF NOT EXISTS idx_m0_session_id ON m0_raw (session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_user_id ON m0_raw (user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_message_role ON m0_raw (message_role);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_round_id ON m0_raw (round_id);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_needs_embedding ON m0_raw (needs_embedding) WHERE needs_embedding = TRUE;",
+    "CREATE INDEX IF NOT EXISTS idx_m0_retry_status ON m0_raw (retry_status);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_retry_count ON m0_raw (retry_count);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_created_at ON m0_raw (created_at);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_updated_at ON m0_raw (updated_at);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_metadata_gin ON m0_raw USING gin (metadata);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_embedding_cosine ON m0_raw USING hnsw (embedding vector_cosine_ops);"
 ]
 
-TABLE_SCHEMA_SQL = """
+M1_INDEXES_SQL = [
+    "CREATE INDEX IF NOT EXISTS idx_m1_source_id ON m1_episodic (source_id);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_source_session ON m1_episodic (source_session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_source_user ON m1_episodic (source_user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_episode_type ON m1_episodic (episode_type) WHERE episode_type IS NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS idx_m1_episode_category_gin ON m1_episodic USING gin (episode_category);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_confidence ON m1_episodic (confidence);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_needs_embedding ON m1_episodic (needs_embedding) WHERE needs_embedding = TRUE;",
+    "CREATE INDEX IF NOT EXISTS idx_m1_retry_status ON m1_episodic (retry_status);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_retry_count ON m1_episodic (retry_count);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_created_at ON m1_episodic (created_at);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_updated_at ON m1_episodic (updated_at);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_entities_gin ON m1_episodic USING gin (entities);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_temporal_gin ON m1_episodic USING gin (temporal_info);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_metadata_gin ON m1_episodic USING gin (metadata);",
+    "CREATE INDEX IF NOT EXISTS idx_m1_embedding_cosine ON m1_episodic USING hnsw (embedding vector_cosine_ops);"
+]
+
+M0_TABLE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS m0_raw (
+    -- Primary identification
     id              TEXT PRIMARY KEY,
+
+    -- Core content
     content         TEXT NOT NULL,
+
+    -- Context tracking
+    session_id      TEXT,  -- Session context
+    user_id         TEXT,  -- User context
+    message_role    TEXT,  -- Message role (user, assistant, system)
+    round_id        TEXT,  -- Round context
+
+    -- General metadata
     metadata        JSONB DEFAULT '{}'::jsonb,
-    embedding       VECTOR(384),
-    needs_embedding BOOLEAN DEFAULT TRUE,
-    retry_count     INTEGER DEFAULT 0,
-    last_retry_at   TIMESTAMP,
-    retry_status    TEXT DEFAULT 'pending',
+
+    -- PgAI embedding infrastructure
+    embedding       VECTOR(384),  -- 384-dimensional embedding vector
+    needs_embedding BOOLEAN DEFAULT TRUE,  -- Flag for automatic embedding generation
+    retry_count     INTEGER DEFAULT 0,  -- Number of embedding retry attempts
+    last_retry_at   TIMESTAMP,  -- Timestamp of last retry attempt
+    retry_status    TEXT DEFAULT 'pending' CHECK (retry_status IN ('pending', 'processing', 'completed', 'failed')),
+
+    -- Audit timestamps
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
-NOTIFICATION_FUNCTION_SQL = """
+M1_TABLE_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS m1_episodic (
+    -- Primary identification
+    id TEXT PRIMARY KEY,
+
+    -- Source tracking (links back to M0 raw data)
+    source_id TEXT,  -- References m0_raw.id
+    source_session_id TEXT,  -- Session context for episode
+    source_user_id TEXT,  -- User context for episode
+
+    -- Episode content and metadata
+    episode_content TEXT NOT NULL,
+    episode_type TEXT,  -- Open-ended episode type, no constraints for extensibility
+    episode_category JSONB DEFAULT '{}'::jsonb,  -- Flexible categorization system
+    confidence FLOAT NOT NULL DEFAULT 1.0 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+
+    -- Structured episode data
+    entities JSONB DEFAULT '[]'::jsonb,  -- Extracted entities from episode
+    temporal_info JSONB DEFAULT '{}'::jsonb,  -- Temporal information (dates, times, etc.)
+    source_context TEXT,  -- Brief context about where episode came from
+
+    -- General metadata
+    metadata JSONB DEFAULT '{}'::jsonb,
+
+    -- PgAI embedding infrastructure (identical to M0)
+    embedding VECTOR(384),  -- 384-dimensional embedding vector
+    needs_embedding BOOLEAN DEFAULT TRUE,  -- Flag for automatic embedding generation
+    retry_count INTEGER DEFAULT 0,  -- Number of embedding retry attempts
+    last_retry_at TIMESTAMP,  -- Timestamp of last retry attempt
+    retry_status TEXT DEFAULT 'pending' CHECK (retry_status IN ('pending', 'processing', 'completed', 'failed')),
+
+    -- Audit timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+M0_NOTIFICATION_FUNCTION_SQL = """
 CREATE OR REPLACE FUNCTION notify_embedding_needed()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -85,11 +161,50 @@ END;
 $$ LANGUAGE plpgsql;
 """
 
-TRIGGER_SQL = """
+M0_TRIGGER_SQL = """
 CREATE TRIGGER m0_raw_embedding_trigger
     AFTER INSERT OR UPDATE OF needs_embedding ON m0_raw
     FOR EACH ROW
     EXECUTE FUNCTION notify_embedding_needed();
+"""
+
+M1_UPDATE_FUNCTION_SQL = """
+CREATE OR REPLACE FUNCTION update_m1_episodic_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+M1_UPDATE_TRIGGER_SQL = """
+DROP TRIGGER IF EXISTS trigger_update_m1_episodic_updated_at ON m1_episodic;
+CREATE TRIGGER trigger_update_m1_episodic_updated_at
+    BEFORE UPDATE ON m1_episodic
+    FOR EACH ROW
+    EXECUTE FUNCTION update_m1_episodic_updated_at();
+"""
+
+M1_NOTIFICATION_FUNCTION_SQL = """
+CREATE OR REPLACE FUNCTION notify_m1_embedding_needed()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Only notify if needs_embedding is TRUE and content exists
+    IF NEW.needs_embedding = TRUE AND NEW.episode_content IS NOT NULL THEN
+        PERFORM pg_notify('embedding_needed', 'm1_episodic:' || NEW.id::text);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+M1_EMBEDDING_TRIGGER_SQL = """
+DROP TRIGGER IF EXISTS trigger_m1_embedding_notification ON m1_episodic;
+CREATE TRIGGER trigger_m1_embedding_notification
+    AFTER INSERT OR UPDATE OF needs_embedding ON m1_episodic
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_m1_embedding_needed();
 """
 
 # Note: This implements MemFuse's custom pgai-like functionality
@@ -422,51 +537,108 @@ class DatabaseManager:
 
         # Create m0_raw table
         self.print_status("Creating m0_raw table...", StatusLevel.INFO)
-        result = self.run_sql_command(TABLE_SCHEMA_SQL)
+        result = self.run_sql_command(M0_TABLE_SCHEMA_SQL)
         if result is not None:
             self.print_status("m0_raw table created successfully", StatusLevel.SUCCESS)
         else:
             self.print_status("Failed to create m0_raw table", StatusLevel.ERROR)
             return False
 
-        # Create indexes
-        self.print_status("Creating indexes...", StatusLevel.INFO)
-        index_success_count = 0
-        for index_sql in INDEXES_SQL:
+        # Create m1_episodic table
+        self.print_status("Creating m1_episodic table...", StatusLevel.INFO)
+        result = self.run_sql_command(M1_TABLE_SCHEMA_SQL)
+        if result is not None:
+            self.print_status("m1_episodic table created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create m1_episodic table", StatusLevel.ERROR)
+            return False
+
+        # Create M0 indexes
+        self.print_status("Creating M0 indexes...", StatusLevel.INFO)
+        m0_index_success_count = 0
+        for index_sql in M0_INDEXES_SQL:
             result = self.run_sql_command(index_sql)
             if result is not None:
-                index_success_count += 1
-                self.print_status("Index created successfully", StatusLevel.SUCCESS)
+                m0_index_success_count += 1
+                self.print_status("M0 index created successfully", StatusLevel.SUCCESS)
             else:
-                self.print_status("Failed to create index", StatusLevel.WARNING)
-                # Continue with other indexes even if one fails
+                self.print_status("Failed to create M0 index", StatusLevel.WARNING)
 
-        if index_success_count == 0:
+        # Create M1 indexes
+        self.print_status("Creating M1 indexes...", StatusLevel.INFO)
+        m1_index_success_count = 0
+        for index_sql in M1_INDEXES_SQL:
+            result = self.run_sql_command(index_sql)
+            if result is not None:
+                m1_index_success_count += 1
+                self.print_status("M1 index created successfully", StatusLevel.SUCCESS)
+            else:
+                self.print_status("Failed to create M1 index", StatusLevel.WARNING)
+
+        total_indexes = len(M0_INDEXES_SQL) + len(M1_INDEXES_SQL)
+        total_success = m0_index_success_count + m1_index_success_count
+
+        if total_success == 0:
             self.print_status("Failed to create any indexes", StatusLevel.ERROR)
             return False
-        elif index_success_count < len(INDEXES_SQL):
+        elif total_success < total_indexes:
             self.print_status(
-                f"Created {index_success_count}/{len(INDEXES_SQL)} indexes",
+                f"Created {total_success}/{total_indexes} indexes",
                 StatusLevel.WARNING
             )
 
-        # Create immediate trigger system
-        self.print_status("Creating immediate trigger system...", StatusLevel.INFO)
+        # Create M0 trigger system
+        self.print_status("Creating M0 trigger system...", StatusLevel.INFO)
 
-        # Create notification function
-        result = self.run_sql_command(NOTIFICATION_FUNCTION_SQL)
+        # Create M0 notification function
+        result = self.run_sql_command(M0_NOTIFICATION_FUNCTION_SQL)
         if result is not None:
-            self.print_status("Notification function created successfully", StatusLevel.SUCCESS)
+            self.print_status("M0 notification function created successfully", StatusLevel.SUCCESS)
         else:
-            self.print_status("Failed to create notification function", StatusLevel.ERROR)
+            self.print_status("Failed to create M0 notification function", StatusLevel.ERROR)
             return False
 
-        # Create trigger
-        result = self.run_sql_command(TRIGGER_SQL)
+        # Create M0 trigger
+        result = self.run_sql_command(M0_TRIGGER_SQL)
         if result is not None:
-            self.print_status("Immediate trigger created successfully", StatusLevel.SUCCESS)
+            self.print_status("M0 trigger created successfully", StatusLevel.SUCCESS)
         else:
-            self.print_status("Failed to create immediate trigger", StatusLevel.ERROR)
+            self.print_status("Failed to create M0 trigger", StatusLevel.ERROR)
+            return False
+
+        # Create M1 trigger system
+        self.print_status("Creating M1 trigger system...", StatusLevel.INFO)
+
+        # Create M1 update function
+        result = self.run_sql_command(M1_UPDATE_FUNCTION_SQL)
+        if result is not None:
+            self.print_status("M1 update function created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M1 update function", StatusLevel.ERROR)
+            return False
+
+        # Create M1 update trigger
+        result = self.run_sql_command(M1_UPDATE_TRIGGER_SQL)
+        if result is not None:
+            self.print_status("M1 update trigger created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M1 update trigger", StatusLevel.ERROR)
+            return False
+
+        # Create M1 notification function
+        result = self.run_sql_command(M1_NOTIFICATION_FUNCTION_SQL)
+        if result is not None:
+            self.print_status("M1 notification function created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M1 notification function", StatusLevel.ERROR)
+            return False
+
+        # Create M1 embedding trigger
+        result = self.run_sql_command(M1_EMBEDDING_TRIGGER_SQL)
+        if result is not None:
+            self.print_status("M1 embedding trigger created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M1 embedding trigger", StatusLevel.ERROR)
             return False
         
         print("\n✅ Database schema recreation completed successfully")

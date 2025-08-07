@@ -467,8 +467,16 @@ class HybridBuffer:
                 logger.warning("HybridBuffer: No embedding model available, using fallback")
                 return await self._create_fallback_embedding(text)
 
+            # Check if it's a MiniLMEncoder instance (has encode_text method)
+            if hasattr(self.embedding_model, 'encode_text'):
+                # MiniLMEncoder instance - use async encode_text method
+                embedding = await self.embedding_model.encode_text(text)
+                if hasattr(embedding, 'tolist'):
+                    return embedding.tolist()
+                else:
+                    return embedding.tolist() if hasattr(embedding, '__iter__') else embedding
             # Check if it's a SentenceTransformer model instance
-            if hasattr(self.embedding_model, 'encode'):
+            elif hasattr(self.embedding_model, 'encode'):
                 # Direct model instance (SentenceTransformer)
                 embedding = self.embedding_model.encode(text)
                 if hasattr(embedding, 'tolist'):

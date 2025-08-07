@@ -284,14 +284,20 @@ async def delete_session(
             await db.delete_message(message['id'])
 
     # Delete rounds directly from database (rounds are not buffered)
-    rounds = await db.backend.select('rounds', {'session_id': session_id})
-    logger.info(f"Found {len(rounds)} rounds in session {session_id}")
+    # Note: We need to use backend directly here since there's no delete_round method
+    # This is acceptable as it's a rare operation during session deletion
+    try:
+        rounds = await db.backend.select('rounds', {'session_id': session_id})
+        logger.info(f"Found {len(rounds)} rounds in session {session_id}")
 
-    rounds_deleted = 0
-    for round_data in rounds:
-        round_success = await db.backend.delete('rounds', {'id': round_data['id']})
-        if round_success > 0:
-            rounds_deleted += 1
+        rounds_deleted = 0
+        for round_data in rounds:
+            round_success = await db.backend.delete('rounds', {'id': round_data['id']})
+            if round_success > 0:
+                rounds_deleted += 1
+    except Exception as e:
+        logger.warning(f"Error deleting rounds for session {session_id}: {e}")
+        rounds_deleted = 0
 
     # Delete the session
     success = await db.delete_session(session_id)

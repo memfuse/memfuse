@@ -27,8 +27,10 @@ class DatabaseService:
         if cls._instance is None:
             logger.debug("Creating new Database instance")
 
-            # Get database configuration from config
-            config_dict = config_manager.get_config()
+            # Get database configuration from global config manager
+            from ..utils.global_config_manager import get_global_config_manager
+            config_manager_instance = get_global_config_manager()
+            config_dict = config_manager_instance.get_config()
             db_config = config_dict.get("database", {})
 
             # PostgreSQL backend (pgai enhanced) - check environment variables first
@@ -49,9 +51,15 @@ class DatabaseService:
                 logger.error(f"Failed to connect to PostgreSQL: {e}")
                 raise RuntimeError(f"Failed to connect to PostgreSQL at {host}:{port}/{database}: {e}")
 
-            cls._instance = Database(backend)
+            # Create base database instance with simplified connection management
+            base_database = Database(backend)
             # Initialize database tables asynchronously
-            await cls._instance.initialize()
+            await base_database.initialize()
+            
+            # Use database directly without queue wrapper for streaming optimization
+            cls._instance = base_database
+            
+            logger.info("Database instance created with simplified connection management")
         return cls._instance
 
     @classmethod

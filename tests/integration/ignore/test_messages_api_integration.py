@@ -537,7 +537,7 @@ class TestMessagesAPIIntegration:
         # Verify messages exist
         cursor = database_connection.conn.cursor()
         cursor.execute(
-            "SELECT COUNT(*) FROM messages WHERE session_id = %s",
+            "SELECT COUNT(*) FROM messages m JOIN rounds r ON m.round_id = r.id WHERE r.session_id = %s",
             (session_id,)
         )
         message_count_before = cursor.fetchone()[0]
@@ -552,7 +552,7 @@ class TestMessagesAPIIntegration:
         # Verify messages were cascaded deleted
         cursor = database_connection.conn.cursor()
         cursor.execute(
-            "SELECT COUNT(*) FROM messages WHERE session_id = %s",
+            "SELECT COUNT(*) FROM messages m JOIN rounds r ON m.round_id = r.id WHERE r.session_id = %s",
             (session_id,)
         )
         message_count_after = cursor.fetchone()[0]

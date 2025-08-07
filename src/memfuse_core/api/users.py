@@ -377,7 +377,9 @@ async def query_memory(
 
         if result.get("type") == "message":
             # Check if this is a buffer result (from memory) vs database result
-            is_buffer_result = result.get("metadata", {}).get("retrieval", {}).get("source") in ["write_buffer", "speculative_buffer", "query_buffer", "hybrid_buffer"]
+            # Include all buffer sources: round_buffer, hybrid_buffer, write_buffer, etc.
+            buffer_sources = ["write_buffer", "speculative_buffer", "query_buffer", "hybrid_buffer", "round_buffer"]
+            is_buffer_result = result.get("metadata", {}).get("retrieval", {}).get("source") in buffer_sources or result.get("metadata", {}).get("source") in buffer_sources
 
             if is_buffer_result:
                 # For buffer results, use the result as-is since they come from memory
@@ -454,7 +456,9 @@ async def query_memory(
         result_id = result.get("id")
         if result_id not in unique_results or result.get("score", 0) > unique_results[result_id].get("score", 0):
             # Check if this is a buffer result (from memory) vs database result
-            is_buffer_result = result.get("metadata", {}).get("retrieval", {}).get("source") in ["write_buffer", "speculative_buffer", "query_buffer", "hybrid_buffer"]
+            # Include all buffer sources: round_buffer, hybrid_buffer, write_buffer, etc.
+            buffer_sources = ["write_buffer", "speculative_buffer", "query_buffer", "hybrid_buffer", "round_buffer"]
+            is_buffer_result = result.get("metadata", {}).get("retrieval", {}).get("source") in buffer_sources or result.get("metadata", {}).get("source") in buffer_sources
 
             # Debug logging
             logger.info(f"Processing result ID: {result_id}, is_buffer_result: {is_buffer_result}")

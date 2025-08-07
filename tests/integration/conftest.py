@@ -51,8 +51,8 @@ def setup_integration_environment():
     os.environ["DISABLE_PGAI_NOTIFICATIONS"] = "true"
 
     # Conservative connection pool settings for testing
-    os.environ["POSTGRES_POOL_SIZE"] = "2"
-    os.environ["POSTGRES_MAX_OVERFLOW"] = "3"
+    os.environ["POSTGRES_POOL_SIZE"] = "1"
+    os.environ["POSTGRES_MAX_OVERFLOW"] = "2"
     os.environ["POSTGRES_POOL_TIMEOUT"] = "10.0"
 
     # Use default buffer configuration from config/buffer/default.yaml
@@ -83,6 +83,21 @@ def setup_integration_environment():
     DatabaseService.reset_instance_sync()
     print("🧹 DatabaseService singleton reset")
     
+    # CRITICAL: Close all connection pools to prevent connection leaks
+    try:
+        from memfuse_core.services.global_connection_manager import get_global_connection_manager
+        connection_manager = get_global_connection_manager()
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(connection_manager.close_all_pools(force=True))
+            print("🧹 Connection pools closed")
+        finally:
+            loop.close()
+    except Exception as e:
+        print(f"⚠️  Error closing connection pools: {e}")
+    
     print("✅ Integration environment setup completed")
     
     yield
@@ -111,6 +126,21 @@ def setup_integration_environment():
 
     # Reset singleton to ensure connection is closed
     DatabaseService.reset_instance_sync()
+    
+    # CRITICAL: Close all connection pools to prevent connection leaks
+    try:
+        from memfuse_core.services.global_connection_manager import get_global_connection_manager
+        connection_manager = get_global_connection_manager()
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(connection_manager.close_all_pools(force=True))
+            print("🧹 Connection pools closed")
+        finally:
+            loop.close()
+    except Exception as e:
+        print(f"⚠️  Error closing connection pools: {e}")
 
     # Force garbage collection to ensure cleanup
     import gc

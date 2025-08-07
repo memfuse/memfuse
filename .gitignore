@@ -43,6 +43,7 @@
 .DS_Store
 .Python
 .cache
+.claude
 .cookiecutter.json
 .coverage
 .coverage.*
@@ -55,6 +56,7 @@
 .idea
 .installed.cfg
 .ipynb_checkpoints
+.kiro
 .mypy_cache/
 .nox/
 .nyc_output
@@ -87,6 +89,7 @@
 /docs/_build/
 /site
 /src/*.egg-info/
+CLAUDE.md
 ENV/
 MANIFEST
 __pycache__

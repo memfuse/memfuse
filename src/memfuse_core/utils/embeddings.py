@@ -49,7 +49,7 @@ def get_model(model_name: str) -> Any:
         Loaded model
     """
 
-    # Priority 1: 全局服务管理器
+    # Priority 1: Global service manager
     try:
         from ..services.global_service_manager import get_global_service_manager
         global_manager = get_global_service_manager()
@@ -61,7 +61,7 @@ def get_model(model_name: str) -> Any:
     except Exception as e:
         logger.debug(f"Could not get global embedding model: {e}")
 
-    # Priority 2: ServiceFactory共享模型
+    # Priority 2: ServiceFactory shared model
     try:
         from ..services.service_factory import ServiceFactory
         shared_embedding = ServiceFactory.get_global_embedding_model()
@@ -71,12 +71,12 @@ def get_model(model_name: str) -> Any:
     except Exception as e:
         logger.debug(f"Could not get shared embedding model: {e}")
 
-    # Priority 3: 本地缓存 (最后选择)
+    # Priority 3: Local cache (last resort)
     if model_name in _model_cache:
         logger.debug(f"Using cached model: {model_name}")
         return _model_cache[model_name]
 
-    # Priority 4: 创建新模型 (性能警告)
+    # Priority 4: Create new model (performance warning)
     if SENTENCE_TRANSFORMERS_AVAILABLE:
         try:
             logger.warning(f"Creating new embedding model: {model_name} (performance impact)")
@@ -118,8 +118,16 @@ async def create_embedding(text: str, model: Optional[str] = None) -> List[float
         try:
             model_name = model or DEFAULT_EMBEDDING_MODEL
             model_instance = get_model(model_name)
-            embedding = model_instance.encode(text)
-            return embedding.tolist()
+            
+            # Check if it's a MiniLMEncoder instance (has encode_text method)
+            if hasattr(model_instance, 'encode_text'):
+                # MiniLMEncoder instance - use async encode_text method
+                embedding = await model_instance.encode_text(text)
+                return embedding.tolist() if hasattr(embedding, 'tolist') else embedding.tolist()
+            else:
+                # Direct model instance (SentenceTransformer)
+                embedding = model_instance.encode(text)
+                return embedding.tolist()
         except Exception as e:
             logger.error(
                 f"Error creating embedding with sentence_transformers: {e}")
@@ -171,8 +179,16 @@ async def create_batch_embeddings(
         try:
             model_name = model or DEFAULT_EMBEDDING_MODEL
             model_instance = get_model(model_name)
-            embeddings = model_instance.encode(texts)
-            return [embedding.tolist() for embedding in embeddings]
+            
+            # Check if it's a MiniLMEncoder instance (has encode_text method)
+            if hasattr(model_instance, 'encode_text'):
+                # MiniLMEncoder instance - use async encode_texts method
+                embeddings = await model_instance.encode_texts(texts)
+                return [embedding.tolist() if hasattr(embedding, 'tolist') else embedding.tolist() for embedding in embeddings]
+            else:
+                # Direct model instance (SentenceTransformer)
+                embeddings = model_instance.encode(texts)
+                return [embedding.tolist() for embedding in embeddings]
         except Exception as e:
             logger.error(
                 f"Error creating batch embeddings with sentence_transformers: {e}")

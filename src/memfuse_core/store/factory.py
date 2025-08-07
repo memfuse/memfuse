@@ -224,6 +224,11 @@ class StoreFactory:
             from .pgai_store.store_factory import PgaiStoreFactory
             from .pgai_store.pgai_vector_wrapper import PgaiVectorWrapper
 
+            # Check if we already have an instance for this configuration
+            if stable_key in cls._vector_store_instances:
+                logger.debug(f"Reusing existing pgai vector store instance for {data_dir}")
+                return cls._vector_store_instances[stable_key]
+
             # Create appropriate pgai store (traditional or event-driven)
             pgai_store = PgaiStoreFactory.create_store(
                 table_name=kwargs.get('table_name', 'm0_raw')

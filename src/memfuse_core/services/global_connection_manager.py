@@ -111,13 +111,13 @@ class _WriteLockContext:
 @dataclass
 class ConnectionPoolConfig:
     """Configuration for PostgreSQL connection pools."""
-    min_size: int = 5   # Conservative minimum for testing compatibility
-    max_size: int = 20  # Conservative maximum for testing compatibility
-    timeout: float = 60.0  # Longer timeout for complex operations
-    recycle: int = 7200  # 2 hours recycle time (match config)
-    connection_timeout: float = 30.0  # Reasonable connection timeout
-    keepalives_idle: int = 600  # Longer idle time for stability
-    keepalives_interval: int = 30  # Standard interval
+    min_size: int = 2    # Reduced minimum pool size to prevent connection hoarding
+    max_size: int = 8    # Reduced maximum pool size for better connection management
+    timeout: float = 15.0  # Reduced timeout for faster failure detection
+    recycle: int = 1800  # 30 minutes recycle time for more aggressive connection recycling
+    connection_timeout: float = 10.0  # Faster connection timeout
+    keepalives_idle: int = 300  # Shorter idle time for faster dead connection detection
+    keepalives_interval: int = 15  # More frequent keepalive checks
     keepalives_count: int = 3
 
     @classmethod
@@ -125,11 +125,14 @@ class ConnectionPoolConfig:
         """Create configuration from MemFuse config hierarchy.
 
         Configuration priority (highest to lowest):
-        1. store.database.postgres.*
-        2. database.postgres.*
-        3. postgres.*
-        4. Default values
+        1. Environment variables (for test configuration)
+        2. store.database.postgres.*
+        3. database.postgres.*
+        4. postgres.*
+        5. Default values
         """
+        import os
+        
         logger.debug(f"ConnectionPoolConfig.from_memfuse_config: config type={type(config)}")
         postgres_config = {}
 
@@ -153,21 +156,38 @@ class ConnectionPoolConfig:
             logger.debug(f"ConnectionPoolConfig: Found store.database.postgres config")
             postgres_config.update(config["store"]["database"]["postgres"])
         
-        # Extract values with conservative defaults to avoid connection exhaustion
-        pool_size = postgres_config.get("pool_size", 5)   # Conservative default
-        max_overflow = postgres_config.get("max_overflow", 10)  # Conservative default
+        # Highest priority: Environment variables (for test configuration)
+        # These override all config file settings
+        env_pool_size = os.environ.get("POSTGRES_POOL_SIZE")
+        env_max_overflow = os.environ.get("POSTGRES_MAX_OVERFLOW")
+        env_pool_timeout = os.environ.get("POSTGRES_POOL_TIMEOUT")
+        env_connection_timeout = os.environ.get("POSTGRES_CONNECTION_TIMEOUT")
+        
+        # Extract values with environment variable support
+        pool_size = int(env_pool_size) if env_pool_size else postgres_config.get("pool_size", 5)
+        max_overflow = int(env_max_overflow) if env_max_overflow else postgres_config.get("max_overflow", 15)
         max_size = pool_size + max_overflow
         
+        # Use environment timeout if available, otherwise use config
+        pool_timeout = float(env_pool_timeout) if env_pool_timeout else postgres_config.get("pool_timeout", 300.0)
+        connection_timeout = float(env_connection_timeout) if env_connection_timeout else postgres_config.get("connection_timeout", 60.0)
+        
+        # Debug logging
+        logger.debug(f"ConnectionPoolConfig: pool_size={pool_size}, max_overflow={max_overflow}, max_size={max_size}")
+        logger.debug(f"ConnectionPoolConfig: pool_timeout={pool_timeout}, connection_timeout={connection_timeout}")
+        logger.debug(f"ConnectionPoolConfig: env_pool_timeout={env_pool_timeout}, env_connection_timeout={env_connection_timeout}")
+        logger.debug(f"ConnectionPoolConfig: postgres_config pool_timeout={postgres_config.get('pool_timeout')}, connection_timeout={postgres_config.get('connection_timeout')}")
+        
         logger.debug(f"ConnectionPoolConfig: min_size={pool_size}, max_size={max_size}, "
-                    f"timeout={postgres_config.get('pool_timeout', 30.0)}, "
+                    f"timeout={pool_timeout}, "
                     f"recycle={postgres_config.get('pool_recycle', 3600)}")
         
         return cls(
             min_size=pool_size,
             max_size=max_size,
-            timeout=postgres_config.get("pool_timeout", 60.0),
+            timeout=pool_timeout,
             recycle=postgres_config.get("pool_recycle", 7200),
-            connection_timeout=postgres_config.get("connection_timeout", 30.0),
+            connection_timeout=connection_timeout,
             keepalives_idle=postgres_config.get("keepalives_idle", 600),
             keepalives_interval=postgres_config.get("keepalives_interval", 30),
             keepalives_count=postgres_config.get("keepalives_count", 3)
@@ -211,6 +231,8 @@ class GlobalConnectionManager:
         self._health_check_cache: Dict[str, float] = {}  # db_url -> last_check_time
         self._health_check_interval = 300.0  # 5 minutes between health checks
         self._performance_monitor = get_performance_monitor()
+        
+        # Monitoring disabled for simplicity
 
         logger.info("GlobalConnectionManager: Optimized singleton instance created")
     
@@ -259,14 +281,22 @@ class GlobalConnectionManager:
                     pool = self._pools[db_url]
                     try:
                         if not pool.closed:
-                            # Add store reference for tracking (this is safe under read lock)
-                            if store_ref is not None:
-                                self._add_store_reference_safe(db_url, store_ref)
+                            # Perform sophisticated health check
+                            if await self.is_pool_healthy(pool, db_url):
+                                # Add store reference for tracking (this is safe under read lock)
+                                if store_ref is not None:
+                                    self._add_store_reference_safe(db_url, store_ref)
 
-                            logger.debug(f"GlobalConnectionManager: Fast path - reusing pool for {self._mask_url(db_url)}")
-                            return pool
+                                logger.debug(f"GlobalConnectionManager: Fast path - reusing healthy pool for {self._mask_url(db_url)}")
+                                return pool
+                            else:
+                                # Pool is unhealthy, fall through to slow path for recreation
+                                logger.debug(f"GlobalConnectionManager: Pool unhealthy, will recreate for {self._mask_url(db_url)}")
+                        else:
+                            # Pool is closed, fall through to slow path
+                            logger.debug(f"GlobalConnectionManager: Pool closed, will recreate for {self._mask_url(db_url)}")
                     except Exception as e:
-                        logger.debug(f"GlobalConnectionManager: Pool check failed, will recreate: {e}")
+                        logger.debug(f"GlobalConnectionManager: Pool health check failed, will recreate: {e}")
                         # Fall through to slow path
 
             # Slow path: Create or recreate pool with write lock
@@ -276,12 +306,20 @@ class GlobalConnectionManager:
                     pool = self._pools[db_url]
                     try:
                         if not pool.closed:
-                            # Add store reference for tracking
-                            if store_ref is not None:
-                                self._add_store_reference(db_url, store_ref)
+                            # Perform sophisticated health check
+                            if await self.is_pool_healthy(pool, db_url):
+                                # Add store reference for tracking
+                                if store_ref is not None:
+                                    self._add_store_reference(db_url, store_ref)
 
-                            logger.debug(f"GlobalConnectionManager: Double-check - reusing pool for {self._mask_url(db_url)}")
-                            return pool
+                                logger.debug(f"GlobalConnectionManager: Double-check - reusing healthy pool for {self._mask_url(db_url)}")
+                                return pool
+                            else:
+                                # Pool is unhealthy, remove it
+                                logger.warning(f"GlobalConnectionManager: Removing unhealthy pool for {self._mask_url(db_url)}")
+                                del self._pools[db_url]
+                                if db_url in self._store_references:
+                                    del self._store_references[db_url]
                         else:
                             # Pool is closed, remove it
                             logger.warning(f"GlobalConnectionManager: Removing closed pool for {self._mask_url(db_url)}")
@@ -289,57 +327,105 @@ class GlobalConnectionManager:
                             if db_url in self._store_references:
                                 del self._store_references[db_url]
                     except Exception as e:
-                        logger.warning(f"GlobalConnectionManager: Error checking pool, removing: {e}")
-                        try:
-                            await pool.close()
-                        except Exception:
-                            pass
-                        if db_url in self._pools:
-                            del self._pools[db_url]
-                        if db_url in self._store_references:
-                            del self._store_references[db_url]
+                        logger.warning(f"GlobalConnectionManager: Error checking pool health: {e}")
+                        # Don't immediately remove pool on health check errors
+                        # Only remove if pool is structurally broken (closed)
+                        if pool.closed:
+                            logger.warning(f"GlobalConnectionManager: Pool is closed, removing for {self._mask_url(db_url)}")
+                            try:
+                                await pool.close()
+                            except Exception:
+                                pass
+                            if db_url in self._pools:
+                                del self._pools[db_url]
+                            if db_url in self._store_references:
+                                del self._store_references[db_url]
+                        else:
+                            logger.info(f"GlobalConnectionManager: Pool structure OK, keeping pool despite health check error for {self._mask_url(db_url)}")
+                            # Add store reference even if health check failed - pool structure is OK
+                            if store_ref is not None:
+                                self._add_store_reference(db_url, store_ref)
+                            return pool
 
                 # Create new pool
                 logger.info(f"GlobalConnectionManager: Creating new pool for {self._mask_url(db_url)}")
 
                 # Get pool configuration from MemFuse config
-                if config is None:
+                if config is None or config == {}:
                     # Try to get config from global config manager
                     try:
                         from ..utils.config import config_manager
-                        config = config_manager.get_config() or {}
+                        global_config = config_manager.get_config()
+                        if global_config and global_config != {}:
+                            config = global_config
+                        else:
+                            # Try to load config directly with Hydra
+                            try:
+                                import hydra
+                                from hydra import compose, initialize
+                                import os
+                                # Use absolute path to config directory
+                                config_path = os.path.join(os.getcwd(), 'config')
+                                if os.path.exists(config_path):
+                                    initialize(version_base=None, config_path='config')
+                                    cfg = compose(config_name='config')
+                                    config = cfg
+                                    logger.info("Loaded config directly with Hydra")
+                                else:
+                                    logger.warning(f"Config directory not found: {config_path}")
+                                    config = {}
+                            except Exception as e2:
+                                logger.warning(f"Could not load config with Hydra: {e2}")
+                                config = {}
                     except Exception as e:
                         logger.warning(f"Could not get global config: {e}")
                         config = {}
 
                 logger.info(f"GlobalConnectionManager: Creating pool config from config type={type(config)}")
+                logger.info(f"GlobalConnectionManager: Raw config keys: {list(config.keys()) if isinstance(config, dict) else 'Not a dict'}")
                 pool_config = ConnectionPoolConfig.from_memfuse_config(config)
-                logger.info(f"GlobalConnectionManager: Pool config created: min_size={pool_config.min_size}, max_size={pool_config.max_size}")
+                logger.info(f"GlobalConnectionManager: Pool config created: min_size={pool_config.min_size}, max_size={pool_config.max_size}, timeout={pool_config.timeout}, connection_timeout={pool_config.connection_timeout}")
                 self._pool_configs[db_url] = pool_config
 
                 # Create the pool with enhanced connection parameters
                 # Add keepalive parameters to the connection URL
                 enhanced_db_url = self._enhance_db_url_with_keepalives(db_url, pool_config)
+                
+                # For debugging, use the raw URL to check if URL enhancement is causing issues
+                logger.info(f"GlobalConnectionManager: Creating pool with URL: {self._mask_url(db_url)}")
+                logger.info(f"GlobalConnectionManager: Enhanced URL: {self._mask_url(enhanced_db_url)}")
 
                 pool = AsyncConnectionPool(
-                    enhanced_db_url,
+                    db_url,  # Use raw URL for debugging
                     min_size=pool_config.min_size,
                     max_size=pool_config.max_size,
                     open=False,
                     configure=self._configure_connection,
-                    timeout=pool_config.connection_timeout
+                    timeout=min(pool_config.timeout, 30.0)  # Cap timeout to 30 seconds for faster failure
                 )
 
-                # Open the pool
+                # Open the pool with reduced timeout for faster failure
                 try:
-                    await asyncio.wait_for(pool.open(), timeout=pool_config.timeout)
+                    open_timeout = min(pool_config.timeout, 30.0)  # Cap to 30 seconds
+                    logger.info(f"GlobalConnectionManager: Opening pool with timeout={open_timeout} seconds")
+                    await asyncio.wait_for(pool.open(), timeout=open_timeout)
                     logger.info(f"GlobalConnectionManager: Pool opened successfully "
                                f"(min={pool_config.min_size}, max={pool_config.max_size})")
                 except asyncio.TimeoutError:
-                    logger.error(f"GlobalConnectionManager: Pool opening timed out for {self._mask_url(db_url)}")
+                    logger.error(f"GlobalConnectionManager: Pool opening timed out for {self._mask_url(db_url)} after {open_timeout} seconds")
+                    # Try to close the pool to clean up resources
+                    try:
+                        await pool.close()
+                    except Exception:
+                        pass
                     raise
                 except Exception as e:
                     logger.error(f"GlobalConnectionManager: Failed to open pool: {e}")
+                    # Try to close the pool to clean up resources
+                    try:
+                        await pool.close()
+                    except Exception:
+                        pass
                     raise
 
                 # Store the pool
@@ -349,6 +435,8 @@ class GlobalConnectionManager:
                 # Add store reference for tracking
                 if store_ref is not None:
                     self._add_store_reference(db_url, store_ref)
+
+                # Smart monitoring disabled
 
                 return pool
 
@@ -440,11 +528,13 @@ class GlobalConnectionManager:
             parsed = urlparse(db_url)
             query_params = parse_qs(parsed.query or "")
 
-            # Add keepalive parameters
+            # Add keepalive parameters (only valid ones)
             query_params['keepalives_idle'] = [str(config.keepalives_idle)]
             query_params['keepalives_interval'] = [str(config.keepalives_interval)]
             query_params['keepalives_count'] = [str(config.keepalives_count)]
-            query_params['connect_timeout'] = [str(int(config.connection_timeout))]
+            
+            # Note: connect_timeout is not a valid URL parameter for psycopg
+            # It should be set in the connection pool configuration instead
 
             # Rebuild URL
             new_query = urlencode(query_params, doseq=True)
@@ -576,6 +666,28 @@ class GlobalConnectionManager:
 
         logger.info("GlobalConnectionManager: All connection pools closed")
     
+    async def reset_all_pools(self):
+        """Force reset all connection pools and clear caches.
+        
+        This method is useful for forcing recreation of connection pools
+        when configuration changes have been made.
+        """
+        logger.info("GlobalConnectionManager: Resetting all connection pools...")
+        
+        # Close all pools first
+        await self.close_all_pools(force=True)
+        
+        # Clear all caches
+        self._health_check_cache.clear()
+        self._pool_configs.clear()
+        self._store_references.clear()
+        self._warm_pools.clear()
+        
+        # Reset initialization flags
+        self._warmup_completed = False
+        
+        logger.info("GlobalConnectionManager: All connection pools reset successfully")
+    
     def _get_active_references(self, db_url: str) -> int:
         """Get count of active store references for a pool."""
         if db_url not in self._store_references:
@@ -590,6 +702,57 @@ class GlobalConnectionManager:
         # Update the set with only active references
         self._store_references[db_url] = active_refs
         return len(active_refs)
+    
+    async def is_pool_healthy(self, pool: AsyncConnectionPool, db_url: str) -> bool:
+        """Perform a sophisticated health check on a connection pool.
+        
+        This method implements a more sophisticated health check that:
+        1. Uses cached results to avoid excessive checking
+        2. Tests actual connectivity with a simple query
+        3. Handles temporary failures gracefully
+        4. Provides detailed logging for diagnostics
+        
+        Args:
+            pool: The connection pool to check
+            db_url: The database URL for logging and caching
+            
+        Returns:
+            True if the pool is healthy, False otherwise
+        """
+        current_time = time.time()
+        
+        # Check if we have a recent cached health check result
+        if db_url in self._health_check_cache:
+            last_check = self._health_check_cache[db_url]
+            if current_time - last_check < self._health_check_interval:
+                # Use cached result - pool was recently healthy
+                logger.debug(f"GlobalConnectionManager: Using cached health check for {self._mask_url(db_url)}")
+                return True
+        
+        try:
+            # Perform actual connectivity test
+            async with pool.connection() as conn:
+                await conn.execute("SELECT 1")
+                
+            # Update health check cache
+            self._health_check_cache[db_url] = current_time
+            logger.debug(f"GlobalConnectionManager: Health check passed for {self._mask_url(db_url)}")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"GlobalConnectionManager: Health check failed for {self._mask_url(db_url)}: {e}")
+            
+            # Don't immediately fail - check if this is a temporary issue
+            if "connection" in str(e).lower() or "timeout" in str(e).lower():
+                # For connection issues, give it a chance to recover
+                logger.info(f"GlobalConnectionManager: Connection issue detected, will retry on next access for {self._mask_url(db_url)}")
+                # Don't update cache - will retry on next access
+                return False
+            else:
+                # For other errors, clear cache and mark as unhealthy
+                if db_url in self._health_check_cache:
+                    del self._health_check_cache[db_url]
+                return False
     
     def get_pool_statistics(self) -> Dict[str, Dict[str, Any]]:
         """Get comprehensive statistics for all connection pools."""
@@ -627,6 +790,8 @@ class GlobalConnectionManager:
             return db_url
         except Exception:
             return "***masked***"
+    
+    
 
 
 # Global singleton instance
@@ -654,3 +819,15 @@ async def warmup_global_connection_pools(common_db_urls: Optional[List[str]] = N
     """
     manager = get_global_connection_manager()
     await manager.warmup_common_pools(common_db_urls)
+
+
+async def reset_global_connection_pools():
+    """Reset all global connection pools and clear caches.
+    
+    This function is useful for forcing recreation of connection pools
+    when configuration changes have been made. It will close all existing
+    pools and clear all caches, ensuring that new pools will be created
+    with the latest configuration.
+    """
+    manager = get_global_connection_manager()
+    await manager.reset_all_pools()

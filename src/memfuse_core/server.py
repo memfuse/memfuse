@@ -121,6 +121,18 @@ async def initialize_global_singletons(cfg: DictConfig) -> None:
     
     # Initialize global model manager
     global_model_manager = get_global_model_manager()
+    
+    # Register embedding model factory
+    from memfuse_core.rag.encode.MiniLM import MiniLMEncoder
+    from memfuse_core.services.global_model_manager import ModelType
+    
+    async def create_embedding_model(config):
+        """Factory function to create embedding model."""
+        model_name = config.get("model", "all-MiniLM-L6-v2")
+        return MiniLMEncoder(model_name=model_name, existing_model=None)
+    
+    global_model_manager.register_model_factory(ModelType.EMBEDDING, create_embedding_model)
+    
     config_dict = global_config.get_raw_config()
     await global_model_manager.initialize_models(config_dict)
     

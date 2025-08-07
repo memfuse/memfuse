@@ -36,6 +36,7 @@ from ...interfaces.chunk_store import ChunkStoreInterface
 from ...rag.chunk.base import ChunkData
 from ...models.core import Query
 from ...utils.config import config_manager
+from .embedding_listener import EmbeddingListener, EmbeddingProcessor
 
 
 class GlobalEmbeddingModelWrapper:
@@ -109,6 +110,8 @@ class PgaiStore(ChunkStoreInterface):
         self.pool: Optional[AsyncConnectionPool] = None
         self.vectorizer_worker: Optional[Worker] = None
         self.initialized = False
+        self.embedding_listener = None
+        self.embedding_processor = None
 
         # Get configuration
         if config:
@@ -186,66 +189,116 @@ class PgaiStore(ChunkStoreInterface):
             return False
 
     async def initialize(self) -> bool:
-        """Initialize pgai store and vectorizer."""
+        """Initialize pgai store and vectorizer with concurrent safety."""
         if self.initialized:
             return True
 
-        try:
-            logger.info(f"Initializing PgaiStore with table: {self.table_name}")
+        # Use a lock to prevent concurrent initialization of the same table
+        import asyncio
+        lock_key = f"pgai_init_{self.table_name}"
+        if not hasattr(self.__class__, '_init_locks'):
+            self.__class__._init_locks = {}
 
-            # Check required extensions first
-            if not await self._check_required_extensions():
-                logger.error("Required extensions are not available")
-                return False
+        if lock_key not in self.__class__._init_locks:
+            self.__class__._init_locks[lock_key] = asyncio.Lock()
 
-            # Use global connection manager (Tier 1 Singleton)
-            logger.debug("Getting global connection pool...")
-            connection_manager = get_global_connection_manager()
+        async with self.__class__._init_locks[lock_key]:
+            # Double-check after acquiring lock
+            if self.initialized:
+                return True
 
-            # Get shared connection pool with store reference for tracking
-            self.pool = await connection_manager.get_connection_pool(
-                db_url=self.db_url,
-                config=self.db_config,
-                store_ref=self  # Pass self for reference tracking
-            )
-            logger.info(f"Using global connection pool for {self.table_name}")
-            
-            # Create tables and setup vectorizer
-            logger.debug("Setting up database schema...")
-            await self._setup_schema()
-            logger.debug("Database schema setup completed")
+            try:
+                logger.info(f"Initializing PgaiStore with table: {self.table_name}")
 
-            # Create vectorizer if enabled and not exists
-            auto_embedding = self.pgai_config.get("auto_embedding", False)
-            logger.debug(f"Auto embedding enabled: {auto_embedding}")
+                # Check required extensions first
+                if not await self._check_required_extensions():
+                    logger.error("Required extensions are not available")
+                    return False
 
-            if auto_embedding:
-                logger.debug("Creating vectorizer...")
-                await self._create_vectorizer()
-                logger.debug("Vectorizer creation completed")
+                # Use global connection manager (Tier 1 Singleton)
+                logger.debug("Getting global connection pool...")
+                connection_manager = get_global_connection_manager()
 
-                # Choose processing mode based on configuration
-                immediate_trigger = self.pgai_config.get("immediate_trigger", False)
-                logger.debug(f"Immediate trigger enabled: {immediate_trigger}")
+                # Get shared connection pool with store reference for tracking
+                self.pool = await connection_manager.get_connection_pool(
+                    db_url=self.db_url,
+                    config=self.db_config,
+                    store_ref=self  # Pass self for reference tracking
+                )
+                logger.info(f"Using global connection pool for {self.table_name}")
 
-                if immediate_trigger:
-                    # Event-driven mode will be handled by EventDrivenPgaiStore
-                    logger.info("pgai auto-embedding configured for immediate trigger mode")
+                # Create tables and setup vectorizer with retry logic
+                logger.debug("Setting up database schema...")
+                await self._setup_schema_with_retry()
+                logger.debug("Database schema setup completed")
+
+                # Create vectorizer if enabled and not exists
+                auto_embedding = self.pgai_config.get("auto_embedding", False)
+                logger.debug(f"Auto embedding enabled: {auto_embedding}")
+
+                if auto_embedding:
+                    logger.debug("Creating vectorizer...")
+                    await self._create_vectorizer()
+                    logger.debug("Vectorizer creation completed")
+
+                    # Choose processing mode based on configuration and environment
+                    immediate_trigger = self.pgai_config.get("immediate_trigger", False)
+
+                    # Check environment variables to override immediate trigger setting
+                    import os
+                    test_mode = os.environ.get("MEMFUSE_TEST_MODE", "false").lower() == "true"
+                    disable_notifications = os.environ.get("DISABLE_PGAI_NOTIFICATIONS", "false").lower() == "true"
+                    immediate_trigger_env = os.environ.get("PGAI_IMMEDIATE_TRIGGER", "").lower()
+
+                    # Disable immediate trigger in test mode or when notifications are disabled
+                    if test_mode or disable_notifications or immediate_trigger_env == "false":
+                        immediate_trigger = False
+                        logger.info(f"Immediate trigger disabled for {self.table_name} (test_mode={test_mode}, disable_notifications={disable_notifications})")
+
+                    logger.debug(f"Final immediate trigger setting: {immediate_trigger}")
+
+                    if immediate_trigger:
+                        # Use event-driven mode with NOTIFY/LISTEN
+                        # Use the unified immediate trigger components for better reliability
+                        from .immediate_trigger_components import ImmediateTriggerCoordinator
+
+                        # Initialize encoder before creating trigger coordinator
+                        encoder = self._get_encoder()
+                        logger.debug(f"Encoder initialized for immediate trigger: {type(encoder)}")
+
+                        self.trigger_coordinator = ImmediateTriggerCoordinator(
+                            pool=self.pool,
+                            table_name=self.table_name,
+                            config=self.pgai_config
+                        )
+
+                        # Create embedding processor function that uses our encoder
+                        async def embedding_processor(record_id):
+                            """Process embedding for a specific record."""
+                            try:
+                                return await self._process_single_embedding(record_id, encoder)
+                            except Exception as e:
+                                logger.error(f"Embedding processing failed for record {record_id}: {e}")
+                                return False
+
+                        # Initialize coordinator with embedding processor
+                        await self.trigger_coordinator.initialize(embedding_processor)
+                        logger.info("pgai auto-embedding enabled with immediate trigger coordinator")
+                    else:
+                        # Use polling mode for reliability
+                        logger.debug("Starting background embedding processor...")
+                        asyncio.create_task(self._process_pending_embeddings())
+                        logger.info("pgai auto-embedding enabled with background processor")
                 else:
-                    # Start traditional background embedding processor
-                    logger.debug("Starting background embedding processor...")
-                    asyncio.create_task(self._process_pending_embeddings())
-                    logger.info("pgai auto-embedding enabled with background processor")
-            else:
-                logger.debug("pgai auto_embedding disabled, using manual embedding approach")
-            
-            self.initialized = True
-            logger.info("PgaiStore initialized successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize PgaiStore: {e}")
-            return False
+                    logger.debug("pgai auto_embedding disabled, using manual embedding approach")
+
+                self.initialized = True
+                logger.info("PgaiStore initialized successfully")
+                return True
+
+            except Exception as e:
+                logger.error(f"Failed to initialize PgaiStore: {e}")
+                return False
     
     async def _configure_pgvector_on_pool(self):
         """Configure pgvector on existing pool connections."""
@@ -307,6 +360,30 @@ class PgaiStore(ChunkStoreInterface):
             await asyncio.sleep(10)
             asyncio.create_task(self._run_vectorizer_worker())
 
+    async def _setup_schema_with_retry(self):
+        """Setup database schema with retry logic for concurrent safety."""
+        max_retries = 3
+        retry_delay = 0.5
+
+        for attempt in range(max_retries):
+            try:
+                await self._setup_schema()
+                return
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "tuple concurrently updated" in error_msg or "already exists" in error_msg:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Concurrent schema operation detected (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        logger.warning(f"Schema setup completed with concurrent operations after {max_retries} attempts")
+                        return
+                else:
+                    # Re-raise non-concurrent errors immediately
+                    raise
+
     async def _setup_schema(self):
         """Create the messages table schema compatible with existing MemFuse schema."""
         logger.debug(f"Setting up schema for table: {self.table_name}")
@@ -326,6 +403,10 @@ class PgaiStore(ChunkStoreInterface):
                         id TEXT PRIMARY KEY,
                         content TEXT NOT NULL,
                         metadata JSONB DEFAULT '{{}}',
+                        session_id TEXT,
+                        user_id TEXT,
+                        message_role TEXT,
+                        round_id TEXT,
                         embedding VECTOR(384),
                         needs_embedding BOOLEAN DEFAULT TRUE,
                         retry_count INTEGER DEFAULT 0,
@@ -342,6 +423,34 @@ class PgaiStore(ChunkStoreInterface):
                 await conn.execute(f"""
                     DO $$
                     BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = '{self.table_name}' AND column_name = 'session_id'
+                        ) THEN
+                            ALTER TABLE {self.table_name} ADD COLUMN session_id TEXT;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = '{self.table_name}' AND column_name = 'user_id'
+                        ) THEN
+                            ALTER TABLE {self.table_name} ADD COLUMN user_id TEXT;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = '{self.table_name}' AND column_name = 'message_role'
+                        ) THEN
+                            ALTER TABLE {self.table_name} ADD COLUMN message_role TEXT;
+                        END IF;
+
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = '{self.table_name}' AND column_name = 'round_id'
+                        ) THEN
+                            ALTER TABLE {self.table_name} ADD COLUMN round_id TEXT;
+                        END IF;
+
                         IF NOT EXISTS (
                             SELECT 1 FROM information_schema.columns
                             WHERE table_name = '{self.table_name}' AND column_name = 'embedding'
@@ -386,6 +495,22 @@ class PgaiStore(ChunkStoreInterface):
                     ON {self.table_name}(created_at)
                 """)
 
+                # Create indexes for session-related columns
+                await conn.execute(f"""
+                    CREATE INDEX IF NOT EXISTS idx_{self.table_name}_session_id
+                    ON {self.table_name}(session_id)
+                """)
+
+                await conn.execute(f"""
+                    CREATE INDEX IF NOT EXISTS idx_{self.table_name}_user_id
+                    ON {self.table_name}(user_id)
+                """)
+
+                await conn.execute(f"""
+                    CREATE INDEX IF NOT EXISTS idx_{self.table_name}_round_id
+                    ON {self.table_name}(round_id)
+                """)
+
                 # Create index for retry mechanism
                 await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_{self.table_name}_needs_embedding
@@ -416,8 +541,14 @@ class PgaiStore(ChunkStoreInterface):
                         EXECUTE FUNCTION update_{self.table_name}_updated_at();
                 """)
 
-                # Setup immediate trigger mechanism if enabled
-                if self.pgai_config.get("immediate_trigger", False):
+                # Setup immediate trigger mechanism if enabled and not disabled by environment
+                immediate_trigger_enabled = self.pgai_config.get("immediate_trigger", False)
+                import os
+                test_mode = os.environ.get("MEMFUSE_TEST_MODE", "false").lower() == "true"
+                disable_notifications = os.environ.get("DISABLE_PGAI_NOTIFICATIONS", "false").lower() == "true"
+                immediate_trigger_env = os.environ.get("PGAI_IMMEDIATE_TRIGGER", "").lower()
+                
+                if immediate_trigger_enabled and not (test_mode or disable_notifications or immediate_trigger_env == "false"):
                     await self._setup_immediate_trigger_in_transaction(conn)
 
                 # Commit all schema changes
@@ -451,8 +582,9 @@ class PgaiStore(ChunkStoreInterface):
                     # Check for required columns
                     column_names = {col[0] for col in columns}
                     required_columns = {
-                        'id', 'content', 'metadata', 'embedding', 'needs_embedding',
-                        'retry_count', 'last_retry_at', 'retry_status', 'created_at', 'updated_at'
+                        'id', 'content', 'metadata', 'session_id', 'user_id', 'message_role', 'round_id',
+                        'embedding', 'needs_embedding', 'retry_count', 'last_retry_at', 'retry_status',
+                        'created_at', 'updated_at'
                     }
 
                     missing_columns = required_columns - column_names
@@ -472,7 +604,10 @@ class PgaiStore(ChunkStoreInterface):
 
                     required_indexes = {
                         f'idx_{self.table_name}_created',
-                        f'idx_{self.table_name}_needs_embedding'
+                        f'idx_{self.table_name}_needs_embedding',
+                        f'idx_{self.table_name}_session_id',
+                        f'idx_{self.table_name}_user_id',
+                        f'idx_{self.table_name}_round_id'
                     }
 
                     missing_indexes = required_indexes - index_names
@@ -517,6 +652,79 @@ class PgaiStore(ChunkStoreInterface):
         except Exception as e:
             logger.error(f"Failed to setup embedding automation: {e}")
             logger.info("Falling back to manual embedding generation")
+
+    async def _setup_embedding_automation(self):
+        """Setup embedding automation using immediate trigger system."""
+        try:
+            # Check if immediate trigger is enabled
+            immediate_trigger = self.pgai_config.get("immediate_trigger", False)
+            
+            if immediate_trigger:
+                # Create and start the embedding listener
+                self.embedding_listener = EmbeddingListener(
+                    self.pool, 
+                    self.table_name,
+                    self._process_embedding_notification
+                )
+                await self.embedding_listener.start()
+                logger.info(f"Immediate trigger embedding automation started for {self.table_name}")
+            else:
+                # Fallback to polling mode
+                self.embedding_processor = EmbeddingProcessor(
+                    self.pool,
+                    self.table_name,
+                    self._generate_embedding
+                )
+                await self.embedding_processor.start()
+                logger.info(f"Polling embedding automation started for {self.table_name}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to setup embedding automation: {e}")
+            return False
+
+    async def _process_embedding_notification(self, record_id: str) -> bool:
+        """Process embedding notification for a specific record."""
+        try:
+            # Get record content
+            async with self.pool.connection() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(f"""
+                        SELECT content FROM {self.table_name} 
+                        WHERE id = %s AND needs_embedding = TRUE
+                    """, (record_id,))
+                    result = await cur.fetchone()
+                    
+                    if not result:
+                        logger.warning(f"Record {record_id} not found or doesn't need embedding")
+                        return False
+                    
+                    content = result[0]
+                    
+                    # Generate embedding
+                    embedding = await self._generate_embedding(content)
+                    if not embedding:
+                        logger.error(f"Failed to generate embedding for record {record_id}")
+                        return False
+                    
+                    # Update record with embedding
+                    await cur.execute(f"""
+                        UPDATE {self.table_name}
+                        SET embedding = %s, needs_embedding = FALSE, retry_status = 'completed'
+                        WHERE id = %s
+                    """, (embedding, record_id))
+                    await conn.commit()
+                    
+                    logger.debug(f"Successfully generated embedding for record {record_id}")
+                    return True
+                    
+        except Exception as e:
+            logger.error(f"Error processing embedding for record {record_id}: {e}")
+            return False
+
+    async def _process_embedding_callback(self, record_id: str) -> bool:
+        """Callback method for embedding listener to process individual records."""
+        return await self._process_embedding_notification(record_id)
 
     async def _setup_immediate_trigger_in_transaction(self, conn):
         """Setup immediate trigger mechanism within existing transaction."""
@@ -598,7 +806,7 @@ class PgaiStore(ChunkStoreInterface):
     async def _process_pending_embeddings(self):
         """Background task to process records that need embeddings with retry support."""
         max_retries = self.pgai_config.get("max_retries", 3)
-        retry_interval = self.pgai_config.get("retry_interval", 5.0)
+        retry_interval = self.pgai_config.get("retry_interval", 2.0)  # Faster polling for better responsiveness
 
         while True:
             try:
@@ -717,20 +925,33 @@ class PgaiStore(ChunkStoreInterface):
                     # Auto-embedding mode: insert without embeddings, let background task handle it
                     for chunk in chunks:
                         metadata_json = self._prepare_metadata(chunk.metadata)
+                        # Extract session_id, user_id, message_role, round_id from metadata
+                        session_id = chunk.metadata.get('session_id') if chunk.metadata else None
+                        user_id = chunk.metadata.get('user_id') if chunk.metadata else None
+                        message_role = chunk.metadata.get('message_role') if chunk.metadata else None
+                        round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
                         await cur.execute(f"""
                             INSERT INTO {self.table_name}
-                            (id, content, metadata, needs_embedding)
-                            VALUES (%s, %s, %s, TRUE)
+                            (id, content, metadata, session_id, user_id, message_role, round_id, needs_embedding)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
                             ON CONFLICT (id) DO UPDATE SET
                                 content = EXCLUDED.content,
                                 metadata = EXCLUDED.metadata,
+                                session_id = EXCLUDED.session_id,
+                                user_id = EXCLUDED.user_id,
+                                message_role = EXCLUDED.message_role,
+                                round_id = EXCLUDED.round_id,
                                 needs_embedding = TRUE,
                                 updated_at = CURRENT_TIMESTAMP
                         """, (
                             chunk.chunk_id,
                             chunk.content,
-                            metadata_json
+                            metadata_json,
+                            session_id,
+                            user_id,
+                            message_role,
+                            round_id
                         ))
                         chunk_ids.append(chunk.chunk_id)
 
@@ -742,14 +963,23 @@ class PgaiStore(ChunkStoreInterface):
 
                     for chunk, embedding in zip(chunks, embeddings):
                         metadata_json = self._prepare_metadata(chunk.metadata)
+                        # Extract session_id, user_id, message_role, round_id from metadata
+                        session_id = chunk.metadata.get('session_id') if chunk.metadata else None
+                        user_id = chunk.metadata.get('user_id') if chunk.metadata else None
+                        message_role = chunk.metadata.get('message_role') if chunk.metadata else None
+                        round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
                         await cur.execute(f"""
                             INSERT INTO {self.table_name}
-                            (id, content, metadata, embedding, needs_embedding)
-                            VALUES (%s, %s, %s, %s, FALSE)
+                            (id, content, metadata, session_id, user_id, message_role, round_id, embedding, needs_embedding)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE)
                             ON CONFLICT (id) DO UPDATE SET
                                 content = EXCLUDED.content,
                                 metadata = EXCLUDED.metadata,
+                                session_id = EXCLUDED.session_id,
+                                user_id = EXCLUDED.user_id,
+                                message_role = EXCLUDED.message_role,
+                                round_id = EXCLUDED.round_id,
                                 embedding = EXCLUDED.embedding,
                                 needs_embedding = FALSE,
                                 updated_at = CURRENT_TIMESTAMP
@@ -757,6 +987,10 @@ class PgaiStore(ChunkStoreInterface):
                             chunk.chunk_id,
                             chunk.content,
                             metadata_json,
+                            session_id,
+                            user_id,
+                            message_role,
+                            round_id,
                             embedding
                         ))
                         chunk_ids.append(chunk.chunk_id)
@@ -822,6 +1056,66 @@ class PgaiStore(ChunkStoreInterface):
         except Exception as e:
             logger.error(f"Failed to create fallback encoder: {e}")
             raise RuntimeError(f"All encoder initialization methods failed. Cannot proceed without embedding capability. Last error: {e}")
+
+    async def _process_single_embedding(self, record_id: str, encoder) -> bool:
+        """Process embedding for a single record using immediate trigger.
+
+        Args:
+            record_id: The ID of the record to process
+            encoder: The encoder to use for embedding generation
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Get record content
+            async with self.pool.connection() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(f"""
+                        SELECT content, metadata
+                        FROM {self.table_name}
+                        WHERE id = %s AND needs_embedding = TRUE
+                    """, (record_id,))
+
+                    row = await cur.fetchone()
+                    if not row:
+                        logger.warning(f"Record {record_id} not found or doesn't need embedding")
+                        return False
+
+                    content, metadata = row
+                    if not content:
+                        logger.warning(f"Record {record_id} has no content to embed")
+                        return False
+
+            # Generate embedding
+            embedding = await encoder.encode_text(content)
+            if not embedding:
+                logger.error(f"Failed to generate embedding for record {record_id}")
+                return False
+
+            # Update record with embedding
+            async with self.pool.connection() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(f"""
+                        UPDATE {self.table_name}
+                        SET embedding = %s,
+                            needs_embedding = FALSE,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                    """, (embedding, record_id))
+
+                    if cur.rowcount == 0:
+                        logger.warning(f"No rows updated for record {record_id}")
+                        return False
+
+                await conn.commit()
+
+            logger.debug(f"Successfully processed embedding for record {record_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error processing embedding for record {record_id}: {e}")
+            return False
 
     def _convert_embedding_to_list(self, embedding) -> List[float]:
         """Convert embedding to list format."""
@@ -942,12 +1236,19 @@ class PgaiStore(ChunkStoreInterface):
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 metadata_json = self._prepare_metadata(chunk.metadata)
+                # Extract session_id, user_id, message_role, round_id from metadata
+                session_id = chunk.metadata.get('session_id') if chunk.metadata else None
+                user_id = chunk.metadata.get('user_id') if chunk.metadata else None
+                message_role = chunk.metadata.get('message_role') if chunk.metadata else None
+                round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
                 await cur.execute(f"""
                     UPDATE {self.table_name}
-                    SET content = %s, metadata = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
+                    SET content = %s, metadata = %s, session_id = %s, user_id = %s, 
+                        message_role = %s, round_id = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
-                """, (chunk.content, metadata_json, embedding, chunk_id))
+                """, (chunk.content, metadata_json, session_id, user_id, 
+                      message_role, round_id, embedding, chunk_id))
 
                 await conn.commit()
                 return cur.rowcount > 0
@@ -977,12 +1278,19 @@ class PgaiStore(ChunkStoreInterface):
             async with conn.cursor() as cur:
                 for chunk_id, chunk, embedding in zip(chunk_ids, chunks, embeddings):
                     metadata_json = self._prepare_metadata(chunk.metadata)
+                    # Extract session_id, user_id, message_role, round_id from metadata
+                    session_id = chunk.metadata.get('session_id') if chunk.metadata else None
+                    user_id = chunk.metadata.get('user_id') if chunk.metadata else None
+                    message_role = chunk.metadata.get('message_role') if chunk.metadata else None
+                    round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
                     await cur.execute(f"""
                         UPDATE {self.table_name}
-                        SET content = %s, metadata = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
+                        SET content = %s, metadata = %s, session_id = %s, user_id = %s, 
+                            message_role = %s, round_id = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
                         WHERE id = %s
-                    """, (chunk.content, metadata_json, embedding, chunk_id))
+                    """, (chunk.content, metadata_json, session_id, user_id, 
+                          message_role, round_id, embedding, chunk_id))
 
                     results.append(cur.rowcount > 0)
 
@@ -1202,32 +1510,30 @@ class PgaiStore(ChunkStoreInterface):
                 row = await cur.fetchone()
                 return row[0] if row else 0
 
-    async def close(self):
-        """Close the store and cleanup resources."""
+    async def cleanup(self):
+        """Cleanup resources."""
         try:
-            if self.pool:
-                logger.debug("Releasing connection pool reference...")
-
-                # For shared pools managed by the global pool manager,
-                # we just clear our reference. The pool manager handles
-                # actual cleanup based on reference counting.
-                # Individual pools (fallback) are also just cleared since
-                # they may be shared with other instances.
-
-                logger.debug("Clearing pool reference (pool managed by global manager)")
+            # Stop embedding automation
+            if self.embedding_listener:
+                await self.embedding_listener.stop()
+                self.embedding_listener = None
+                
+            if self.embedding_processor:
+                await self.embedding_processor.stop()
+                self.embedding_processor = None
+                
+            # Clear pool reference
+            if hasattr(self, 'pool') and self.pool:
                 self.pool = None
-
-            if self.vectorizer_worker:
-                # Stop the worker (implementation depends on pgai version)
-                logger.debug("Stopping vectorizer worker...")
-                pass
-
+                
             self.initialized = False
-            logger.debug("PgaiStore closed successfully")
-
+            logger.info(f"PgaiStore cleanup completed for {self.table_name}")
         except Exception as e:
             logger.error(f"Error during PgaiStore cleanup: {e}")
-            self.initialized = False
+
+    async def close(self):
+        """Close the store and cleanup resources."""
+        await self.cleanup()
 
     async def get_chunks_by_session(self, session_id: str) -> List[ChunkData]:
         """Get all chunks for a specific session."""

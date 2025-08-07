@@ -198,13 +198,72 @@ class MemoryHierarchyManager:
             logger.error(f"MemoryHierarchyManager: Query failed: {e}")
             return {}
     
+    async def write_to_layer(
+        self,
+        layer_name: str,
+        data: Any,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """Write data to a specific layer by name.
+
+        Args:
+            layer_name: Name of the layer (e.g., "M0", "M1", "M2")
+            data: Data to write
+            metadata: Optional metadata
+
+        Returns:
+            Processing result from the layer
+        """
+        try:
+            if not self.initialized:
+                await self.initialize()
+
+            # Convert layer name to LayerType
+            layer_type_map = {
+                "M0": LayerType.M0,
+                "M1": LayerType.M1,
+                "M2": LayerType.M2,
+                "M3": LayerType.M3
+            }
+
+            layer_type = layer_type_map.get(layer_name)
+            if not layer_type:
+                raise ValueError(f"Unknown layer name: {layer_name}")
+
+            layer = self.layers.get(layer_type)
+            if not layer:
+                raise ValueError(f"Layer {layer_name} not available")
+
+            # Process data through the layer
+            result = await layer.process_data(data, metadata)
+
+            # Update statistics
+            self.total_operations += 1
+            if not result.success:
+                self.total_errors += 1
+
+            logger.debug(f"MemoryHierarchyManager: Wrote data to {layer_name}, success={result.success}")
+            return result
+
+        except Exception as e:
+            self.total_errors += 1
+            logger.error(f"MemoryHierarchyManager: Write to {layer_name} failed: {e}")
+
+            # Return a compatible result object
+            from .core import ProcessingResult
+            return ProcessingResult(
+                success=False,
+                layer_type=layer_type if 'layer_type' in locals() else LayerType.M0,
+                errors=[str(e)]
+            )
+
     async def get_layer_stats(self, layer_type: LayerType) -> Optional[Any]:
         """Get statistics for a specific layer."""
         layer = self.layers.get(layer_type)
         if layer:
             return await layer.get_stats()
         return None
-    
+
     def get_available_layers(self) -> List[LayerType]:
         """Get list of available memory layers."""
         return list(self.layers.keys())

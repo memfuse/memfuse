@@ -78,22 +78,53 @@ class M0RawDataLayer(MemoryLayer):
             if not self.initialized:
                 await self.initialize()
             
-            # Convert data to ChunkData objects for storage
-            chunks = self._convert_to_chunks(data, metadata)
+            # Convert data to raw records for storage (no chunking, no embedding)
+            raw_records = self._convert_to_raw_records(data, metadata)
 
-            # Store chunks in configured backends
+            # Store raw records directly to SQL backend only (no vector storage)
             storage_results = {}
-            if self.storage_manager and chunks:
-                storage_results = await self.storage_manager.write_to_all(chunks, metadata)
-            
-            # Collect successful storage IDs
-            processed_items = [
-                item_id for item_id in storage_results.values() 
-                if item_id is not None
-            ]
-            
+            processed_items = []
+
+            if self.storage_manager and raw_records:
+                logger.debug(f"M0RawDataLayer: Writing {len(raw_records)} records to SQL storage")
+                # Only use SQL backend for M0 raw data storage
+                from ..hierarchy.storage import StorageType
+
+                # Write each record individually to SQL backend
+                successful_ids = []
+                for record in raw_records:
+                    try:
+                        sql_result = await self.storage_manager.write_to_backend(
+                            StorageType.SQL, record, metadata
+                        )
+                        if sql_result:
+                            successful_ids.append(record["id"])
+                            logger.debug(f"M0RawDataLayer: Successfully wrote record {record['id']}")
+                        else:
+                            logger.warning(f"M0RawDataLayer: Failed to write record {record['id']}")
+                    except Exception as e:
+                        logger.error(f"M0RawDataLayer: Error writing record {record['id']}: {e}")
+
+                if successful_ids:
+                    storage_results[StorageType.SQL] = successful_ids
+                    processed_items = successful_ids
+
             processing_time = time.time() - start_time
             success = len(processed_items) > 0
+
+            # Add error information if no items were processed
+            errors = []
+            if not success and storage_results:
+                failed_backends = [
+                    backend.value for backend, result in storage_results.items()
+                    if result is None
+                ]
+                if failed_backends:
+                    errors.append(f"Failed to write to backends: {', '.join(failed_backends)}")
+            elif not success and not raw_records:
+                errors.append("No raw records generated from input data")
+            elif not success:
+                errors.append("Failed to write to SQL backend")
             
             # Update statistics
             self._update_stats(processing_time, success)
@@ -103,6 +134,7 @@ class M0RawDataLayer(MemoryLayer):
                 success=success,
                 layer_type=self.layer_type,
                 processed_items=processed_items,
+                errors=errors,
                 metadata=metadata or {},
                 processing_time=processing_time
             )
@@ -126,67 +158,135 @@ class M0RawDataLayer(MemoryLayer):
     
     async def query(self, query: str, **kwargs) -> List[Any]:
         """
-        Query data from M0 layer.
+        Query data from M0 layer - only SQL/keyword search, no vector search.
+
+        M0 layer stores raw data without embeddings, so vector search is not supported.
+        For semantic/vector search, use M1 layer instead.
 
         Args:
             query: Query string
             **kwargs: Additional query parameters
 
         Returns:
-            List of matching results
+            List of matching results from SQL/keyword backends only
         """
         try:
             if not self.initialized:
                 await self.initialize()
-            
+
             self.total_queries += 1
-            
-            # Query from all available backends
+
+            # Query from non-vector backends only (M0 has no embeddings)
             all_results = []
-            
+
             if self.storage_manager:
-                # Query vector store
-                if StorageType.VECTOR in self.storage_manager.get_available_backends():
-                    vector_results = await self.storage_manager.read_from_backend(
-                        StorageType.VECTOR, query, **kwargs
+                # Query SQL store for exact matches
+                if StorageType.SQL in self.storage_manager.get_available_backends():
+                    sql_results = await self.storage_manager.read_from_backend(
+                        StorageType.SQL, query, **kwargs
                     )
-                    all_results.extend(vector_results)
-                
-                # Query keyword store
+                    all_results.extend(sql_results)
+
+                # Query keyword store for text search
                 if StorageType.KEYWORD in self.storage_manager.get_available_backends():
                     keyword_results = await self.storage_manager.read_from_backend(
                         StorageType.KEYWORD, query, **kwargs
                     )
                     all_results.extend(keyword_results)
-            
-            logger.debug(f"M0RawDataLayer: Query returned {len(all_results)} results")
+
+            logger.debug(f"M0RawDataLayer: Query returned {len(all_results)} results (no vector search)")
             return all_results
 
         except Exception as e:
             logger.error(f"M0RawDataLayer: Query failed: {e}")
             return []
 
-    def _convert_to_chunks(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
-        """Convert raw data to ChunkData objects for storage."""
-        chunks = []
+    def _convert_to_raw_records(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Convert input data to raw records for M0 storage (no chunking, no processing)."""
+        records = []
 
         try:
+            logger.info(f"M0RawDataLayer: Converting data to raw records, data type: {type(data)}, data: {data}")
+            logger.info(f"M0RawDataLayer: Metadata: {metadata}")
+
             if isinstance(data, list):
-                # Process list of items
+                logger.info(f"M0RawDataLayer: Processing list with {len(data)} items")
+                # Process list of message items
                 for i, item in enumerate(data):
-                    chunk = self._create_chunk_from_item(item, metadata, f"m0_item_{i}")
-                    if chunk:
-                        chunks.append(chunk)
+                    logger.info(f"M0RawDataLayer: Processing item {i}: {type(item)} - {item}")
+                    record = self._create_raw_record_from_item(item, metadata, f"m0_raw_{i}")
+                    if record:
+                        records.append(record)
+                        logger.info(f"M0RawDataLayer: Successfully created record {i}")
+                    else:
+                        logger.warning(f"M0RawDataLayer: Failed to create record from item {i}")
             else:
+                logger.info(f"M0RawDataLayer: Processing single item: {type(data)} - {data}")
                 # Process single item
-                chunk = self._create_chunk_from_item(data, metadata, "m0_single")
-                if chunk:
-                    chunks.append(chunk)
+                record = self._create_raw_record_from_item(data, metadata, "m0_raw_single")
+                if record:
+                    records.append(record)
+                    logger.info(f"M0RawDataLayer: Successfully created single record")
+                else:
+                    logger.warning(f"M0RawDataLayer: Failed to create record from single item")
 
         except Exception as e:
-            logger.error(f"M0RawDataLayer: Failed to convert data to chunks: {e}")
+            logger.error(f"M0RawDataLayer: Failed to convert data to raw records: {e}")
 
-        return chunks
+        logger.info(f"M0RawDataLayer: Generated {len(records)} raw records total")
+        return records
+
+    def _create_raw_record_from_item(self, item: Any, metadata: Optional[Dict[str, Any]], item_id: str) -> Optional[Dict[str, Any]]:
+        """Create a raw record from a single item for M0 storage."""
+        try:
+            import uuid
+
+            # Extract content and basic fields based on item type
+            if isinstance(item, dict):
+                # Handle message-like objects
+                content = item.get("content", str(item))
+                role = item.get("role", "unknown")
+                item_metadata = {k: v for k, v in item.items() if k not in ["content", "role"]}
+            elif isinstance(item, str):
+                content = item
+                role = "unknown"
+                item_metadata = {}
+            else:
+                content = str(item)
+                role = "unknown"
+                item_metadata = {}
+
+            # Ensure we have valid content
+            if not content or not content.strip():
+                logger.warning(f"M0RawDataLayer: Empty content for item {item_id}, skipping")
+                return None
+
+            # Generate unique ID
+            unique_id = f"{item_id}_{str(uuid.uuid4())[:8]}"
+
+            # Create raw record for M0 table
+            record = {
+                "id": unique_id,
+                "content": content.strip(),
+                "session_id": metadata.get("session_id") if metadata else None,
+                "user_id": metadata.get("user_id") if metadata else None,
+                "message_role": role,
+                "round_id": metadata.get("round_id") if metadata else None,
+                "metadata": {
+                    "layer": "M0",
+                    "source_type": type(item).__name__,
+                    "original_item_id": item_id,
+                    **(metadata or {}),
+                    **item_metadata
+                }
+            }
+
+            logger.debug(f"M0RawDataLayer: Created raw record {unique_id} with content: {content[:50]}...")
+            return record
+
+        except Exception as e:
+            logger.error(f"M0RawDataLayer: Failed to create raw record from item: {e}")
+            return None
 
     def _create_chunk_from_item(self, item: Any, metadata: Optional[Dict[str, Any]], prefix: str) -> Optional[ChunkData]:
         """Create a ChunkData object from a single data item."""
@@ -266,61 +366,62 @@ class M1EpisodicLayer(MemoryLayer):
     
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:
         """
-        Process data through M1 layer (episode formation).
+        Process data through M1 layer - chunking and embedding generation from M0 raw data.
 
         Args:
-            data: Data to form episodes from
-            metadata: Optional metadata
+            data: M0 raw data IDs or raw data to process
+            metadata: Optional metadata including source information
 
         Returns:
-            ProcessingResult with formed episodes
+            ProcessingResult with chunked and embedded data
         """
         start_time = time.time()
-        
+
         try:
             if not self.initialized:
                 await self.initialize()
-            
-            # Form episodes from data (placeholder for LLM integration)
-            episodes = await self._form_episodes(data, metadata)
 
-            # Convert episodes to ChunkData objects and store in parallel
-            # P3 OPTIMIZATION: Parallel episode storage to eliminate sequential bottleneck
+            # Process M0 raw data into chunks with embeddings
+            chunks = await self._process_m0_to_chunks(data, metadata)
+
+            # Store chunks with automatic embedding generation
             processed_items = []
-            if episodes and self.storage_manager:
-                episode_chunks = self._convert_episodes_to_chunks(episodes, metadata)
+            if chunks and self.storage_manager:
+                logger.debug(f"M1EpisodicLayer: Writing {len(chunks)} chunks to storage with embedding")
 
-                if episode_chunks:
-                    # P3 OPTIMIZATION: Create parallel tasks for episode storage
-                    async def store_episode_chunk(chunk: Any) -> Optional[str]:
-                        """Store a single episode chunk with error handling."""
-                        try:
-                            return await self.storage_manager.write_to_backend(
-                                StorageType.VECTOR, chunk, metadata
-                            )
-                        except Exception as e:
-                            logger.error(f"M1EpisodicLayer: Failed to store episode chunk: {e}")
-                            return None
+                # Store each chunk individually to all configured backends
+                for i, chunk in enumerate(chunks):
+                    try:
+                        logger.debug(f"M1EpisodicLayer: Writing chunk {i+1}/{len(chunks)}: {chunk.metadata.get('chunk_id', 'unknown')}")
 
-                    # Execute all episode storage tasks in parallel
-                    storage_tasks = [store_episode_chunk(chunk) for chunk in episode_chunks]
-                    episode_ids = await asyncio.gather(*storage_tasks, return_exceptions=True)
+                        # Store single chunk to all configured backends
+                        storage_results = await self.storage_manager.write_to_all(chunk, metadata)
 
-                    # Process results and collect successful IDs
-                    for episode_id in episode_ids:
-                        if isinstance(episode_id, Exception):
-                            logger.error(f"M1EpisodicLayer: Episode storage task failed: {episode_id}")
-                            continue
-                        if episode_id:
-                            processed_items.append(episode_id)
+                        # Collect successful storage IDs for this chunk
+                        chunk_processed_items = [
+                            item_id for item_id in storage_results.values()
+                            if item_id is not None
+                        ]
 
-                    logger.info(f"M1EpisodicLayer: Parallel episode storage completed, "
-                               f"successful: {len(processed_items)}/{len(episode_chunks)}")
+                        if chunk_processed_items:
+                            processed_items.extend(chunk_processed_items)
+                            logger.debug(f"M1EpisodicLayer: Chunk {i+1} stored successfully to {len(chunk_processed_items)} backends")
+                        else:
+                            logger.warning(f"M1EpisodicLayer: Chunk {i+1} failed to store to any backend")
+
+                    except Exception as e:
+                        logger.error(f"M1EpisodicLayer: Failed to store chunk {i+1}: {e}")
+
+                logger.info(f"M1EpisodicLayer: Chunk storage completed, "
+                           f"successful items: {len(processed_items)}, chunks processed: {len(chunks)}")
             
             processing_time = time.time() - start_time
-            # M1 layer should succeed even if no episodes are formed (e.g., for short content)
-            # The layer processed the data successfully, just didn't produce episodes
-            success = True
+            success = len(processed_items) > 0 or len(chunks) == 0  # Success if stored or no chunks to store
+
+            # Add error information if needed
+            errors = []
+            if not success:
+                errors.append("Failed to store chunks to any backend")
 
             # Update statistics
             self._update_stats(processing_time, success)
@@ -330,14 +431,12 @@ class M1EpisodicLayer(MemoryLayer):
                 success=success,
                 layer_type=self.layer_type,
                 processed_items=processed_items,
-                metadata={"episodes_formed": len(episodes)},
+                errors=errors,
+                metadata={"chunks_processed": len(chunks)},
                 processing_time=processing_time
             )
-            
-            # Note: Event emission for M2 processing would be handled by the parallel manager
-            # No direct event bus access needed in individual layers
 
-            logger.debug(f"M1EpisodicLayer: Formed {len(episodes)} episodes")
+            logger.debug(f"M1EpisodicLayer: Processed {len(chunks)} chunks, stored {len(processed_items)}")
             return result
 
         except Exception as e:
@@ -351,23 +450,147 @@ class M1EpisodicLayer(MemoryLayer):
                 errors=[str(e)],
                 processing_time=processing_time
             )
+
+    async def _process_m0_to_chunks(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> List[ChunkData]:
+        """Process M0 raw data into chunks for M1 storage with embeddings."""
+        chunks = []
+
+        try:
+            logger.info(f"M1EpisodicLayer: Processing M0 data to chunks, data type: {type(data)}, data: {data}")
+
+            if isinstance(data, list):
+                # Process list of M0 raw data items
+                for i, item in enumerate(data):
+                    logger.info(f"M1EpisodicLayer: Processing M0 item {i}: {type(item)} - {item}")
+                    chunk = self._create_chunk_from_m0_item(item, metadata, f"m1_chunk_{i}")
+                    if chunk:
+                        chunks.append(chunk)
+                        logger.info(f"M1EpisodicLayer: Successfully created chunk {i}")
+                    else:
+                        logger.warning(f"M1EpisodicLayer: Failed to create chunk from M0 item {i}")
+            else:
+                # Process single M0 item
+                logger.info(f"M1EpisodicLayer: Processing single M0 item: {type(data)} - {data}")
+                chunk = self._create_chunk_from_m0_item(data, metadata, "m1_chunk_single")
+                if chunk:
+                    chunks.append(chunk)
+                    logger.info(f"M1EpisodicLayer: Successfully created single chunk")
+                else:
+                    logger.warning(f"M1EpisodicLayer: Failed to create chunk from single M0 item")
+
+        except Exception as e:
+            logger.error(f"M1EpisodicLayer: Failed to process M0 data to chunks: {e}")
+
+        logger.info(f"M1EpisodicLayer: Generated {len(chunks)} chunks from M0 data")
+        return chunks
+
+    def _create_chunk_from_m0_item(self, item: Any, metadata: Optional[Dict[str, Any]], chunk_id: str) -> Optional[ChunkData]:
+        """Create a ChunkData object from M0 raw data item."""
+        try:
+            # Handle M0 reference data (need to fetch actual content)
+            if isinstance(item, dict) and item.get("source_layer") == "M0":
+                # This is a reference to M0 data, extract the reference info
+                source_id = item.get("source_id")
+                operation_metadata = item.get("metadata", {})
+
+                # For now, create a placeholder content from the reference
+                # In a full implementation, we would query M0 storage to get actual content
+                content = f"M0 Reference: {source_id}"
+                session_id = operation_metadata.get("session_id")
+                user_id = operation_metadata.get("user_id")
+                message_role = "unknown"
+
+                logger.info(f"M1EpisodicLayer: Processing M0 reference {source_id}")
+
+            elif isinstance(item, dict):
+                # Direct M0 data
+                content = item.get("content", str(item))
+                source_id = item.get("id")
+                session_id = item.get("session_id")
+                user_id = item.get("user_id")
+                message_role = item.get("message_role", "unknown")
+            elif isinstance(item, str):
+                content = item
+                source_id = None
+                session_id = metadata.get("session_id") if metadata else None
+                user_id = metadata.get("user_id") if metadata else None
+                message_role = "unknown"
+            else:
+                content = str(item)
+                source_id = None
+                session_id = metadata.get("session_id") if metadata else None
+                user_id = metadata.get("user_id") if metadata else None
+                message_role = "unknown"
+
+            # Ensure we have valid content
+            if not content or not content.strip():
+                logger.warning(f"M1EpisodicLayer: Empty content for chunk {chunk_id}, skipping")
+                return None
+
+            # Create chunk metadata for M1
+            # Start with passed metadata, then override with M1-specific fields
+            chunk_metadata = {
+                **(metadata or {}),
+                "layer": "M1",  # Always M1 for this layer
+                "source_layer": "M0",
+                "source_id": source_id,
+                "session_id": session_id,
+                "user_id": user_id,
+                "message_role": message_role,
+                "chunk_type": "episodic",
+                "chunk_id": chunk_id,
+                "timestamp": time.time()
+            }
+
+            return ChunkData(
+                content=content.strip(),
+                metadata=chunk_metadata
+            )
+
+        except Exception as e:
+            logger.error(f"M1EpisodicLayer: Failed to create chunk from M0 item: {e}")
+            return None
     
     async def query(self, query: str, **kwargs) -> List[Any]:
-        """Query episodes from M1 layer."""
+        """
+        Query chunks from M1 layer - primary vector search layer.
+
+        M1 layer contains chunked data with embeddings, making it the main layer
+        for semantic/vector similarity search. This is where most query operations
+        should be directed for meaningful semantic retrieval.
+
+        Args:
+            query: Query string for semantic search
+            **kwargs: Additional query parameters (top_k, filters, etc.)
+
+        Returns:
+            List of matching chunks with embeddings and similarity scores
+        """
         try:
             if not self.initialized:
                 await self.initialize()
 
             self.total_queries += 1
 
-            # Query episodes from vector store
+            # Query chunks from vector store (primary search method for M1)
             results = []
             if self.storage_manager:
-                results = await self.storage_manager.read_from_backend(
-                    StorageType.VECTOR, query, **kwargs
-                )
+                # M1 layer primarily uses vector search since it has embeddings
+                if StorageType.VECTOR in self.storage_manager.get_available_backends():
+                    results = await self.storage_manager.read_from_backend(
+                        StorageType.VECTOR, query, **kwargs
+                    )
+                    logger.debug(f"M1EpisodicLayer: Vector search returned {len(results)} chunks")
 
-            logger.debug(f"M1EpisodicLayer: Query returned {len(results)} episodes")
+                # Fallback to other backends if needed
+                if not results and StorageType.SQL in self.storage_manager.get_available_backends():
+                    sql_results = await self.storage_manager.read_from_backend(
+                        StorageType.SQL, query, **kwargs
+                    )
+                    results.extend(sql_results)
+                    logger.debug(f"M1EpisodicLayer: SQL fallback returned {len(sql_results)} additional chunks")
+
+            logger.debug(f"M1EpisodicLayer: Total query returned {len(results)} chunks")
             return results
 
         except Exception as e:

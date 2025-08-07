@@ -1,5 +1,6 @@
 """PostgreSQL backend for MemFuse database."""
 
+import asyncio
 import json
 from typing import Dict, List, Any, Optional
 
@@ -59,7 +60,7 @@ class PostgresDB(DBBase):
             self._initialized = True
 
     async def execute(self, query: str, params: tuple = ()) -> Any:
-        """Execute a SQL query using async connection pool.
+        """Execute a SQL query using simplified connection management.
 
         Args:
             query: SQL query
@@ -72,46 +73,77 @@ class PostgresDB(DBBase):
         # Ensure connection manager is initialized
         await self._ensure_initialized()
 
-        # Get connection pool and use connection from it
-        pool = await self.connection_manager.get_connection_pool(self.db_url)
-        async with pool.connection() as conn:
-            try:
+        # Use timeout optimized for streaming scenarios
+        connection_timeout = 45.0  # Generous timeout for streaming operations
+
+        try:
+            # Direct execution with simplified connection management
+            return await asyncio.wait_for(
+                self._execute_with_simplified_connection(query, params),
+                timeout=connection_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"PostgresDB: Query execution timed out after {connection_timeout}s: {query[:100]}...")
+            raise
+        except Exception as e:
+            logger.error(f"PostgresDB: Query execution failed: {e}")
+            raise
+
+    async def _execute_with_simplified_connection(self, query: str, params: tuple) -> Any:
+        """Execute query with simplified connection management optimized for streaming."""
+        pool = None
+        conn = None
+
+        try:
+            # Get connection pool using global connection manager
+            pool = await self.connection_manager.get_connection_pool(self.db_url)
+            # Get connection from pool
+            conn = await pool.getconn()
+
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, params)
+
+                # Fetch results if it's a SELECT query
+                if query.strip().upper().startswith('SELECT'):
+                    results = await cursor.fetchall()
+                    return results
+                else:
+                    # For INSERT/UPDATE/DELETE, commit and return rowcount
+                    rowcount = cursor.rowcount
+                    await conn.commit()
+                    return rowcount
+
+        except psycopg.Error as e:
+            # Handle transaction errors by rolling back
+            if "current transaction is aborted" in str(e) and conn:
+                logger.warning("Transaction aborted, rolling back...")
+                try:
+                    await conn.rollback()
+                except Exception:
+                    pass
+                # Retry the query after rollback
                 async with conn.cursor(row_factory=dict_row) as cursor:
                     await cursor.execute(query, params)
 
-                    # Fetch results if it's a SELECT query
                     if query.strip().upper().startswith('SELECT'):
                         results = await cursor.fetchall()
                         return results
                     else:
-                        # For INSERT/UPDATE/DELETE, commit and return rowcount
                         rowcount = cursor.rowcount
                         await conn.commit()
                         return rowcount
+            else:
+                # Re-raise other types of errors
+                raise
+        finally:
+            # CRITICAL: Always return connection to pool immediately
+            if conn is not None:
+                try:
+                    await pool.putconn(conn)
+                    logger.debug("PostgresDB: Connection returned to connection pool")
+                except Exception as e:
+                    logger.error(f"PostgresDB: Failed to return connection to pool: {e}")
 
-            except psycopg.Error as e:
-                # Handle transaction errors by rolling back
-                if "current transaction is aborted" in str(e):
-                    logger.warning("Transaction aborted, rolling back...")
-                    try:
-                        await conn.rollback()
-                    except Exception:
-                        pass
-                    # Retry the query after rollback
-                    async with conn.cursor(row_factory=dict_row) as cursor:
-                        await cursor.execute(query, params)
-
-                        if query.strip().upper().startswith('SELECT'):
-                            results = await cursor.fetchall()
-                            return results
-                        else:
-                            rowcount = cursor.rowcount
-                            await conn.commit()
-                            return rowcount
-                else:
-                    # Re-raise other types of errors
-                    raise
-    
     async def commit(self):
         """Commit changes to the database using connection pool."""
         # Note: With async connection pool, commits are handled per-connection
@@ -126,7 +158,7 @@ class PostgresDB(DBBase):
 
         # Close all pools when the database backend is closed
         await self.connection_manager.close_all_pools()
-        logger.info("PostgresDB: Connection pools closed")
+        logger.info("PostgresDB: Simplified connection pools closed")
 
     async def create_tables(self):
         """Create database tables if they don't exist."""
@@ -220,6 +252,39 @@ class PostgresDB(DBBase):
         )
         ''')
 
+        # Create M1 episodic memory table
+        await self.execute('''
+        CREATE TABLE IF NOT EXISTS m1_episodic (
+            id TEXT PRIMARY KEY,
+            source_id TEXT,
+            source_session_id TEXT,
+            source_user_id TEXT,
+            episode_content TEXT NOT NULL,
+            episode_type TEXT,
+            episode_category JSONB DEFAULT '{}'::jsonb,
+            confidence FLOAT NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+            entities JSONB DEFAULT '[]'::jsonb,
+            temporal_info JSONB DEFAULT '{}'::jsonb,
+            source_context TEXT,
+            metadata JSONB DEFAULT '{}'::jsonb,
+            embedding VECTOR(384),
+            needs_embedding BOOLEAN DEFAULT TRUE,
+            retry_count INTEGER DEFAULT 0,
+            last_retry_at TIMESTAMP,
+            retry_status TEXT DEFAULT 'pending' CHECK (retry_status IN ('pending', 'processing', 'completed', 'failed')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+
+        # Create indexes for M1 episodic table
+        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_source_id ON m1_episodic (source_id)')
+        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_source_session ON m1_episodic (source_session_id)')
+        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_source_user ON m1_episodic (source_user_id)')
+        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_episode_type ON m1_episodic (episode_type) WHERE episode_type IS NOT NULL')
+        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_needs_embedding ON m1_episodic (needs_embedding) WHERE needs_embedding = TRUE')
+        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_created_at ON m1_episodic (created_at)')
+
         # Commit is handled automatically in execute method
 
     async def add(self, table: str, data: Dict[str, Any]) -> str:
@@ -289,12 +354,12 @@ class PostgresDB(DBBase):
             Selected row or None if not found
         """
         rows = await self.select(table, conditions)
-        
+
         if not rows:
             return None
-        
+
         return rows[0]
-    
+
     async def update(self, table: str, data: Dict[str, Any], conditions: Dict[str, Any]) -> int:
         """Update data in a table.
 
@@ -361,7 +426,7 @@ class PostgresDB(DBBase):
         return rowcount
 
     async def batch_add(self, table: str, data_list: List[Dict[str, Any]]) -> List[str]:
-        """Batch add data to a table for improved performance.
+        """Batch add data to a table for improved performance with proper connection management.
 
         This method provides optimized batch addition for PostgreSQL,
         which is particularly important for high-throughput scenarios.
@@ -402,13 +467,19 @@ class PostgresDB(DBBase):
             for data in processed_data_list:
                 params.extend([data[col] for col in columns])
 
-            # Execute the batch query
-            await self.execute(query, tuple(params))
-            await self.commit()
+            # Execute the batch query with timeout
+            try:
+                await asyncio.wait_for(
+                    self.execute(query, tuple(params)),
+                    timeout=120.0  # 2 minutes for batch operations
+                )
+                logger.debug(f"PostgresDB: Batch added {len(processed_data_list)} records to {table}")
+            except asyncio.TimeoutError:
+                logger.error(f"PostgresDB: Batch add timed out for {len(processed_data_list)} records to {table}")
+                raise
 
             # Return the IDs
             return [data.get('id', '') for data in processed_data_list]
 
         return []
-
 

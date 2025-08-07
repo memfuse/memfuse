@@ -52,6 +52,14 @@ class TriggerManager:
             
     async def start_listening(self):
         """Start listening for notifications."""
+        import os
+        
+        # Check if notifications are disabled in test environment
+        disable_notifications = os.environ.get("DISABLE_PGAI_NOTIFICATIONS", "false").lower() == "true"
+        if disable_notifications:
+            logger.info("PGAI notifications disabled in test environment, skipping listener startup")
+            return
+            
         self.listener_task = asyncio.create_task(self._notification_listener())
         # Give the listener a moment to start up, but don't wait indefinitely
         await asyncio.sleep(0.1)
@@ -67,54 +75,88 @@ class TriggerManager:
                 
     async def _notification_listener(self):
         """Listen for database notifications with robust error handling."""
+        import os
+        
         retry_count = 0
         max_retries = 5
         base_delay = 1.0
+        
+        # Check if we're in test environment and adjust timeout
+        is_test_mode = os.environ.get("MEMFUSE_TEST_MODE", "false").lower() == "true"
+        conn_timeout = 5.0 if is_test_mode else 10.0  # Even shorter timeout for tests
+        max_retries = 2 if is_test_mode else 5  # Fewer retries in tests to fail fast
 
         while retry_count < max_retries and not self.listener_task.cancelled():
             conn = None
             try:
                 # Use connection context manager for proper cleanup
-                async with self.pool.connection() as conn:
+                async with self.pool.connection(timeout=conn_timeout) as conn:
                     await conn.execute(f"LISTEN {self.channel_name}")
                     logger.info(f"Started listening on channel: {self.channel_name}")
 
                     # Reset retry count on successful connection
                     retry_count = 0
 
-                    # Mock async iteration for testing
-                    if hasattr(conn, 'notifies') and callable(conn.notifies):
+                    # Set autocommit for better notification handling
+                    # Need to ensure we're not in a transaction before setting autocommit
+                    try:
+                        await conn.rollback()  # Clear any existing transaction
+                        await conn.set_autocommit(True)
+                    except Exception as e:
+                        logger.debug(f"Could not set autocommit: {e}")
+                        # Continue without autocommit - will still work but may be less responsive
+                    
+                    # Listen for notifications
+                    while not self.listener_task.cancelled():
                         try:
-                            async for notify in conn.notifies():
-                                if self.listener_task.cancelled():
-                                    break
-
-                                record_id = notify.payload
+                            # Wait for notifications
+                            await asyncio.sleep(0.5)  # Check every 500ms
+                            
+                            # Get notifications using the correct async API
+                            try:
+                                notifications = await conn.notifies()
+                                for notify in notifications:
+                                    if notify.channel == self.channel_name:
+                                        record_id = notify.payload
+                                        try:
+                                            await self.queue.put(record_id)
+                                            logger.debug(f"Queued embedding for record {record_id}")
+                                        except asyncio.QueueFull:
+                                            logger.warning(f"Queue full, dropping record {record_id}")
+                            except Exception as notify_error:
+                                logger.debug(f"Error getting notifications: {notify_error}")
+                                # Alternative approach for older psycopg versions
                                 try:
-                                    await self.queue.put(record_id)
-                                    logger.debug(f"Queued embedding for record {record_id}")
-                                except asyncio.QueueFull:
-                                    logger.warning(f"Queue full, dropping record {record_id}")
+                                    if hasattr(conn, 'get_notifies'):
+                                        notifications = conn.get_notifies()
+                                        for notify in notifications:
+                                            if notify.channel == self.channel_name:
+                                                record_id = notify.payload
+                                                try:
+                                                    await self.queue.put(record_id)
+                                                    logger.debug(f"Queued embedding for record {record_id}")
+                                                except asyncio.QueueFull:
+                                                    logger.warning(f"Queue full, dropping record {record_id}")
+                                except Exception as alt_error:
+                                    logger.debug(f"Alternative notification method also failed: {alt_error}")
                         except Exception as notify_error:
                             logger.warning(f"Notification iteration error: {notify_error}")
-                            break
-                    else:
-                        # For testing with mocks or when notifies() is not available,
-                        # just wait briefly and check cancellation
-                        timeout_count = 0
-                        max_timeout = 100  # 10 seconds total (100 * 0.1s)
-
-                        while not self.listener_task.cancelled() and timeout_count < max_timeout:
-                            await asyncio.sleep(0.1)
-                            timeout_count += 1
-
-                        if timeout_count >= max_timeout:
-                            logger.debug("Notification listener timeout reached, continuing...")
                             break
 
             except asyncio.CancelledError:
                 logger.info("Notification listener cancelled")
                 break
+            except asyncio.TimeoutError:
+                retry_count += 1
+                delay = base_delay * (2 ** min(retry_count - 1, 4))  # Exponential backoff
+                logger.warning(f"Connection pool timeout (attempt {retry_count}/{max_retries}) - pool may be exhausted")
+
+                if retry_count < max_retries:
+                    logger.info(f"Retrying notification listener in {delay}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error("Max retries exceeded for connection timeout, notification listener stopping")
+                    break
             except Exception as e:
                 retry_count += 1
                 delay = base_delay * (2 ** min(retry_count - 1, 4))  # Exponential backoff

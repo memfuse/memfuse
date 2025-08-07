@@ -16,10 +16,10 @@ defaults:
 
 # Multi-path retrieval configuration
 multi_path:
-  keyword_weight: 0.2
-  vector_weight: 0.5
-  graph_weight: 0.3
-  use_keyword: true
+  keyword_weight: 0.0
+  vector_weight: 1.0
+  graph_weight: 0.0
+  use_keyword: false
   use_vector: true
   use_graph: false
   fusion_strategy: "rrf"

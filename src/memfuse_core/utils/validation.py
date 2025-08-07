@@ -1,10 +1,13 @@
 """Validation utilities for MemFuse server."""
 
-from typing import Optional, Dict, Any, Tuple
+from __future__ import annotations
+from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING
 
 from fastapi import HTTPException
 from ..models.core import ApiResponse, ErrorDetail
-from ..database import Database
+
+if TYPE_CHECKING:
+    from ..database import Database
 
 
 def raise_api_error(api_response: ApiResponse) -> None:
@@ -16,7 +19,7 @@ def raise_api_error(api_response: ApiResponse) -> None:
 
 
 # Convenience functions that raise exceptions instead of returning tuples
-async def ensure_user_exists(db: Database, user_id: str) -> Dict[str, Any]:
+async def ensure_user_exists(db: "Database", user_id: str) -> Dict[str, Any]:
     """Validate that a user exists, raise HTTPException if not."""
     is_valid, error_response, user = await validate_user_exists(db, user_id)
     if not is_valid:
@@ -24,7 +27,7 @@ async def ensure_user_exists(db: Database, user_id: str) -> Dict[str, Any]:
     return user
 
 
-async def ensure_user_by_name_exists(db: Database, name: str) -> Dict[str, Any]:
+async def ensure_user_by_name_exists(db: "Database", name: str) -> Dict[str, Any]:
     """Validate that a user with the given name exists, raise HTTPException if not."""
     is_valid, error_response, user = await validate_user_by_name_exists(db, name)
     if not is_valid:
@@ -32,14 +35,14 @@ async def ensure_user_by_name_exists(db: Database, name: str) -> Dict[str, Any]:
     return user
 
 
-async def ensure_user_name_available(db: Database, name: str) -> None:
+async def ensure_user_name_available(db: "Database", name: str) -> None:
     """Validate that a user name is available, raise HTTPException if not."""
     is_valid, error_response = await validate_user_name_available(db, name)
     if not is_valid:
         raise_api_error(error_response)
 
 
-async def ensure_agent_exists(db: Database, agent_id: str) -> Dict[str, Any]:
+async def ensure_agent_exists(db: "Database", agent_id: str) -> Dict[str, Any]:
     """Validate that an agent exists, raise HTTPException if not."""
     is_valid, error_response, agent = await validate_agent_exists(db, agent_id)
     if not is_valid:
@@ -47,7 +50,7 @@ async def ensure_agent_exists(db: Database, agent_id: str) -> Dict[str, Any]:
     return agent
 
 
-async def ensure_agent_by_name_exists(db: Database, name: str) -> Dict[str, Any]:
+async def ensure_agent_by_name_exists(db: "Database", name: str) -> Dict[str, Any]:
     """Validate that an agent with the given name exists, raise HTTPException if not."""
     is_valid, error_response, agent = await validate_agent_by_name_exists(db, name)
     if not is_valid:
@@ -55,14 +58,14 @@ async def ensure_agent_by_name_exists(db: Database, name: str) -> Dict[str, Any]
     return agent
 
 
-async def ensure_agent_name_available(db: Database, name: str) -> None:
+async def ensure_agent_name_available(db: "Database", name: str) -> None:
     """Validate that an agent name is available, raise HTTPException if not."""
     is_valid, error_response = await validate_agent_name_available(db, name)
     if not is_valid:
         raise_api_error(error_response)
 
 
-async def validate_user_exists(db: Database, user_id: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
+async def validate_user_exists(db: "Database", user_id: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
     """Validate that a user exists.
 
     Args:
@@ -87,7 +90,7 @@ async def validate_user_exists(db: Database, user_id: str) -> Tuple[bool, Option
     return True, None, user
 
 
-async def validate_agent_exists(db: Database, agent_id: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
+async def validate_agent_exists(db: "Database", agent_id: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
     """Validate that an agent exists.
 
     Args:
@@ -112,7 +115,7 @@ async def validate_agent_exists(db: Database, agent_id: str) -> Tuple[bool, Opti
     return True, None, agent
 
 
-async def validate_session_exists(db: Database, session_id: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
+async def validate_session_exists(db: "Database", session_id: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
     """Validate that a session exists.
 
     Args:
@@ -137,7 +140,7 @@ async def validate_session_exists(db: Database, session_id: str) -> Tuple[bool, 
     return True, None, session
 
 
-async def validate_user_by_name_exists(db: Database, name: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
+async def validate_user_by_name_exists(db: "Database", name: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
     """Validate that a user with the given name exists.
 
     Args:
@@ -162,7 +165,7 @@ async def validate_user_by_name_exists(db: Database, name: str) -> Tuple[bool, O
     return True, None, user
 
 
-async def validate_agent_by_name_exists(db: Database, name: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
+async def validate_agent_by_name_exists(db: "Database", name: str) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
     """Validate that an agent with the given name exists.
 
     Args:
@@ -187,14 +190,8 @@ async def validate_agent_by_name_exists(db: Database, name: str) -> Tuple[bool, 
     return True, None, agent
 
 
-async def validate_session_by_name_exists(db: Database, name: str, user_id: Optional[str] = None) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
+async def validate_session_by_name_exists(db: "Database", name: str, user_id: Optional[str] = None) -> Tuple[bool, Optional[ApiResponse], Optional[Dict[str, Any]]]:
     """Validate that a session with the given name exists.
-
-    ARCHITECTURAL CHANGE (2025-05-24):
-    ==================================
-    Added optional user_id parameter to support user-scoped session validation.
-    This prevents data isolation bugs where sessions from different users could
-    be incorrectly validated as existing for the current user.
 
     Args:
         db: Database instance
@@ -220,7 +217,7 @@ async def validate_session_by_name_exists(db: Database, name: str, user_id: Opti
     return True, None, session
 
 
-async def validate_user_name_available(db: Database, name: str) -> Tuple[bool, Optional[ApiResponse]]:
+async def validate_user_name_available(db: "Database", name: str) -> Tuple[bool, Optional[ApiResponse]]:
     """Validate that a user name is available.
 
     Args:
@@ -245,7 +242,7 @@ async def validate_user_name_available(db: Database, name: str) -> Tuple[bool, O
     return True, None
 
 
-async def validate_agent_name_available(db: Database, name: str) -> Tuple[bool, Optional[ApiResponse]]:
+async def validate_agent_name_available(db: "Database", name: str) -> Tuple[bool, Optional[ApiResponse]]:
     """Validate that an agent name is available.
 
     Args:
@@ -270,13 +267,8 @@ async def validate_agent_name_available(db: Database, name: str) -> Tuple[bool, 
     return True, None
 
 
-async def validate_session_name_available(db: Database, name: str, user_id: Optional[str] = None) -> Tuple[bool, Optional[ApiResponse]]:
+async def validate_session_name_available(db: "Database", name: str, user_id: Optional[str] = None) -> Tuple[bool, Optional[ApiResponse]]:
     """Validate that a session name is available.
-
-    ARCHITECTURAL CHANGE (2025-05-24):
-    ==================================
-    Added optional user_id parameter to support user-scoped session name validation.
-    This allows different users to have sessions with the same name without conflict.
 
     Args:
         db: Database instance
@@ -302,7 +294,7 @@ async def validate_session_name_available(db: Database, name: str, user_id: Opti
     return True, None
 
 
-async def ensure_session_exists(db: Database, session_id: str) -> Dict[str, Any]:
+async def ensure_session_exists(db: "Database", session_id: str) -> Dict[str, Any]:
     """Validate that a session exists, raise HTTPException if not."""
     is_valid, error_response, session = await validate_session_exists(db, session_id)
     if not is_valid:
@@ -310,7 +302,7 @@ async def ensure_session_exists(db: Database, session_id: str) -> Dict[str, Any]
     return session
 
 
-async def ensure_session_by_name_exists(db: Database, name: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+async def ensure_session_by_name_exists(db: "Database", name: str, user_id: Optional[str] = None) -> Dict[str, Any]:
     """Validate that a session with the given name exists, raise HTTPException if not."""
     is_valid, error_response, session = await validate_session_by_name_exists(db, name, user_id)
     if not is_valid:
@@ -318,7 +310,7 @@ async def ensure_session_by_name_exists(db: Database, name: str, user_id: Option
     return session
 
 
-async def ensure_session_name_available(db: Database, name: str, user_id: Optional[str] = None) -> None:
+async def ensure_session_name_available(db: "Database", name: str, user_id: Optional[str] = None) -> None:
     """Validate that a session name is available, raise HTTPException if not."""
     is_valid, error_response = await validate_session_name_available(db, name, user_id)
     if not is_valid:

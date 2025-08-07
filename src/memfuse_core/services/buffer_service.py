@@ -284,28 +284,64 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
     async def shutdown(self) -> bool:
         """Shutdown the buffer service gracefully.
         
+        Optimized shutdown with concurrent cleanup where safe.
+        
         Returns:
             True if shutdown was successful, False otherwise
         """
+        logger.info(f"BufferService: Initiating shutdown (buffer_enabled={self.buffer_enabled})")
+        
         try:
-            # Shutdown WriteBuffer (manages RoundBuffer, HybridBuffer, FlushManager)
-            if hasattr(self.write_buffer, 'shutdown'):
+            if not self.buffer_enabled:
+                # Bypass mode: Only shutdown memory service
+                logger.info("BufferService: Bypass mode - shutting down memory service only")
+                
+                if self.memory_service and hasattr(self.memory_service, 'shutdown'):
+                    await self.memory_service.shutdown()
+                    logger.info("BufferService: MemoryService shutdown completed")
+                    
+                logger.info("BufferService: Bypass mode shutdown completed")
+                return True
+                
+            # Buffer mode: Coordinated shutdown of all components
+            logger.info("BufferService: Buffer mode - coordinated shutdown of all components")
+            
+            # Step 1: Critical async cleanup (WriteBuffer contains FlushManager)
+            if self.write_buffer and hasattr(self.write_buffer, 'shutdown'):
+                logger.info("BufferService: Shutting down WriteBuffer (includes FlushManager)")
                 await self.write_buffer.shutdown()
+                logger.info("BufferService: WriteBuffer shutdown completed")
 
-            # Clear QueryBuffer
-            await self.query_buffer.clear()
-            await self.query_buffer.clear_cache()
+            # Step 2: Buffer cleanup (can be done concurrently)
+            buffer_cleanup_tasks = []
+            
+            if self.query_buffer:
+                async def cleanup_query_buffer():
+                    await self.query_buffer.clear()
+                    await self.query_buffer.clear_cache()
+                    logger.debug("BufferService: QueryBuffer cleared")
+                buffer_cleanup_tasks.append(cleanup_query_buffer())
 
-            # Clear SpeculativeBuffer
-            if hasattr(self.speculative_buffer, 'clear'):
-                await self.speculative_buffer.clear()
+            if self.speculative_buffer and hasattr(self.speculative_buffer, 'clear'):
+                async def cleanup_speculative_buffer():
+                    await self.speculative_buffer.clear()
+                    logger.debug("BufferService: SpeculativeBuffer cleared")
+                buffer_cleanup_tasks.append(cleanup_speculative_buffer())
+            
+            # Execute buffer cleanups concurrently
+            if buffer_cleanup_tasks:
+                await asyncio.gather(*buffer_cleanup_tasks, return_exceptions=True)
+                logger.info("BufferService: Buffer components cleanup completed")
 
-            # Shutdown memory service if available
+            # Step 3: Memory service shutdown (final step)
             if self.memory_service and hasattr(self.memory_service, 'shutdown'):
+                logger.info("BufferService: Shutting down MemoryService")
                 await self.memory_service.shutdown()
+                logger.info("BufferService: MemoryService shutdown completed")
 
-            logger.info("BufferService: Shutdown completed successfully")
+            logger.info("BufferService: All components shutdown successfully")
             return True
+
         except Exception as e:
             logger.error(f"BufferService: Failed to shutdown: {e}")
             return False
@@ -681,7 +717,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     # Query all data sources: RoundBuffer + HybridBuffer + Database
                     return await self._get_from_all_sources(
                         session_id=session_id,
-                        limit=limit,
+                        limit=limit or 20,  # Ensure limit is not None
                         sort_by=sort_by,
                         order=order
                     )
@@ -725,7 +761,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 if round_buffer:
                     round_buffer_messages = await round_buffer.get_messages_by_session(
                         session_id=session_id,
-                        limit=limit * 3,  # Get more to account for deduplication
+                        limit=(limit or 0) * 3,  # Get more to account for deduplication
                         sort_by=sort_by,
                         order=order
                     )
@@ -738,7 +774,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 if hybrid_buffer:
                     # HybridBuffer doesn't have session-specific query, get all and filter
                     all_hybrid_messages = await hybrid_buffer.get_all_messages_for_read_api(
-                        limit=limit * 3,
+                        limit=(limit or 0) * 3,
                         sort_by=sort_by,
                         order=order
                     )
@@ -754,7 +790,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             if self.memory_service:
                 database_messages = await self.memory_service.get_messages_by_session(
                     session_id=session_id,
-                    limit=limit * 3,  # Get more to account for deduplication
+                    limit=(limit or 0) * 3,  # Get more to account for deduplication
                     sort_by=sort_by,
                     order=order
                 )
@@ -766,7 +802,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             )
 
             # Step 5: Apply final limit
-            if limit > 0:
+            if limit and limit > 0:
                 merged_messages = merged_messages[:limit]
 
             logger.info(f"BufferService._get_from_all_sources: Merged {len(round_buffer_messages)}+{len(hybrid_buffer_messages)}+{len(database_messages)} = {len(merged_messages)} messages")
