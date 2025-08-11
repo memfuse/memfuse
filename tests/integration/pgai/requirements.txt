@@ -1,0 +1,77 @@
+# MemFuse pgvectorscale Integration Test Requirements
+# ==================================================
+#
+# Python dependencies for MemFuse pgvectorscale end-to-end integration testing
+# with StreamingDiskANN vector similarity search and normalized scoring.
+#
+# Installation:
+#   pip install -r tests/integration/pgai/requirements.txt
+#
+# Or with virtual environment:
+#   python -m venv venv
+#   source venv/bin/activate  # On Windows: venv\Scripts\activate
+#   pip install -r tests/integration/pgai/requirements.txt
+
+# Core Database Connectivity
+psycopg2-binary>=2.9.7
+# PostgreSQL adapter for Python with binary distribution
+# Provides connection to pgvectorscale database
+
+# Vector Embeddings and ML
+sentence-transformers>=2.2.2
+# State-of-the-art sentence, text and image embeddings
+# Used for generating 384-dimensional embeddings with all-MiniLM-L6-v2
+
+torch>=2.0.0
+# PyTorch deep learning framework
+# Required by sentence-transformers for model inference
+
+transformers>=4.21.0
+# Hugging Face transformers library
+# Core dependency for sentence-transformers
+
+# Numerical Computing
+numpy>=1.21.0
+# Fundamental package for scientific computing
+# Used for embedding vector operations and normalization
+
+# Data Structures and Utilities
+dataclasses>=0.6; python_version<"3.7"
+# Backport of dataclasses for Python < 3.7
+# Used for structured data representation (M0Message, M1Chunk, etc.)
+
+# Optional: Enhanced Development Experience
+ipython>=8.0.0
+# Enhanced interactive Python shell
+# Useful for debugging and exploration
+
+pytest>=7.0.0
+# Testing framework
+# For running integration tests
+
+pytest-asyncio>=0.21.0
+# Async support for pytest
+# For testing async database operations
+
+# Optional: Performance Monitoring
+psutil>=5.9.0
+# System and process utilities
+# For monitoring resource usage during tests
+
+# Optional: Progress Bars
+tqdm>=4.64.0
+# Progress bars for long-running operations
+# Useful for batch processing visualization
+
+# Development Dependencies (Optional)
+black>=22.0.0
+# Code formatter
+# For maintaining consistent code style
+
+flake8>=5.0.0
+# Linting tool
+# For code quality checks
+
+mypy>=0.991
+# Static type checker
+# For type safety validation

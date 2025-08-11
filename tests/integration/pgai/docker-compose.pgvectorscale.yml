@@ -1,0 +1,109 @@
+
+
+# MemFuse pgvectorscale Integration Test Environment
+# ==================================================
+# 
+# This Docker Compose configuration sets up a complete pgvectorscale environment
+# for MemFuse memory layer integration testing with StreamingDiskANN support.
+#
+# Features:
+# - TimescaleDB with pgvectorscale extension
+# - StreamingDiskANN for high-performance vector search
+# - SBQ compression for memory optimization
+# - Persistent data volumes for development
+# - Optimized PostgreSQL configuration for vector workloads
+#
+# Usage:
+#   docker-compose -f tests/integration/pgai/docker-compose.pgvectorscale.yml up -d
+#   docker-compose -f tests/integration/pgai/docker-compose.pgvectorscale.yml down -v
+
+services:
+  postgres-pgvectorscale:
+    # Use TimescaleDB HA pg17 image which supports pgvectorscale installation
+    image: timescale/timescaledb-ha:pg17
+    container_name: memfuse-pgvectorscale-e2e
+    
+    environment:
+      # Database configuration
+      POSTGRES_DB: memfuse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: memfuse_secure_password
+      
+      # TimescaleDB configuration
+      TIMESCALEDB_TELEMETRY: 'off'
+      
+      # PostgreSQL optimization for vector workloads
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      
+    ports:
+      - "5434:5432"
+    
+    volumes:
+      # Persistent data storage
+      - pgvectorscale_data:/var/lib/postgresql/data
+      
+      # Initialization scripts
+      - ./init-pgvectorscale.sql:/docker-entrypoint-initdb.d/01-init-pgvectorscale.sql:ro
+      
+      # PostgreSQL configuration overrides
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    
+    # Resource limits for consistent performance
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    
+    # Health check to ensure database is ready
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d memfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    
+    # Restart policy for development stability
+    restart: unless-stopped
+    
+    # Custom command with optimized settings
+    command: >
+      postgres
+      -c shared_preload_libraries='timescaledb'
+      -c max_connections=100
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=4MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c max_worker_processes=8
+      -c max_parallel_workers_per_gather=2
+      -c max_parallel_workers=8
+      -c max_parallel_maintenance_workers=2
+      -c log_statement=none
+      -c log_duration=off
+      -c log_min_duration_statement=1000
+      -c diskann.query_search_list_size=100
+      -c diskann.query_rescore=50
+
+volumes:
+  pgvectorscale_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/pgvectorscale
+
+networks:
+  default:
+    name: memfuse-pgvectorscale-network
+    driver: bridge
