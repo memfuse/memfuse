@@ -99,6 +99,7 @@ bin/**
 build/
 celerybeat-schedule
 celerybeat.pid
+client
 cover/
 coverage.xml
 coverage/
