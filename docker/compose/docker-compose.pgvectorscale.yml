@@ -36,7 +36,7 @@ services:
       POSTGRES_INITDB_ARGS: "--data-checksums"
       
     ports:
-      - "5434:5432"
+      - "5432:5432"
     
     volumes:
       # Persistent data storage

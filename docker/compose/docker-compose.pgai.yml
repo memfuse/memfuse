@@ -2,7 +2,7 @@ name: memfuse-pgai
 services:
   # PostgreSQL with TimescaleDB + pgvectorscale
   postgres-pgai:
-    image: timescale/timescaledb:latest-pg17
+    image: timescale/timescaledb-ha:pg17
     container_name: memfuse-pgai-postgres
     environment:
       POSTGRES_DB: memfuse
@@ -10,26 +10,22 @@ services:
       POSTGRES_PASSWORD: postgres
       # TimescaleDB configuration
       TIMESCALEDB_TELEMETRY: 'off'
-      # PostgreSQL optimizations for vector operations and connection stability
-      POSTGRES_SHARED_BUFFERS: '256MB'
-      POSTGRES_EFFECTIVE_CACHE_SIZE: '1GB'
-      POSTGRES_WORK_MEM: '64MB'
-      # Connection pool optimization
-      POSTGRES_MAX_CONNECTIONS: '300'
-      POSTGRES_SUPERUSER_RESERVED_CONNECTIONS: '5'
-      # TCP keepalive settings for connection stability
-      POSTGRES_TCP_KEEPALIVES_IDLE: '600'
-      POSTGRES_TCP_KEEPALIVES_INTERVAL: '30'
-      POSTGRES_TCP_KEEPALIVES_COUNT: '3'
-      # WAL and checkpoint settings for stability
-      POSTGRES_WAL_LEVEL: 'replica'
-      POSTGRES_MAX_WAL_SIZE: '2GB'
-      POSTGRES_CHECKPOINT_COMPLETION_TARGET: '0.9'
+      # PostgreSQL optimization for vector workloads
+      POSTGRES_INITDB_ARGS: "--data-checksums"
     ports:
       - "5432:5432"
     volumes:
       - postgres_pgai_data:/var/lib/postgresql/data
-      - ../../docker/pgvectorscale/init-scripts:/docker-entrypoint-initdb.d:ro
+      - ../pgvectorscale/init-scripts:/docker-entrypoint-initdb.d:ro
+    # Resource limits for consistent performance
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d memfuse"]
       interval: 10s
@@ -37,6 +33,31 @@ services:
       retries: 5
       start_period: 30s
     restart: unless-stopped
+    # Custom command with optimized settings
+    command: >
+      postgres
+      -c shared_preload_libraries='timescaledb'
+      -c max_connections=100
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=4MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c max_worker_processes=8
+      -c max_parallel_workers_per_gather=2
+      -c max_parallel_workers=8
+      -c max_parallel_maintenance_workers=2
+      -c log_statement=none
+      -c log_duration=off
+      -c log_min_duration_statement=1000
+      -c diskann.query_search_list_size=100
+      -c diskann.query_rescore=50
     logging:
       driver: "json-file"
       options:

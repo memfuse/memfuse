@@ -184,8 +184,8 @@ Monitor service health:
 |-------------|------------|---------|------------|
 | Development | 5432       | 8000    | -          |
 | Production  | 5432       | 8000    | 80, 443 (Nginx) |
-| Testing     | 5433       | 8000    | -          |
-| Local       | 5434       | 8001    | 8080 (pgAdmin) |
+| Testing     | 5432       | 8000    | -          |
+| Local       | 5432       | 8000    | 8080 (pgAdmin) |
 | PgAI        | 5432       | 8000    | 8080 (pgAdmin), 6379 (Redis) |
 
 ## 🔐 Environment Variables

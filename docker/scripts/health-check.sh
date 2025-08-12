@@ -90,12 +90,12 @@ case $ENVIRONMENT in
         MEMFUSE_PORT=8000
         ;;
     test)
-        POSTGRES_PORT=5433
+        POSTGRES_PORT=5432
         MEMFUSE_PORT=8000
         ;;
     local)
-        POSTGRES_PORT=5434
-        MEMFUSE_PORT=8001
+        POSTGRES_PORT=5432
+        MEMFUSE_PORT=8000
         ;;
 esac
 

@@ -24,16 +24,7 @@ BEGIN
 END $$;
 
 -- Configure PostgreSQL for optimal vector operations
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vectorscale') THEN
-        ALTER SYSTEM SET shared_preload_libraries = 'timescaledb,vectorscale';
-        RAISE NOTICE 'Configured shared_preload_libraries with vectorscale';
-    ELSE
-        ALTER SYSTEM SET shared_preload_libraries = 'timescaledb';
-        RAISE NOTICE 'Configured shared_preload_libraries without vectorscale';
-    END IF;
-END $$;
+-- Note: shared_preload_libraries is handled by Docker command line configuration
 
 -- Optimize PostgreSQL settings for vector operations
 ALTER SYSTEM SET max_connections = 100;

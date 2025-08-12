@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: local_dev
     ports:
-      - "5434:5432"
+      - "5432:5432"
     volumes:
       - postgres_local_data:/home/postgres/pgdata/data
     healthcheck:
@@ -23,7 +23,7 @@ services:
       context: ../..
       dockerfile: docker/app/Dockerfile
     ports:
-      - "8001:8000"
+      - "8000:8000"
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432

@@ -32,6 +32,7 @@ except ImportError:
 # Constants
 DOCKER_COMPOSE_FILE = "docker/compose/docker-compose.pgai.yml"
 POSTGRES_CONTAINER_NAME = "memfuse-pgai-postgres"
+POSTGRES_PORT = 5432
 MEMFUSE_CORE_COMMAND = ["poetry", "run", "memfuse-core"]
 MEMFUSE_API_PORT = 8000
 MEMFUSE_API_HOST = "localhost"
@@ -51,13 +52,17 @@ PROCESS_TERMINATION_TIMEOUT = 10  # seconds
 PORT_CHECK_TIMEOUT = 5  # seconds
 PORT_CLEANUP_TIMEOUT = 10  # seconds
 
-# Database optimization settings
+# Database optimization settings for pgvectorscale
 DB_OPTIMIZATIONS = [
     "ALTER SYSTEM SET lock_timeout = '30s';",
-    "ALTER SYSTEM SET max_connections = 50;",
+    "ALTER SYSTEM SET max_connections = 100;",
     "ALTER SYSTEM SET shared_buffers = '256MB';",
+    "ALTER SYSTEM SET effective_cache_size = '1GB';",
+    "ALTER SYSTEM SET maintenance_work_mem = '64MB';",
     "ALTER SYSTEM SET deadlock_timeout = '1s';",
     "ALTER SYSTEM SET max_locks_per_transaction = 256;",
+    "ALTER SYSTEM SET diskann.query_search_list_size = 100;",
+    "ALTER SYSTEM SET diskann.query_rescore = 50;",
     "SELECT pg_reload_conf();"
 ]
 
@@ -294,6 +299,15 @@ class MemFuseLauncher:
         """Apply database optimizations to prevent pgai hanging."""
         self.print_status("Applying database optimizations...", StatusLevel.INFO)
 
+        # Wait a bit more for database to be fully ready for ALTER SYSTEM commands
+        self.print_status("Waiting for database to be fully ready for configuration changes...", StatusLevel.INFO)
+        time.sleep(3)
+
+        # Test database readiness with a simple query first
+        if not self._test_database_readiness():
+            self.print_status("Database not ready for optimizations, skipping...", StatusLevel.WARNING)
+            return False
+
         success_count = 0
         for sql in DB_OPTIMIZATIONS:
             try:
@@ -301,7 +315,7 @@ class MemFuseLauncher:
                     'docker', 'exec', POSTGRES_CONTAINER_NAME,
                     'psql', '-U', 'postgres', '-d', 'memfuse', '-c', sql
                 ]
-                result = self._run_command(cmd, timeout=10)
+                result = self._run_command(cmd, timeout=15)
 
                 if result.returncode == 0:
                     success_count += 1
@@ -325,6 +339,18 @@ class MemFuseLauncher:
             )
 
         return success_count > 0
+
+    def _test_database_readiness(self) -> bool:
+        """Test if database is ready for configuration changes."""
+        try:
+            cmd = [
+                'docker', 'exec', POSTGRES_CONTAINER_NAME,
+                'psql', '-U', 'postgres', '-d', 'memfuse', '-c', 'SELECT 1;'
+            ]
+            result = self._run_command(cmd, timeout=10, capture_output=True)
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def check_database_connectivity(self, timeout: int = DB_CONNECTIVITY_TIMEOUT) -> bool:
         """Check if database is accessible."""
