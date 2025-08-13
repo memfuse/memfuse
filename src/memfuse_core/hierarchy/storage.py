@@ -148,6 +148,24 @@ class StoreBackendAdapter(StorageBackend):
                 'updated_at': datetime.now()
             }
 
+            # Extract specific fields from metadata for M1 layer
+            if layer == "M1" and data.metadata:
+                # Extract confidence field for M1 episodic table
+                if 'confidence' in data.metadata:
+                    db_data['confidence'] = data.metadata['confidence']
+                else:
+                    db_data['confidence'] = 0.8  # Default confidence
+
+                # Extract other M1-specific fields
+                if 'episode_type' in data.metadata:
+                    db_data['episode_type'] = data.metadata['episode_type']
+                if 'source_id' in data.metadata:
+                    db_data['source_id'] = data.metadata['source_id']
+                if 'session_id' in data.metadata:
+                    db_data['source_session_id'] = data.metadata['session_id']
+                if 'user_id' in data.metadata:
+                    db_data['source_user_id'] = data.metadata['user_id']
+
             # Add ChunkData metadata
             if data.metadata:
                 db_data['metadata'] = data.metadata
@@ -704,20 +722,18 @@ class UnifiedStorageManager(StorageManager):
             backend = unified_config.get("backend")
             backend_enum = StoreBackend(backend) if backend else None
 
+            # Note: Since we use PostgreSQL, we don't need user-specific data directories
             if storage_type == StorageType.VECTOR:
                 store = await StoreFactory.create_vector_store(
-                    backend=backend_enum,
-                    data_dir=unified_config.get("data_dir", f"data/{self.user_id}")
+                    backend=backend_enum
                 )
             elif storage_type == StorageType.GRAPH:
                 store = await StoreFactory.create_graph_store(
-                    backend=backend_enum,
-                    data_dir=unified_config.get("data_dir", f"data/{self.user_id}")
+                    backend=backend_enum
                 )
             elif storage_type == StorageType.KEYWORD:
                 store = await StoreFactory.create_keyword_store(
-                    backend=backend_enum,
-                    data_dir=unified_config.get("data_dir", f"data/{self.user_id}")
+                    backend=backend_enum
                 )
             elif storage_type == StorageType.SQL:
                 # SQL storage backend - use existing database service

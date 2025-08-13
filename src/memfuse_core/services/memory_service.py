@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Union
 from ..models import Item, Query, Node, QueryResult, StoreType
 from ..store.factory import StoreFactory
 from ..utils.config import config_manager
-from ..utils.path_manager import PathManager
+# PathManager no longer needed since we use PostgreSQL
 from ..rag.rerank import MiniLMReranker
 from ..interfaces import MessageInterface, MessageBatchList, MemoryLayer
 from ..rag.chunk import ChunkStrategy, MessageChunkStrategy
@@ -92,12 +92,18 @@ class MemoryService(MessageInterface):
             # Check for memory_service config at top level first (new structure)
             memory_service_config = self.config.get("memory_service", {})
             if memory_service_config:
-                return memory_service_config.get("parallel_enabled", False)
+                result = memory_service_config.get("parallel_enabled", False)
+                logger.info(f"MemoryService: Top-level memory_service config found, parallel_enabled={result}")
+                return result
 
             # Fallback to old structure for backward compatibility
             memory_config = self.config.get("memory", {})
             memory_service_config = memory_config.get("memory_service", {})
-            return memory_service_config.get("parallel_enabled", False)
+            result = memory_service_config.get("parallel_enabled", False)
+            logger.info(f"MemoryService: Nested memory_service config found, parallel_enabled={result}")
+            logger.info(f"MemoryService: memory_config={memory_config}")
+            logger.info(f"MemoryService: memory_service_config={memory_service_config}")
+            return result
         except Exception as e:
             logger.warning(f"MemoryService: Error checking parallel layers config: {e}")
             return False
@@ -153,9 +159,9 @@ class MemoryService(MessageInterface):
             # For cross-session queries, we don't need a specific session
             self._session_id = None
 
-        # Set up user directory path now that we have user_id
-        data_dir = self.config.get("data_dir", "data")
-        self.user_dir = str(PathManager.get_user_dir(data_dir, self.user_id))
+        # Note: User directories are no longer needed since we use PostgreSQL
+        # Keep user_dir as None to indicate we don't use file-based storage
+        self.user_dir = None
 
         self._async_initialized = True
 
@@ -165,8 +171,8 @@ class MemoryService(MessageInterface):
         if not self._async_initialized:
             await self._async_init()
 
-        # Make sure user directory exists
-        PathManager.ensure_directory(self.user_dir)
+        # Note: User directories are no longer needed since we use PostgreSQL
+        # Skip directory creation
 
         # Try to get the pre-loaded model from the server
         existing_model = None
@@ -182,10 +188,10 @@ class MemoryService(MessageInterface):
             pass
 
         # Initialize store components with the pre-loaded model
+        # Note: Since we use PostgreSQL, we don't need file-based data directories
         try:
-            logger.info(f"Creating vector store with data_dir={self.user_dir}, existing_model={existing_model is not None}")
+            logger.info(f"Creating vector store with existing_model={existing_model is not None}")
             self.vector_store = await StoreFactory.create_vector_store(
-                data_dir=self.user_dir,
                 existing_model=existing_model
             )
             logger.info("Vector store created successfully")
@@ -199,7 +205,6 @@ class MemoryService(MessageInterface):
         if self.config.get("store", {}).get("multi_path", {}).get("use_graph", False):
             try:
                 self.graph_store = await StoreFactory.create_graph_store(
-                    data_dir=self.user_dir,
                     existing_model=existing_model
                 )
                 logger.info("Graph store created successfully")
@@ -210,22 +215,23 @@ class MemoryService(MessageInterface):
             logger.info("Graph store disabled in configuration")
             self.graph_store = None
 
-        try:
-            self.keyword_store = await StoreFactory.create_keyword_store(data_dir=self.user_dir)
-        except Exception as e:
-            logger.error(f"Failed to create keyword store: {e}")
+        # Skip keyword store creation since it's disabled
+        if self.config.get("storage", {}).get("keyword", {}).get("enabled", False):
+            try:
+                self.keyword_store = await StoreFactory.create_keyword_store()
+                logger.info("Keyword store created successfully")
+            except Exception as e:
+                logger.error(f"Failed to create keyword store: {e}")
+                self.keyword_store = None
+        else:
+            logger.info("Keyword store disabled in configuration")
             self.keyword_store = None
 
         # Initialize multi-path retrieval
-        cache_size = self.config.get("store", {}).get("cache_size", 100)
         try:
-            self.multi_path_retrieval = await StoreFactory.create_multi_path_retrieval(
-                data_dir=self.user_dir,
-                vector_store=self.vector_store,
-                graph_store=self.graph_store,
-                keyword_store=self.keyword_store,
-                cache_size=cache_size
-            )
+            # Since we only use vector store, create a simple retrieval
+            # Skip multi-path retrieval for now to avoid configuration complexity
+            self.multi_path_retrieval = self.vector_store
         except Exception as e:
             logger.error(f"Failed to create multi-path retrieval: {e}")
             self.multi_path_retrieval = None

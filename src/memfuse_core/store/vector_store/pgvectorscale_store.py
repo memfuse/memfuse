@@ -280,22 +280,27 @@ class PgVectorScaleStore(VectorStore):
             with self.conn.cursor() as cur:
                 insert_query = """
                     INSERT INTO m0_raw
-                    (id, content, metadata, created_at)
-                    VALUES (%s, %s, %s, %s)
+                    (id, content, session_id, user_id, message_role, round_id, metadata, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """
 
                 for i, chunk in enumerate(chunks):
                     message_id = str(uuid.uuid4())
 
-                    # Extract metadata
-                    role = chunk.metadata.get('role', 'user')
+                    # Extract metadata for dedicated columns
+                    session_id = chunk.metadata.get('session_id')
+                    user_id = chunk.metadata.get('user_id')
+                    message_role = chunk.metadata.get('role', 'user')
+                    round_id = chunk.metadata.get('round_id')
+
+                    # Extract other metadata
                     conversation_id = chunk.metadata.get('conversation_id', str(uuid.uuid4()))
                     sequence_number = chunk.metadata.get('sequence_number', i + 1)
                     batch_index = chunk.metadata.get('batch_index', 0)
                     message_index = chunk.metadata.get('message_index', i)
 
-                    # Prepare metadata for M0 raw storage
+                    # Prepare metadata for M0 raw storage (excluding fields that have dedicated columns)
                     m0_metadata = {
                         'conversation_id': conversation_id,
                         'sequence_number': sequence_number,
@@ -303,12 +308,17 @@ class PgVectorScaleStore(VectorStore):
                         'message_index': message_index,
                         'token_count': max(1, len(chunk.content) // 4),
                         'processing_status': 'pending',
-                        **chunk.metadata
+                        **{k: v for k, v in chunk.metadata.items()
+                           if k not in ['session_id', 'user_id', 'role', 'round_id']}
                     }
 
                     cur.execute(insert_query, (
                         message_id,
                         chunk.content,
+                        session_id,
+                        user_id,
+                        message_role,
+                        round_id,
                         json.dumps(m0_metadata),
                         datetime.now()
                     ))

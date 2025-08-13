@@ -5,7 +5,7 @@ from loguru import logger
 
 from ..models.core import StoreBackend
 from ..utils.config import config_manager
-from ..utils.path_manager import PathManager
+# PathManager no longer needed since we use PostgreSQL
 from ..rag.encode.base import EncoderBase
 from ..rag.encode.MiniLM import MiniLMEncoder
 from .vector_store.base import VectorStore
@@ -172,8 +172,8 @@ class StoreFactory:
             logger.debug(f"Reusing existing vector store instance for {data_dir}")
             return cls._vector_store_instances[stable_key]
 
-        # Create user directory if it doesn't exist
-        PathManager.ensure_directory(data_dir)
+        # Note: Since we use PostgreSQL, we don't need file-based directories
+        # Skip directory creation
 
         # Create a new instance based on the backend
         if backend == StoreBackend.NUMPY:
@@ -296,8 +296,8 @@ class StoreFactory:
                 existing_model=existing_model
             )
 
-        # Create user directory if it doesn't exist
-        PathManager.ensure_directory(data_dir)
+        # Note: Since we use PostgreSQL, we don't need file-based directories
+        # Skip directory creation
 
         # Generate a stable key for caching
         stable_key = cls._generate_stable_key(
@@ -359,8 +359,8 @@ class StoreFactory:
         cache_size = int(cache_size or store_config.get("cache_size", 100))
         backend = backend or StoreBackend(store_config.get("backend", "pgai"))
 
-        # Create user directory if it doesn't exist
-        PathManager.ensure_directory(data_dir)
+        # Note: Since we use PostgreSQL, we don't need file-based directories
+        # Skip directory creation
 
         # Generate a stable key for caching
         stable_key = cls._generate_stable_key(

@@ -539,6 +539,7 @@ class M1EpisodicLayer(MemoryLayer):
                 "message_role": message_role,
                 "chunk_type": "episodic",
                 "chunk_id": chunk_id,
+                "confidence": 0.8,  # Default confidence for M1 chunks
                 "timestamp": time.time()
             }
 
@@ -726,6 +727,7 @@ class M1EpisodicLayer(MemoryLayer):
                     "layer": "M1",
                     "source": "episodic_layer",
                     "episode_type": episode.get("episode_type", "unknown"),
+                    "confidence": episode.get("confidence", 0.8),  # Default confidence for episodes
                     "timestamp": episode.get("timestamp", time.time()),
                     **(metadata or {}),
                     **(episode.get("metadata", {}))

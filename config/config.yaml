@@ -1,119 +1,23 @@
 # @package _global_
 
-# UNIFIED MEMFUSE CONFIGURATION - STREAMING OPTIMIZED
-# This configuration replaces the complex multi-file system
-# Single source of truth for all settings
+# MEMFUSE MAIN CONFIGURATION
+# This file serves as the main configuration directory
+# Detailed configurations are loaded from subdirectories
 
 # Data directory
 data_dir: "data"
 
-# Use unified configuration approach
+# Configuration composition using Hydra defaults
 defaults:
+  - database: default
+  - store: default
+  - embedding: default
+  - memory: default
+  - retrieval: default
+  - server: default
+  - buffer: default
+  - storage: default
   - _self_
 
-# Database Configuration - STREAMING OPTIMIZED
-database:
-  type: "postgres"
-  
-  postgres:
-    # Basic connection parameters
-    host: ${oc.env:POSTGRES_HOST,localhost}
-    port: ${oc.env:POSTGRES_PORT,5432}
-    database: ${oc.env:POSTGRES_DB,memfuse}
-    user: ${oc.env:POSTGRES_USER,postgres}
-    password: ${oc.env:POSTGRES_PASSWORD,postgres}
-    
-    # STREAMING-OPTIMIZED CONNECTION POOL SETTINGS
-    pool_size: 20               # Reasonable base pool for sustained load
-    max_overflow: 30            # Moderate burst capacity (total 50 connections)
-    pool_timeout: 30.0          # Generous timeout for connection acquisition
-    connection_timeout: 10.0    # Reasonable connection establishment timeout
-    pool_recycle: 3600          # 1-hour connection reuse for efficiency
-    
-    # Connection stability settings
-    keepalives_idle: 300        # 5-minute idle detection
-    keepalives_interval: 30     # 30-second keepalive checks  
-    keepalives_count: 3         # 3 failed checks before disconnect
-    
-    # Disable complex monitoring
-    smart_cleanup:
-      enabled: false
-
-# pgAI Configuration
-pgai:
-  enabled: true
-  vectorizer_worker_enabled: true
-  auto_embedding: true
-  embedding_model: "all-MiniLM-L6-v2"
-  embedding_dimensions: 384
-  chunk_size: 1000
-  chunk_overlap: 200
-  batch_size: 100
-  immediate_trigger: true
-  use_polling_fallback: false
-  max_retries: 2
-  retry_interval: 3.0
-  retry_timeout: 180
-  worker_count: 2
-  queue_size: 500
-  batch_processing: false
-  enable_metrics: false
-  log_level: "WARNING"
-
-# Buffer Configuration
-buffer:
-  enabled: true
-  flush_threshold: 50
-  flush_interval: 10
-  buffer_timeout: 30.0
-
-# Server Configuration  
-server:
-  host: "0.0.0.0"
-  port: 8000
-  workers: 1
-  timeout: 60
-  rate_limit_per_minute: 10000    # Very high limit for streaming scenarios
-  
-# Store Configuration
-store:
-  type: "pgai"
-  multi_path:
-    use_vector: true
-    use_graph: false
-    use_keyword: true
-    fusion_strategy: "rrf"
-    vector_weight: 0.7
-    graph_weight: 0.0
-    keyword_weight: 0.3
-  cache_size: 100
-
-# Memory Layer Configuration
-hierarchy:
-  enabled: true
-  layers: ["m1"]
-  processing_timeout: 30.0
-
-# Service Configuration - SIMPLIFIED
-services:
-  database_queue:
-    enabled: false              # DISABLE DATABASE QUEUE MANAGER
-  connection_monitoring:
-    enabled: false              # DISABLE COMPLEX MONITORING
-  performance_monitoring:
-    enabled: false              # Reduce overhead
-
-# Embedding Configuration
-embedding:
-  model: "sentence-transformers/all-MiniLM-L6-v2"
-  dimensions: 384
-  
-# Memory Configuration
-memory:
-  enabled: true
-  
-# Retrieval Configuration
-retrieval:
-  enabled: true
-  use_rerank: false
-  rerank_strategy: "rrf"
+# All detailed configurations are loaded from subdirectories
+# This keeps the main config file clean and organized

@@ -91,7 +91,7 @@ class MemoryLayerImpl(MemoryLayer):
             # Get storage configuration from global config
             global_config = self.config_manager.get_config()
             memory_config = global_config.get("memory", {})
-            storage_config = memory_config.get("storage", {})
+            storage_config = global_config.get("storage", {})
 
             # Debug logging
             logger.info(f"MemoryLayerImpl: Global config keys: {list(global_config.keys())}")
