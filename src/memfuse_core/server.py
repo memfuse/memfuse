@@ -9,6 +9,7 @@ import os
 import signal
 import threading
 from typing import Optional, Any
+from pathlib import Path
 from fastapi import FastAPI
 from loguru import logger
 from omegaconf import DictConfig
@@ -390,7 +391,19 @@ async def create_app_async() -> FastAPI:
 # Entry Point
 # ============================================================================
 
-@hydra.main(version_base=None, config_path="../../config", config_name="config")
+def get_config_path():
+    """Dynamically determine the config path."""
+    # Try to find config directory relative to this file
+    current_file = Path(__file__)
+    config_path = current_file.parent.parent.parent / "config"
+
+    if config_path.exists():
+        return str(config_path)
+
+    # Fallback: try relative path
+    return "../../config"
+
+@hydra.main(version_base=None, config_path=get_config_path(), config_name="config")
 def main(cfg: DictConfig) -> None:
     """Entry point for the memfuse-core command.
 

@@ -45,7 +45,7 @@ pgai:
   batch_size: 100
 
   # Immediate trigger configuration
-  immediate_trigger: true          # Enable immediate trigger mechanism
+  immediate_trigger: false         # Disable immediate trigger mechanism
   use_polling_fallback: false      # Whether to keep polling as backup
 
   # Retry mechanism configuration

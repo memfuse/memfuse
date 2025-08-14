@@ -162,7 +162,15 @@ class ServiceFactory:
 
         # Create a new MemoryService instance for this user
         logger.info(f"Creating new MemoryService instance for user {user}")
-        memory_service = MemoryService(cfg=cfg, user=user)
+
+        # SIMPLIFIED MEMORY SERVICE: Use SimplifiedMemoryService instead of complex MemoryService
+        try:
+            from .simplified_memory_service import SimplifiedMemoryService
+            logger.info(f"Using SimplifiedMemoryService for user {user}")
+            memory_service = SimplifiedMemoryService(cfg=cfg, user=user)
+        except ImportError:
+            logger.warning(f"SimplifiedMemoryService not available, falling back to MemoryService for user {user}")
+            memory_service = MemoryService(cfg=cfg, user=user)
 
         # Store the instance for future use
         cls._memory_service_instances[user] = memory_service

@@ -41,8 +41,8 @@ pgai:
   auto_embedding: true
   auto_initialize: true
 
-  # Event-driven configuration (enable real-time trigger mode)
-  immediate_trigger: true
+  # Event-driven configuration (disable real-time trigger mode)
+  immediate_trigger: false
   
   # Embedding configuration (unified across all layers)
   embedding:
@@ -155,7 +155,7 @@ memory_layers:
     # PgAI-specific settings for M0
     pgai:
       auto_embedding: true
-      immediate_trigger: true
+      immediate_trigger: false
       
     # Processing pipeline configuration
     processing_pipeline: ["storage"]  # M0 only does storage
@@ -180,7 +180,7 @@ memory_layers:
     # PgAI-specific settings for M1
     pgai:
       auto_embedding: true
-      immediate_trigger: true
+      immediate_trigger: false
       
     # Processing pipeline configuration
     processing_pipeline: ["episode_formation", "storage"]  # M1 forms episodes then storage
@@ -232,7 +232,7 @@ memory_layers:
     # PgAI-specific settings for M2
     pgai:
       auto_embedding: true
-      immediate_trigger: true
+      immediate_trigger: false
 
     # Processing pipeline configuration
     processing_pipeline: ["fact_extraction", "storage"]  # M2 extracts facts then storage
@@ -289,7 +289,7 @@ memory_layers:
     # PgAI-specific settings for M3
     pgai:
       auto_embedding: true
-      immediate_trigger: true
+      immediate_trigger: false
       embedding_model: "all-MiniLM-L6-v2"
       embedding_dimensions: 384
 
@@ -346,7 +346,7 @@ memory_layers:
     # PgAI-specific settings for MSMG
     pgai:
       auto_embedding: true
-      immediate_trigger: true
+      immediate_trigger: false
       embedding_model: "all-MiniLM-L6-v2"
       embedding_dimensions: 384
 
@@ -422,7 +422,7 @@ development:
   pgai:
     vectorizer_worker_enabled: true   # Enable worker in dev
     auto_embedding: true              # Enable auto embedding in dev
-    immediate_trigger: true           # Enable immediate trigger
+    immediate_trigger: false          # Disable immediate trigger
   database:
     pool_size: 5                      # Smaller pool for dev
   performance:
