@@ -37,8 +37,8 @@ database:
 pgai:
   # Core pgai features
   enabled: true
-  vectorizer_worker_enabled: true
-  auto_embedding: true
+  vectorizer_worker_enabled: false
+  auto_embedding: false
   auto_initialize: true
 
   # Event-driven configuration (disable real-time trigger mode)
@@ -151,10 +151,10 @@ memory_layers:
     enabled: true
     priority: 1
     table_name: "m0_raw"
-    
-    # PgAI-specific settings for M0
+
+    # PgAI-specific settings for M0 (NO EMBEDDING - SimplifiedMemoryService handles M1 directly)
     pgai:
-      auto_embedding: true
+      auto_embedding: false
       immediate_trigger: false
       
     # Processing pipeline configuration
@@ -176,10 +176,10 @@ memory_layers:
     enabled: true
     priority: 2
     table_name: "m1_episodic"
-    
+
     # PgAI-specific settings for M1
     pgai:
-      auto_embedding: true
+      auto_embedding: false
       immediate_trigger: false
       
     # Processing pipeline configuration

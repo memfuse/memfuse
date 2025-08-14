@@ -252,40 +252,26 @@ class PostgresDB(DBBase):
         )
         ''')
 
-        # Create M1 episodic memory table
-        await self.execute('''
-        CREATE TABLE IF NOT EXISTS m1_episodic (
-            id TEXT PRIMARY KEY,
-            source_id TEXT,
-            source_session_id TEXT,
-            source_user_id TEXT,
-            episode_content TEXT NOT NULL,
-            episode_type TEXT,
-            episode_category JSONB DEFAULT '{}'::jsonb,
-            confidence FLOAT NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
-            entities JSONB DEFAULT '[]'::jsonb,
-            temporal_info JSONB DEFAULT '{}'::jsonb,
-            source_context TEXT,
-            metadata JSONB DEFAULT '{}'::jsonb,
-            embedding VECTOR(384),
-            needs_embedding BOOLEAN DEFAULT TRUE,
-            retry_count INTEGER DEFAULT 0,
-            last_retry_at TIMESTAMP,
-            retry_status TEXT DEFAULT 'pending' CHECK (retry_status IN ('pending', 'processing', 'completed', 'failed')),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        ''')
-
-        # Create indexes for M1 episodic table
-        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_source_id ON m1_episodic (source_id)')
-        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_source_session ON m1_episodic (source_session_id)')
-        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_source_user ON m1_episodic (source_user_id)')
-        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_episode_type ON m1_episodic (episode_type) WHERE episode_type IS NOT NULL')
-        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_needs_embedding ON m1_episodic (needs_embedding) WHERE needs_embedding = TRUE')
-        await self.execute('CREATE INDEX IF NOT EXISTS idx_m1_created_at ON m1_episodic (created_at)')
+        # Initialize MemFuse memory layer tables using SchemaManager
+        await self._initialize_memory_layer_tables()
 
         # Commit is handled automatically in execute method
+
+    async def _initialize_memory_layer_tables(self):
+        """Initialize memory layer tables using SchemaManager."""
+        from memfuse_core.models.schema.manager import SchemaManager
+
+        schema_manager = SchemaManager()
+
+        # Create M0 raw table
+        m0_schema = schema_manager.get_schema('m0_raw')
+        await self.execute(m0_schema.generate_create_table_sql())
+
+        # Create M1 episodic table
+        m1_schema = schema_manager.get_schema('m1_episodic')
+        await self.execute(m1_schema.generate_create_table_sql())
+
+        logger.info("PostgresDB: Memory layer tables initialized using SchemaManager")
 
     async def add(self, table: str, data: Dict[str, Any]) -> str:
         """Add data to a table.
@@ -313,7 +299,11 @@ class PostgresDB(DBBase):
         # Execute the query
         await self.execute(query, tuple(processed_data.values()))
 
-        return data.get('id')
+        # Return the appropriate ID field based on table schema
+        if table == 'm0_raw':
+            return data.get('message_id')
+        else:
+            return data.get('id')
 
     async def select(self, table: str, conditions: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Select data from a table.
@@ -478,8 +468,11 @@ class PostgresDB(DBBase):
                 logger.error(f"PostgresDB: Batch add timed out for {len(processed_data_list)} records to {table}")
                 raise
 
-            # Return the IDs
-            return [data.get('id', '') for data in processed_data_list]
+            # Return the IDs based on table schema
+            if table == 'm0_raw':
+                return [data.get('message_id', '') for data in processed_data_list]
+            else:
+                return [data.get('id', '') for data in processed_data_list]
 
         return []
 

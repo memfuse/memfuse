@@ -26,7 +26,7 @@ CREATE OR REPLACE FUNCTION notify_embedding_needed_m0_raw()
 RETURNS TRIGGER AS \$\$
 BEGIN
     -- Send notification with record ID for immediate processing
-    PERFORM pg_notify('embedding_needed_m0_raw', NEW.id);
+    PERFORM pg_notify('embedding_needed_m0_raw', NEW.message_id::text);
     RETURN NEW;
 END;
 \$\$ LANGUAGE plpgsql;

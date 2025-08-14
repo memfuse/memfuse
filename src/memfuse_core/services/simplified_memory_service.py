@@ -24,7 +24,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from sentence_transformers import SentenceTransformer
 
-from ..interfaces import MessageInterface, MessageBatchList
+from ..interfaces import MessageInterface
+from ..interfaces.message_interface import MessageBatchList
 
 
 class SimplifiedDatabaseManager:
@@ -394,33 +395,41 @@ class SimplifiedMemoryService(MessageInterface):
         try:
             if not message_batch_list:
                 return self._success_response([], "No message lists to process")
-            
+
             logger.info(f"SimplifiedMemoryService: Processing {len(message_batch_list)} message lists")
-            
+
             # Flatten message batch list
             all_messages = []
             for message_list in message_batch_list:
                 all_messages.extend(message_list)
-            
+
             if not all_messages:
                 return self._success_response([], "No messages to process")
-            
-            # Step 1: Store M0 messages
+
+            # Step 1: Create session and round (like traditional MemoryService)
+            session_id, round_id = await self._prepare_session_and_round(message_batch_list)
+            logger.info(f"SimplifiedMemoryService: Prepared session_id={session_id}, round_id={round_id}")
+
+            # Step 2: Store to messages and rounds tables (for compatibility)
+            await self._store_to_messages_rounds_tables(all_messages, session_id, round_id)
+            logger.info(f"✅ Stored {len(all_messages)} messages to messages/rounds tables")
+
+            # Step 3: Store M0 messages
             message_ids = await self._store_m0_messages(all_messages)
             logger.info(f"✅ Stored {len(message_ids)} M0 messages")
-            
-            # Step 2: Create and store M1 chunks
+
+            # Step 4: Create and store M1 chunks
             chunks = self.chunk_processor.create_chunks(all_messages)
             chunk_ids = await self._store_m1_chunks(chunks)
             logger.info(f"✅ Stored {len(chunk_ids)} M1 chunks")
-            
+
             response = self._success_response(
                 {"message_ids": message_ids, "chunk_count": len(chunks)},
                 f"Processed {len(all_messages)} messages into {len(chunks)} chunks"
             )
             logger.debug(f"SimplifiedMemoryService: Returning response: {response}")
             return response
-            
+
         except Exception as e:
             logger.error(f"SimplifiedMemoryService: Error in add_batch: {e}")
             return self._error_response(f"Error processing message batch: {str(e)}")
@@ -492,6 +501,77 @@ class SimplifiedMemoryService(MessageInterface):
             raise
 
         return message_ids
+
+    async def _prepare_session_and_round(self, message_batch_list: MessageBatchList) -> tuple[str, str]:
+        """Prepare session and round IDs from message batch list."""
+        import uuid
+
+        # Extract session_id from first message if available
+        session_id = None
+        for message_list in message_batch_list:
+            for message in message_list:
+                metadata = message.get('metadata', {})
+                if 'session_id' in metadata:
+                    session_id = metadata['session_id']
+                    break
+                # Also check conversation_id as fallback
+                if 'conversation_id' in metadata:
+                    session_id = metadata['conversation_id']
+                    break
+            if session_id:
+                break
+
+        # Generate session_id if not found
+        if not session_id:
+            session_id = str(uuid.uuid4())
+
+        # Generate round_id
+        round_id = str(uuid.uuid4())
+
+        return session_id, round_id
+
+    async def _store_to_messages_rounds_tables(self, messages: List[Dict[str, Any]], session_id: str, round_id: str) -> None:
+        """Store messages to messages and rounds tables for compatibility."""
+        try:
+            # Create the round first
+            with self.db_manager.conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO rounds (id, session_id, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, (round_id, session_id, datetime.now(), datetime.now()))
+
+            # Store messages to messages table
+            with self.db_manager.conn.cursor() as cur:
+                insert_query = """
+                    INSERT INTO messages (id, round_id, role, content, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """
+
+                for message in messages:
+                    message_id = message.get('id') or message.get('message_id') or str(uuid.uuid4())
+                    role = message.get('role', 'user')
+                    content = message.get('content', '')
+                    created_at = message.get('created_at', datetime.now())
+                    if isinstance(created_at, (int, float)):
+                        created_at = datetime.fromtimestamp(created_at)
+
+                    cur.execute(insert_query, (
+                        message_id,
+                        round_id,
+                        role,
+                        content,
+                        created_at,
+                        datetime.now()
+                    ))
+
+            self.db_manager.conn.commit()
+
+        except Exception as e:
+            logger.error(f"Error storing to messages/rounds tables: {e}")
+            self.db_manager.conn.rollback()
+            raise
 
     async def _store_m1_chunks(self, chunks: List[Dict[str, Any]]) -> List[str]:
         """Store M1 chunks with embeddings to database."""

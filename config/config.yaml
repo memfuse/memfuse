@@ -10,7 +10,7 @@ data_dir: "data"
 # Configuration composition using Hydra defaults
 defaults:
   - database: default
-  - store: default
+  - store: pgai
   - embedding: default
   - memory: default
   - retrieval: default

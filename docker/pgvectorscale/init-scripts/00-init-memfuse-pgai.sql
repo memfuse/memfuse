@@ -6,10 +6,9 @@
 -- SECTION 1: Extensions and Configuration
 -- =============================================================================
 
--- Enable TimescaleDB extension
+-- Enable required extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS timescaledb;
-
--- Enable pgvector extension for vector operations
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Enable pgvectorscale for enhanced vector performance (if available)
@@ -44,21 +43,40 @@ SELECT pg_reload_conf();
 ALTER DATABASE memfuse SET search_path TO public, timescaledb_information;
 
 -- =============================================================================
--- SECTION 2: M0 Raw Data Memory Schema
+-- SECTION 2: M0 Raw Data Memory Schema (Simplified Demo-Compatible)
 -- =============================================================================
 
--- Create the M0 raw data memory table with immediate trigger support
+-- Create the M0 raw data memory table matching demo schema
 CREATE TABLE IF NOT EXISTS m0_raw (
-    id TEXT PRIMARY KEY,
+    -- Primary identification
+    message_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+
+    -- Content and metadata
     content TEXT NOT NULL,
-    metadata JSONB DEFAULT '{}',
-    embedding VECTOR(384),  -- 384-dimensional vectors for all-MiniLM-L6-v2
-    needs_embedding BOOLEAN DEFAULT TRUE,
-    retry_count INTEGER DEFAULT 0,
-    last_retry_at TIMESTAMP,
-    retry_status TEXT DEFAULT 'pending',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+
+    -- Streaming context
+    conversation_id UUID NOT NULL,
+    sequence_number INTEGER NOT NULL,
+
+    -- Token analysis for chunking decisions
+    token_count INTEGER NOT NULL DEFAULT 0,
+
+    -- Temporal tracking
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMP WITH TIME ZONE,
+
+    -- Processing status
+    processing_status VARCHAR(20) DEFAULT 'pending'
+        CHECK (processing_status IN ('pending', 'processing', 'completed', 'failed')),
+
+    -- Lineage tracking
+    chunk_assignments UUID[] DEFAULT '{}',
+
+    -- Performance optimization
+    CONSTRAINT unique_conversation_sequence
+        UNIQUE (conversation_id, sequence_number)
 );
 
 -- Create function to update updated_at timestamp for M0
@@ -78,43 +96,46 @@ CREATE TRIGGER m0_raw_updated_at_trigger
     EXECUTE FUNCTION update_m0_raw_updated_at();
 
 -- =============================================================================
--- SECTION 3: M1 Episodic Memory Schema
+-- SECTION 3: M1 Episodic Memory Schema (Simplified Demo-Compatible)
 -- =============================================================================
 
--- Create the M1 episodic memory table with immediate trigger support
+-- Create the M1 episodic memory table matching demo schema
 CREATE TABLE IF NOT EXISTS m1_episodic (
     -- Primary identification
-    id TEXT PRIMARY KEY,
+    chunk_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 
-    -- Source tracking (links back to M0 raw data)
-    source_id TEXT,  -- References m0_raw.id
-    source_session_id TEXT,  -- Session context for episode
-    source_user_id TEXT,  -- User context for episode
+    -- Chunked content
+    content TEXT NOT NULL,
 
-    -- Episode content and metadata
-    episode_content TEXT NOT NULL,
-    episode_type TEXT,  -- Open-ended episode type, no constraints for extensibility
-    episode_category JSONB DEFAULT '{}'::jsonb,  -- Flexible categorization system
-    confidence FLOAT NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+    -- Chunking strategy metadata
+    chunking_strategy VARCHAR(50) NOT NULL DEFAULT 'token_based'
+        CHECK (chunking_strategy IN ('token_based', 'semantic', 'conversation_turn', 'hybrid')),
 
-    -- Structured episode data
-    entities JSONB DEFAULT '[]'::jsonb,  -- Extracted entities from episode
-    temporal_info JSONB DEFAULT '{}'::jsonb,  -- Temporal information (dates, times, etc.)
-    source_context TEXT,  -- Brief context about where episode came from
+    -- Token analysis
+    token_count INTEGER NOT NULL DEFAULT 0,
 
-    -- General metadata
-    metadata JSONB DEFAULT '{}'::jsonb,
+    -- Vector embedding (384 dimensions for sentence-transformers/all-MiniLM-L6-v2)
+    embedding vector(384),
 
-    -- PgAI embedding infrastructure (identical to M0)
-    embedding VECTOR(384),  -- 384-dimensional embedding vector
-    needs_embedding BOOLEAN DEFAULT TRUE,  -- Flag for automatic embedding generation
-    retry_count INTEGER DEFAULT 0,  -- Number of embedding retry attempts
-    last_retry_at TIMESTAMP,  -- Timestamp of last retry attempt
-    retry_status TEXT DEFAULT 'pending' CHECK (retry_status IN ('pending', 'processing', 'completed', 'failed')),
+    -- Embedding processing status
+    needs_embedding BOOLEAN DEFAULT TRUE,
 
-    -- Audit timestamps
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    -- M0 lineage tracking
+    m0_message_ids UUID[] NOT NULL DEFAULT '{}',
+    conversation_id UUID NOT NULL,
+
+    -- Temporal tracking
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    embedding_generated_at TIMESTAMP WITH TIME ZONE,
+
+    -- Quality metrics
+    embedding_model VARCHAR(100) DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
+    chunk_quality_score FLOAT DEFAULT 0.0,
+
+    -- Constraints (removed embedding NOT NULL constraint to support async processing)
+    CONSTRAINT m1_chunks_m0_lineage_not_empty
+        CHECK (array_length(m0_message_ids, 1) > 0)
 );
 
 -- Create function to update updated_at timestamp for M1
@@ -137,357 +158,246 @@ CREATE TRIGGER m1_episodic_updated_at_trigger
 -- SECTION 4: Optimized Indexes
 -- =============================================================================
 
--- M0 Raw Data Indexes
--- Index for auto-embedding queries (partial index for efficiency)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m0_raw_needs_embedding
-ON m0_raw (needs_embedding)
-WHERE needs_embedding = TRUE;
+-- M0 Raw Data Indexes (Demo-Compatible)
+-- Indexes for M0 layer performance
+CREATE INDEX IF NOT EXISTS idx_m0_conversation_sequence
+    ON m0_raw (conversation_id, sequence_number);
 
--- Index for retry status queries
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m0_raw_retry_status
-ON m0_raw (retry_status);
+CREATE INDEX IF NOT EXISTS idx_m0_processing_status
+    ON m0_raw (processing_status)
+    WHERE processing_status != 'completed';
 
--- Index for retry count queries
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m0_raw_retry_count
-ON m0_raw (retry_count);
+CREATE INDEX IF NOT EXISTS idx_m0_created_at
+    ON m0_raw (created_at DESC);
 
--- Time-based indexes for performance
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m0_raw_created_at
-ON m0_raw (created_at);
+CREATE INDEX IF NOT EXISTS idx_m0_role
+    ON m0_raw (role);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m0_raw_updated_at
-ON m0_raw (updated_at);
+CREATE INDEX IF NOT EXISTS idx_m0_token_count
+    ON m0_raw (token_count);
 
--- JSONB metadata index for fast metadata queries
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m0_raw_metadata_gin
-ON m0_raw USING GIN (metadata);
+-- GIN index for chunk assignments (lineage queries)
+CREATE INDEX IF NOT EXISTS idx_m0_chunk_assignments_gin
+    ON m0_raw USING gin (chunk_assignments);
 
--- M1 Episodic Memory Indexes
--- Source tracking indexes
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_source_id
-ON m1_episodic (source_id);
+-- M1 Episodic Memory Indexes (Demo-Compatible)
+-- Additional indexes for M1 layer performance
+CREATE INDEX IF NOT EXISTS idx_m1_conversation_id
+    ON m1_episodic (conversation_id);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_source_session
-ON m1_episodic (source_session_id);
+CREATE INDEX IF NOT EXISTS idx_m1_chunking_strategy
+    ON m1_episodic (chunking_strategy);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_source_user
-ON m1_episodic (source_user_id);
+CREATE INDEX IF NOT EXISTS idx_m1_created_at
+    ON m1_episodic (created_at DESC);
 
--- Auto-embedding query optimization
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_needs_embedding
-ON m1_episodic (needs_embedding)
-WHERE needs_embedding = TRUE;
+CREATE INDEX IF NOT EXISTS idx_m1_token_count
+    ON m1_episodic (token_count);
 
--- Episode type and confidence indexes
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_type
-ON m1_episodic (episode_type);
+CREATE INDEX IF NOT EXISTS idx_m1_chunk_quality_score
+    ON m1_episodic (chunk_quality_score);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_confidence
-ON m1_episodic (confidence);
+-- Index for embedding processing status
+CREATE INDEX IF NOT EXISTS idx_m1_needs_embedding
+    ON m1_episodic (needs_embedding)
+    WHERE needs_embedding = TRUE;
 
--- Retry management indexes
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_retry_status
-ON m1_episodic (retry_status);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_retry_count
-ON m1_episodic (retry_count);
-
--- Temporal indexes
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_created_at
-ON m1_episodic (created_at);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_updated_at
-ON m1_episodic (updated_at);
-
--- JSONB indexes for structured data
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_entities_gin
-ON m1_episodic USING GIN (entities);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_temporal_gin
-ON m1_episodic USING GIN (temporal_info);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_metadata_gin
-ON m1_episodic USING GIN (metadata);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_category_gin
-ON m1_episodic USING GIN (episode_category);
+-- GIN index for M0 message ID arrays (lineage queries)
+CREATE INDEX IF NOT EXISTS idx_m1_m0_message_ids_gin
+    ON m1_episodic USING gin (m0_message_ids);
 
 -- =============================================================================
--- SECTION 5: Vector Similarity Search Indexes
+-- SECTION 5: High-Performance Vector Indexes
 -- =============================================================================
 
--- M0 Raw Data Vector similarity search index - try pgvectorscale first, fallback to standard
+-- StreamingDiskANN index for optimal vector similarity search on M1 layer
+-- Features:
+-- - memory_optimized storage layout with SBQ compression
+-- - 75% memory reduction compared to standard HNSW
+-- - 2-5x faster query performance
+-- - Incremental updates for streaming data
+
+-- Try to create StreamingDiskANN index if vectorscale is available, fallback to HNSW
 DO $$
 BEGIN
-    -- Try to create diskann index if vectorscale is available
+    -- Try to create StreamingDiskANN index
     IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vectorscale') THEN
         BEGIN
-            EXECUTE 'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m0_raw_embedding_vectorscale
-                     ON m0_raw USING diskann (embedding vector_cosine_ops)';
-            RAISE NOTICE 'Created M0 pgvectorscale diskann index for optimal performance';
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_m1_embedding_diskann
+                ON m1_episodic
+                USING diskann (embedding vector_cosine_ops)
+                WITH (
+                    storage_layout = ''memory_optimized'',
+                    num_neighbors = 50,
+                    search_list_size = 100,
+                    max_alpha = 1.2,
+                    num_dimensions = 384,
+                    num_bits_per_dimension = 2
+                )';
+            RAISE NOTICE 'StreamingDiskANN index created successfully';
         EXCEPTION WHEN OTHERS THEN
-            RAISE NOTICE 'M0 diskann index creation failed, falling back to HNSW: %', SQLERRM;
-            EXECUTE 'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m0_raw_embedding_hnsw
-                     ON m0_raw USING hnsw (embedding vector_cosine_ops)';
+            RAISE NOTICE 'StreamingDiskANN index creation failed, falling back to HNSW: %', SQLERRM;
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_m1_embedding_hnsw
+                ON m1_episodic
+                USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64)';
         END;
     ELSE
         -- Create standard HNSW index
-        EXECUTE 'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m0_raw_embedding_hnsw
-                 ON m0_raw USING hnsw (embedding vector_cosine_ops)';
-        RAISE NOTICE 'Created M0 standard HNSW index for vector similarity search';
+        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_m1_embedding_hnsw
+            ON m1_episodic
+            USING hnsw (embedding vector_cosine_ops)
+            WITH (m = 16, ef_construction = 64)';
+        RAISE NOTICE 'Standard HNSW index created (vectorscale not available)';
     END IF;
-EXCEPTION WHEN OTHERS THEN
-    RAISE NOTICE 'M0 Vector index creation failed, will use sequential scan: %', SQLERRM;
-END $$;
-
--- M1 Episodic Memory Vector similarity search index
-DO $$
-BEGIN
-    -- Try to create diskann index if vectorscale is available
-    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vectorscale') THEN
-        BEGIN
-            EXECUTE 'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_embedding_vectorscale
-                     ON m1_episodic USING diskann (embedding vector_cosine_ops)';
-            RAISE NOTICE 'Created M1 pgvectorscale diskann index for optimal performance';
-        EXCEPTION WHEN OTHERS THEN
-            RAISE NOTICE 'M1 diskann index creation failed, falling back to HNSW: %', SQLERRM;
-            EXECUTE 'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_embedding_hnsw
-                     ON m1_episodic USING hnsw (embedding vector_cosine_ops)';
-        END;
-    ELSE
-        -- Create standard HNSW index
-        EXECUTE 'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_m1_episodic_embedding_hnsw
-                 ON m1_episodic USING hnsw (embedding vector_cosine_ops)';
-        RAISE NOTICE 'Created M1 standard HNSW index for vector similarity search';
-    END IF;
-EXCEPTION WHEN OTHERS THEN
-    RAISE NOTICE 'M1 Vector index creation failed, will use sequential scan: %', SQLERRM;
 END $$;
 
 -- =============================================================================
--- SECTION 6: Immediate Trigger System
+-- SECTION 6: Utility Functions (Demo-Compatible)
 -- =============================================================================
 
--- Create notification function for M0 immediate trigger system
-CREATE OR REPLACE FUNCTION notify_m0_embedding_needed()
-RETURNS TRIGGER AS $$
+-- Function to normalize similarity scores to 0-1 range
+-- Converts cosine distance (0-2) to similarity score (0-1)
+-- where 1 = identical, 0 = completely different
+CREATE OR REPLACE FUNCTION normalize_cosine_similarity(distance FLOAT)
+RETURNS FLOAT AS $$
 BEGIN
-    -- Only notify if needs_embedding is TRUE
-    IF NEW.needs_embedding = TRUE THEN
-        PERFORM pg_notify('m0_embedding_needed', NEW.id::text);
-    END IF;
-    RETURN NEW;
+    -- Cosine distance range: [0, 2]
+    -- Convert to similarity: similarity = 1 - (distance / 2)
+    -- Result range: [0, 1] where 1 = identical, 0 = opposite
+    RETURN GREATEST(0.0, LEAST(1.0, 1.0 - (distance / 2.0)));
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql IMMUTABLE;
 
--- Create trigger for M0 immediate embedding notifications
-DROP TRIGGER IF EXISTS m0_raw_embedding_trigger ON m0_raw;
-CREATE TRIGGER m0_raw_embedding_trigger
-    AFTER INSERT OR UPDATE OF needs_embedding ON m0_raw
-    FOR EACH ROW
-    EXECUTE FUNCTION notify_m0_embedding_needed();
-
--- Create notification function for M1 immediate trigger system
-CREATE OR REPLACE FUNCTION notify_m1_embedding_needed()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Only notify if needs_embedding is TRUE
-    IF NEW.needs_embedding = TRUE THEN
-        PERFORM pg_notify('m1_embedding_needed', NEW.id::text);
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create trigger for M1 immediate embedding notifications
-DROP TRIGGER IF EXISTS m1_episodic_embedding_trigger ON m1_episodic;
-CREATE TRIGGER m1_episodic_embedding_trigger
-    AFTER INSERT OR UPDATE OF needs_embedding ON m1_episodic
-    FOR EACH ROW
-    EXECUTE FUNCTION notify_m1_embedding_needed();
-
--- =============================================================================
--- SECTION 7: Monitoring and Utility Functions
--- =============================================================================
-
--- Create function to get trigger system status for all layers
-CREATE OR REPLACE FUNCTION get_trigger_system_status()
-RETURNS TABLE(
-    trigger_name TEXT,
-    table_name TEXT,
-    status TEXT,
-    function_exists BOOLEAN
+-- Function for high-performance vector similarity search with normalized scores
+CREATE OR REPLACE FUNCTION search_similar_chunks(
+    query_embedding vector(384),
+    similarity_threshold FLOAT DEFAULT 0.1,
+    max_results INTEGER DEFAULT 10
+)
+RETURNS TABLE (
+    chunk_id UUID,
+    content TEXT,
+    similarity_score FLOAT,
+    distance FLOAT,
+    m0_message_count INTEGER,
+    chunking_strategy VARCHAR(50),
+    created_at TIMESTAMP WITH TIME ZONE
 ) AS $$
 BEGIN
     RETURN QUERY
     SELECT
-        t.tgname::TEXT as trigger_name,
-        c.relname::TEXT as table_name,
-        CASE WHEN t.tgenabled = 'O' THEN 'enabled' ELSE 'disabled' END as status,
-        EXISTS(SELECT 1 FROM pg_proc WHERE proname LIKE 'notify_%_embedding_needed') as function_exists
-    FROM pg_trigger t
-    JOIN pg_class c ON t.tgrelid = c.oid
-    WHERE c.relname IN ('m0_raw', 'm1_episodic')
-    AND t.tgname LIKE '%_embedding_trigger';
+        c.chunk_id,
+        c.content,
+        normalize_cosine_similarity(c.embedding <=> query_embedding) as similarity_score,
+        (c.embedding <=> query_embedding) as distance,
+        array_length(c.m0_message_ids, 1) as m0_message_count,
+        c.chunking_strategy,
+        c.created_at
+    FROM m1_episodic c
+    WHERE normalize_cosine_similarity(c.embedding <=> query_embedding) >= similarity_threshold
+    ORDER BY c.embedding <=> query_embedding ASC
+    LIMIT max_results;
 END;
 $$ LANGUAGE plpgsql;
 
--- Set up automatic statistics collection for vector columns
-ALTER TABLE m0_raw ALTER COLUMN embedding SET STATISTICS 1000;
-ALTER TABLE m1_episodic ALTER COLUMN embedding SET STATISTICS 1000;
-
--- Create a view for easy vector statistics monitoring across all memory layers
-CREATE OR REPLACE VIEW vector_stats AS
-WITH layer_stats AS (
-    -- M0 Raw Data Layer
+-- Function to get data lineage statistics
+CREATE OR REPLACE FUNCTION get_data_lineage_stats()
+RETURNS TABLE (
+    layer VARCHAR(20),
+    record_count BIGINT,
+    table_size TEXT
+) AS $$
+BEGIN
+    RETURN QUERY
     SELECT
-        'm0_raw' as table_name,
-        COUNT(*) as total_rows,
-        COUNT(embedding) as rows_with_embeddings,
-        COUNT(*) - COUNT(embedding) as rows_without_embeddings,
-        CASE
-            WHEN COUNT(*) > 0 THEN ROUND((COUNT(embedding)::float / COUNT(*)::float) * 100, 2)
-            ELSE 0
-        END as embedding_completion_percentage,
+        'M0 Messages'::VARCHAR(20) as layer,
+        COUNT(*) as record_count,
         pg_size_pretty(pg_total_relation_size('m0_raw')) as table_size
     FROM m0_raw
-
     UNION ALL
-
-    -- M1 Episodic Memory Layer
     SELECT
-        'm1_episodic' as table_name,
-        COUNT(*) as total_rows,
-        COUNT(embedding) as rows_with_embeddings,
-        COUNT(*) - COUNT(embedding) as rows_without_embeddings,
-        CASE
-            WHEN COUNT(*) > 0 THEN ROUND((COUNT(embedding)::float / COUNT(*)::float) * 100, 2)
-            ELSE 0
-        END as embedding_completion_percentage,
+        'M1 Chunks'::VARCHAR(20) as layer,
+        COUNT(*) as record_count,
         pg_size_pretty(pg_total_relation_size('m1_episodic')) as table_size
     FROM m1_episodic
-)
-SELECT * FROM layer_stats;
-
--- =============================================================================
--- SECTION 8: Performance Testing Functions
--- =============================================================================
-
--- Create a function to test vector search performance across memory layers
-CREATE OR REPLACE FUNCTION test_vector_search_performance(
-    memory_layer TEXT DEFAULT 'm0_raw',
-    test_vector VECTOR(384) DEFAULT NULL,
-    test_limit INTEGER DEFAULT 10
-)
-RETURNS TABLE(
-    layer_name TEXT,
-    search_time_ms NUMERIC,
-    results_count INTEGER,
-    index_used BOOLEAN
-) AS $$
-DECLARE
-    start_time TIMESTAMP;
-    end_time TIMESTAMP;
-    search_time NUMERIC;
-    result_count INTEGER;
-    uses_index BOOLEAN;
-    table_name TEXT;
-BEGIN
-    -- Validate memory layer
-    IF memory_layer NOT IN ('m0_raw', 'm1_episodic') THEN
-        RAISE EXCEPTION 'Invalid memory layer: %. Must be m0_raw or m1_episodic', memory_layer;
-    END IF;
-
-    table_name := memory_layer;
-
-    -- Use a random vector if none provided
-    IF test_vector IS NULL THEN
-        EXECUTE format('
-            SELECT embedding
-            FROM %I
-            WHERE embedding IS NOT NULL
-            ORDER BY RANDOM()
-            LIMIT 1', table_name)
-        INTO test_vector;
-    END IF;
-
-    -- If still no vector, create a random one
-    IF test_vector IS NULL THEN
-        test_vector := ARRAY(SELECT random() FROM generate_series(1, 384))::VECTOR(384);
-    END IF;
-
-    -- Measure search performance
-    start_time := clock_timestamp();
-
-    EXECUTE format('
-        SELECT COUNT(*)
-        FROM (
-            SELECT id
-            FROM %I
-            WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> $1
-            LIMIT $2
-        ) subq', table_name)
-    INTO result_count
-    USING test_vector, test_limit;
-
-    end_time := clock_timestamp();
-    search_time := EXTRACT(EPOCH FROM (end_time - start_time)) * 1000;
-
-    -- Assume index is used for vector operations
-    uses_index := TRUE;
-
-    RETURN QUERY SELECT table_name, search_time, result_count, uses_index;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create maintenance function for vector indexes across all memory layers
-CREATE OR REPLACE FUNCTION maintain_vector_indexes()
-RETURNS TEXT AS $$
-DECLARE
-    result_text TEXT;
-BEGIN
-    -- Analyze all memory layer tables to update statistics
-    ANALYZE m0_raw;
-    ANALYZE m1_episodic;
-
-    result_text := 'Vector index maintenance completed for all memory layers. Statistics updated.';
-
-    RETURN result_text;
+    UNION ALL
+    SELECT
+        'M1 Embeddings'::VARCHAR(20) as layer,
+        COUNT(*) as record_count,
+        'N/A'::TEXT as table_size
+    FROM m1_episodic
+    WHERE embedding IS NOT NULL;
 END;
 $$ LANGUAGE plpgsql;
 
 -- =============================================================================
--- SECTION 9: Initialization Complete
+-- SECTION 7: Performance Monitoring Views
 -- =============================================================================
+
+-- View for monitoring vector index performance
+CREATE OR REPLACE VIEW vector_index_stats AS
+SELECT
+    schemaname,
+    tablename,
+    indexname,
+    CASE
+        WHEN indexdef LIKE '%diskann%' THEN 'StreamingDiskANN (pgvectorscale)'
+        WHEN indexdef LIKE '%hnsw%' THEN 'HNSW (pgvector)'
+        ELSE 'Other'
+    END as index_type,
+    indexdef
+FROM pg_indexes
+WHERE tablename IN ('m1_episodic')
+AND indexdef LIKE '%vector%';
+
+-- View for data lineage analysis
+CREATE OR REPLACE VIEW data_lineage_summary AS
+SELECT
+    COUNT(DISTINCT c.chunk_id) as total_chunks,
+    AVG(array_length(c.m0_message_ids, 1))::NUMERIC(10,4) as avg_m0_per_chunk,
+    MIN(array_length(c.m0_message_ids, 1)) as min_m0_per_chunk,
+    MAX(array_length(c.m0_message_ids, 1)) as max_m0_per_chunk,
+    (SELECT COUNT(*) FROM m0_raw) as total_m0_messages
+FROM m1_episodic c;
+
+-- =============================================================================
+-- SECTION 8: Initial Data Validation
+-- =============================================================================
+
+-- Verify extensions are properly loaded
+DO $$
+BEGIN
+    -- Check vector extension
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+        RAISE EXCEPTION 'vector extension is not installed';
+    END IF;
+
+    -- Check vectorscale extension (optional)
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vectorscale') THEN
+        RAISE NOTICE 'vectorscale extension is not installed, using standard pgvector';
+    ELSE
+        RAISE NOTICE 'vectorscale extension is available';
+    END IF;
+
+    RAISE NOTICE 'Required extensions are properly installed';
+END $$;
 
 -- Log successful initialization
-DO $$
-DECLARE
-    extensions_list TEXT;
-    vectorscale_available BOOLEAN;
-    m0_count INTEGER;
-    m1_count INTEGER;
-BEGIN
-    SELECT string_agg(extname, ', ') INTO extensions_list
-    FROM pg_extension
-    WHERE extname IN ('timescaledb', 'vector', 'vectorscale');
+INSERT INTO m0_raw (content, role, conversation_id, sequence_number, token_count, processing_status)
+VALUES (
+    'MemFuse pgvectorscale database initialized successfully with StreamingDiskANN support',
+    'system',
+    uuid_generate_v4(),
+    1,
+    12,
+    'completed'
+);
 
-    SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vectorscale') INTO vectorscale_available;
-
-    -- Count tables
-    SELECT COUNT(*) INTO m0_count FROM pg_tables WHERE tablename = 'm0_raw';
-    SELECT COUNT(*) INTO m1_count FROM pg_tables WHERE tablename = 'm1_episodic';
-
-    RAISE NOTICE '=============================================================================';
-    RAISE NOTICE 'MemFuse Multi-Layer Memory System initialization completed successfully';
-    RAISE NOTICE 'Extensions enabled: %', extensions_list;
-    RAISE NOTICE 'Memory layers initialized:';
-    RAISE NOTICE '  - M0 Raw Data Layer: m0_raw (384-dimensional vectors)';
-    RAISE NOTICE '  - M1 Episodic Memory Layer: m1_episodic (384-dimensional vectors)';
-    RAISE NOTICE 'Immediate trigger system: ENABLED for all layers';
-    RAISE NOTICE 'Vector index type: %', CASE WHEN vectorscale_available THEN 'pgvectorscale (diskann)' ELSE 'pgvector (hnsw)' END;
-    RAISE NOTICE 'Database optimized for vector operations';
-    RAISE NOTICE 'Tables created: M0=%s, M1=%s', CASE WHEN m0_count > 0 THEN 'YES' ELSE 'NO' END, CASE WHEN m1_count > 0 THEN 'YES' ELSE 'NO' END;
-    RAISE NOTICE '=============================================================================';
-END $$;
+-- Display initialization summary
+SELECT
+    'MemFuse pgvectorscale Database Initialized' as status,
+    CURRENT_TIMESTAMP as initialized_at,
+    version() as postgresql_version,
+    (SELECT extversion FROM pg_extension WHERE extname = 'vector') as vector_version,
+    (SELECT extversion FROM pg_extension WHERE extname = 'vectorscale') as vectorscale_version;

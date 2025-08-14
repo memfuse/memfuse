@@ -898,7 +898,7 @@ class Database:
                         if metadata.get('session_id') == session_id:
                             # Convert m0_raw format to standard message format
                             formatted_message = {
-                                'id': message['id'],
+                                'id': message['message_id'],  # Use message_id as the primary key
                                 'role': metadata.get('role', 'user'),  # Default to 'user' if no role
                                 'content': message['content'],
                                 'created_at': self._convert_timestamp(message.get('created_at')),
