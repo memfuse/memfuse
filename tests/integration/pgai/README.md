@@ -133,10 +133,10 @@ Streaming Data → M0 Messages → M1 Chunks → Vector Search
 
 ### Database Configuration
 - **Host**: localhost
-- **Port**: 5434
+- **Port**: 5432
 - **Database**: memfuse
 - **User**: postgres
-- **Password**: memfuse_secure_password
+- **Password**: postgres
 
 ### Vector Configuration
 - **Embedding Model**: sentence-transformers/all-MiniLM-L6-v2
@@ -147,10 +147,10 @@ Streaming Data → M0 Messages → M1 Chunks → Vector Search
 ### Environment Variables
 ```bash
 export PGVECTORSCALE_HOST="localhost"
-export PGVECTORSCALE_PORT="5434"
+export PGVECTORSCALE_PORT="5432"
 export PGVECTORSCALE_DB="memfuse"
 export PGVECTORSCALE_USER="postgres"
-export PGVECTORSCALE_PASSWORD="memfuse_secure_password"
+export PGVECTORSCALE_PASSWORD="postgres"
 ```
 
 ## Expected Output
@@ -200,10 +200,10 @@ Query: 'Python machine learning algorithms'
    # Or start Docker Desktop on macOS/Windows
    ```
 
-2. **Port 5434 already in use**:
+2. **Port 5432 already in use**:
    ```bash
    # Check what's using the port
-   lsof -i :5434
+   lsof -i :5432
    # Kill the process or change the port in docker-compose.yml
    ```
 
@@ -220,7 +220,7 @@ Query: 'Python machine learning algorithms'
    # Check container status
    docker ps
    # Check logs
-   docker logs memfuse-pgvectorscale-e2e
+   docker logs pgvectorscale-e2e
    ```
 
 ### Performance Tuning
@@ -248,12 +248,12 @@ Query: 'Python machine learning algorithms'
 
 2. **Run Python demo only**:
    ```bash
-   python3 pgvectorscale_e2e_demo.py
+   poetry run python pgvectorscale_e2e_demo.py
    ```
 
 3. **Connect to database**:
    ```bash
-   docker exec -it memfuse-pgvectorscale-e2e psql -U postgres -d memfuse
+   docker exec -it pgvectorscale-e2e psql -U postgres -d memfuse
    ```
 
 ### Testing Custom Queries

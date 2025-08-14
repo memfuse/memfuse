@@ -17,17 +17,20 @@
 #   docker-compose -f tests/integration/pgai/docker-compose.pgvectorscale.yml up -d
 #   docker-compose -f tests/integration/pgai/docker-compose.pgvectorscale.yml down -v
 
+# Set the project name for Docker Desktop display
+name: memfuse-pgai
+
 services:
   postgres-pgvectorscale:
     # Use TimescaleDB HA pg17 image which supports pgvectorscale installation
     image: timescale/timescaledb-ha:pg17
-    container_name: memfuse-pgvectorscale-e2e
+    container_name: pgvectorscale-e2e
     
     environment:
       # Database configuration
       POSTGRES_DB: memfuse
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: memfuse_secure_password
+      POSTGRES_PASSWORD: postgres
       
       # TimescaleDB configuration
       TIMESCALEDB_TELEMETRY: 'off'
@@ -40,10 +43,10 @@ services:
     
     volumes:
       # Persistent data storage
-      - pgvectorscale_data:/var/lib/postgresql/data
+      - pgai_volume:/var/lib/postgresql/data
       
       # Initialization scripts
-      - ./init-pgvectorscale.sql:/docker-entrypoint-initdb.d/01-init-pgvectorscale.sql:ro
+      - ./init-pgvectorscale.sql:/docker-entrypoint-initdb.d/init-pgvectorscale.sql:ro
       
       # PostgreSQL configuration overrides
       - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
@@ -96,12 +99,12 @@ services:
       -c diskann.query_rescore=50
 
 volumes:
-  pgvectorscale_data:
+  pgai_volume:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${PWD}/data/pgvectorscale
+      device: ${PWD}/data/volumes
 
 networks:
   default:

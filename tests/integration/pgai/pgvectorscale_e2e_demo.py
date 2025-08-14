@@ -18,14 +18,14 @@ Requirements:
 - sentence-transformers
 - psycopg2-binary
 - numpy
-- pgvectorscale database running on localhost:5434
+- pgvectorscale database running on localhost:5432
 
 Usage:
     python3 tests/integration/pgai/pgvectorscale_e2e_demo.py
 
 Environment Variables:
     PGVECTORSCALE_HOST: Database host (default: localhost)
-    PGVECTORSCALE_PORT: Database port (default: 5434)
+    PGVECTORSCALE_PORT: Database port (default: 5432)
     PGVECTORSCALE_DB: Database name (default: memfuse)
     PGVECTORSCALE_USER: Database user (default: postgres)
     PGVECTORSCALE_PASSWORD: Database password (required)
@@ -99,10 +99,10 @@ class PgVectorScaleDemo:
         """Initialize demo with database connection and embedding model"""
         self.db_config = {
             'host': os.getenv('PGVECTORSCALE_HOST', 'localhost'),
-            'port': int(os.getenv('PGVECTORSCALE_PORT', '5434')),
+            'port': int(os.getenv('PGVECTORSCALE_PORT', '5432')),
             'database': os.getenv('PGVECTORSCALE_DB', 'memfuse'),
             'user': os.getenv('PGVECTORSCALE_USER', 'postgres'),
-            'password': os.getenv('PGVECTORSCALE_PASSWORD', 'memfuse_secure_password')
+            'password': os.getenv('PGVECTORSCALE_PASSWORD', 'postgres')
         }
         
         self.conn = None
@@ -209,7 +209,7 @@ class PgVectorScaleDemo:
             with self.conn.cursor() as cur:
                 # Batch insert for performance
                 insert_query = """
-                    INSERT INTO m0_messages 
+                    INSERT INTO m0_raw 
                     (message_id, content, role, conversation_id, sequence_number, token_count, created_at, processing_status)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """
@@ -292,7 +292,7 @@ class PgVectorScaleDemo:
         try:
             with self.conn.cursor() as cur:
                 insert_query = """
-                    INSERT INTO m1_chunks 
+                    INSERT INTO m1_episodic 
                     (chunk_id, content, chunking_strategy, token_count, embedding, 
                      m0_message_ids, conversation_id, created_at, embedding_generated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -397,7 +397,7 @@ class PgVectorScaleDemo:
                         COUNT(*) as total_m0,
                         SUM(token_count) as total_m0_tokens,
                         AVG(token_count) as avg_m0_tokens
-                    FROM m0_messages
+                    FROM m0_raw
                     WHERE conversation_id = %s
                 """, (self.conversation_id,))
                 m0_stats = cur.fetchone()
@@ -407,7 +407,7 @@ class PgVectorScaleDemo:
                         COUNT(*) as total_m1,
                         SUM(token_count) as total_m1_tokens,
                         AVG(token_count) as avg_m1_tokens
-                    FROM m1_chunks
+                    FROM m1_episodic
                     WHERE conversation_id = %s
                 """, (self.conversation_id,))
                 m1_stats = cur.fetchone()

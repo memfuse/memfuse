@@ -7,7 +7,7 @@
 # with StreamingDiskANN for high-performance vector similarity search.
 #
 # USAGE:
-#   ./tests/integration/pgai/run_pgvectorscale_e2e_demo.sh [OPTIONS]
+#   bash ./tests/integration/pgai/run_pgvectorscale_e2e_demo.sh [OPTIONS]
 #
 # OPTIONS:
 #   --cleanup    Clean up Docker containers and volumes
@@ -45,11 +45,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../" && pwd)"
 DOCKER_COMPOSE_FILE="${PROJECT_ROOT}/tests/integration/pgai/docker-compose.pgvectorscale.yml"
-CONTAINER_NAME="memfuse-pgvectorscale-e2e"
+CONTAINER_NAME="pgvectorscale-e2e"
 DB_NAME="memfuse"
 DB_USER="postgres"
-DB_PASSWORD="memfuse_secure_password"
-DB_PORT="5434"
+DB_PASSWORD="postgres"
+DB_PORT="5432"
 
 # Colors for output
 RED='\033[0;31m'
@@ -209,6 +209,14 @@ wait_for_database() {
 start_database() {
     log_header "🚀 Starting pgvectorscale Database Environment"
     
+    # Ensure data directory exists
+    local data_dir="${PROJECT_ROOT}/data/volumes"
+    if [ ! -d "$data_dir" ]; then
+        log_info "Creating data directory: $data_dir"
+        mkdir -p "$data_dir"
+        log_success "Data directory created"
+    fi
+    
     log_info "Starting pgvectorscale container with StreamingDiskANN support..."
     docker-compose -f "$DOCKER_COMPOSE_FILE" up -d
     
@@ -251,7 +259,7 @@ run_python_demo() {
     
     # Run the Python demo script
     cd "$PROJECT_ROOT"
-    python3 tests/integration/pgai/pgvectorscale_e2e_demo.py
+    poetry run python tests/integration/pgai/pgvectorscale_e2e_demo.py
     
     log_success "Python demo completed successfully"
 }
@@ -265,20 +273,20 @@ verify_data_integrity() {
         SELECT 
             'M0 Messages' as layer,
             COUNT(*) as count,
-            pg_size_pretty(pg_total_relation_size('m0_messages')) as size
-        FROM m0_messages
+            pg_size_pretty(pg_total_relation_size('m0_raw')) as size
+        FROM m0_raw
         UNION ALL
         SELECT 
             'M1 Chunks' as layer,
             COUNT(*) as count,
-            pg_size_pretty(pg_total_relation_size('m1_chunks')) as size
-        FROM m1_chunks
+            pg_size_pretty(pg_total_relation_size('m1_episodic')) as size
+        FROM m1_episodic
         UNION ALL
         SELECT 
             'M1 Embeddings' as layer,
             COUNT(*) as count,
             'N/A' as size
-        FROM m1_chunks WHERE embedding IS NOT NULL;
+        FROM m1_episodic WHERE embedding IS NOT NULL;
     "
     
     log_info "Checking StreamingDiskANN index configuration..."
@@ -288,7 +296,7 @@ verify_data_integrity() {
             'StreamingDiskANN (pgvectorscale)' as index_type,
             indexdef
         FROM pg_indexes 
-        WHERE tablename = 'm1_chunks' 
+        WHERE tablename = 'm1_episodic' 
         AND indexdef LIKE '%diskann%';
     "
     
@@ -299,7 +307,7 @@ verify_data_integrity() {
             AVG(array_length(m0_message_ids, 1)) as avg_m0_per_chunk,
             MIN(array_length(m0_message_ids, 1)) as min_m0_per_chunk,
             MAX(array_length(m0_message_ids, 1)) as max_m0_per_chunk
-        FROM m1_chunks;
+        FROM m1_episodic;
     "
     
     log_success "Data integrity verification completed"

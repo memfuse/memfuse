@@ -35,47 +35,47 @@ ALTER DATABASE memfuse SET maintenance_work_mem = '256MB';
 -- Stores raw streaming conversation messages with complete metadata
 -- and lineage tracking for downstream processing.
 
-CREATE TABLE IF NOT EXISTS m0_messages (
+CREATE TABLE IF NOT EXISTS m0_raw (
     -- Primary identification
     message_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    
+
     -- Content and metadata
     content TEXT NOT NULL,
     role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
-    
+
     -- Streaming context
     conversation_id UUID NOT NULL,
     sequence_number INTEGER NOT NULL,
-    
+
     -- Token analysis for chunking decisions
     token_count INTEGER NOT NULL DEFAULT 0,
-    
+
     -- Temporal tracking
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     processed_at TIMESTAMP WITH TIME ZONE,
-    
+
     -- Processing status
-    processing_status VARCHAR(20) DEFAULT 'pending' 
+    processing_status VARCHAR(20) DEFAULT 'pending'
         CHECK (processing_status IN ('pending', 'processing', 'completed', 'failed')),
-    
+
     -- Lineage tracking
     chunk_assignments UUID[] DEFAULT '{}',
-    
+
     -- Performance optimization
-    CONSTRAINT unique_conversation_sequence 
+    CONSTRAINT unique_conversation_sequence
         UNIQUE (conversation_id, sequence_number)
 );
 
 -- Indexes for M0 layer performance
-CREATE INDEX IF NOT EXISTS idx_m0_conversation_sequence 
-    ON m0_messages (conversation_id, sequence_number);
+CREATE INDEX IF NOT EXISTS idx_m0_conversation_sequence
+    ON m0_raw (conversation_id, sequence_number);
 
-CREATE INDEX IF NOT EXISTS idx_m0_processing_status 
-    ON m0_messages (processing_status) 
+CREATE INDEX IF NOT EXISTS idx_m0_processing_status
+    ON m0_raw (processing_status)
     WHERE processing_status != 'completed';
 
-CREATE INDEX IF NOT EXISTS idx_m0_created_at 
-    ON m0_messages (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_m0_created_at
+    ON m0_raw (created_at DESC);
 
 -- ============================================================================
 -- M1 Layer: Intelligent Chunks with Embeddings
@@ -83,39 +83,39 @@ CREATE INDEX IF NOT EXISTS idx_m0_created_at
 -- Stores intelligently chunked content with high-performance vector embeddings
 -- optimized for StreamingDiskANN similarity search.
 
-CREATE TABLE IF NOT EXISTS m1_chunks (
+CREATE TABLE IF NOT EXISTS m1_episodic (
     -- Primary identification
     chunk_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    
+
     -- Chunked content
     content TEXT NOT NULL,
-    
+
     -- Chunking strategy metadata
     chunking_strategy VARCHAR(50) NOT NULL DEFAULT 'token_based'
         CHECK (chunking_strategy IN ('token_based', 'semantic', 'conversation_turn', 'hybrid')),
-    
+
     -- Token analysis
     token_count INTEGER NOT NULL DEFAULT 0,
-    
+
     -- Vector embedding (384 dimensions for sentence-transformers/all-MiniLM-L6-v2)
     embedding vector(384),
-    
+
     -- M0 lineage tracking
     m0_message_ids UUID[] NOT NULL DEFAULT '{}',
     conversation_id UUID NOT NULL,
-    
+
     -- Temporal tracking
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     embedding_generated_at TIMESTAMP WITH TIME ZONE,
-    
+
     -- Quality metrics
     embedding_model VARCHAR(100) DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
     chunk_quality_score FLOAT DEFAULT 0.0,
-    
+
     -- Constraints
-    CONSTRAINT m1_chunks_embedding_not_null 
+    CONSTRAINT m1_chunks_embedding_not_null
         CHECK (embedding IS NOT NULL),
-    CONSTRAINT m1_chunks_m0_lineage_not_empty 
+    CONSTRAINT m1_chunks_m0_lineage_not_empty
         CHECK (array_length(m0_message_ids, 1) > 0)
 );
 
@@ -129,8 +129,8 @@ CREATE TABLE IF NOT EXISTS m1_chunks (
 -- - 75% memory reduction compared to standard HNSW
 -- - 2-5x faster query performance
 -- - Incremental updates for streaming data
-CREATE INDEX IF NOT EXISTS idx_m1_embedding_diskann 
-    ON m1_chunks 
+CREATE INDEX IF NOT EXISTS idx_m1_embedding_diskann
+    ON m1_episodic
     USING diskann (embedding vector_cosine_ops)
     WITH (
         storage_layout = 'memory_optimized',  -- Enable SBQ compression
@@ -142,21 +142,21 @@ CREATE INDEX IF NOT EXISTS idx_m1_embedding_diskann
     );
 
 -- Additional indexes for M1 layer performance
-CREATE INDEX IF NOT EXISTS idx_m1_conversation_id 
-    ON m1_chunks (conversation_id);
+CREATE INDEX IF NOT EXISTS idx_m1_conversation_id
+    ON m1_episodic (conversation_id);
 
-CREATE INDEX IF NOT EXISTS idx_m1_chunking_strategy 
-    ON m1_chunks (chunking_strategy);
+CREATE INDEX IF NOT EXISTS idx_m1_chunking_strategy
+    ON m1_episodic (chunking_strategy);
 
-CREATE INDEX IF NOT EXISTS idx_m1_created_at 
-    ON m1_chunks (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_m1_created_at
+    ON m1_episodic (created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_m1_token_count 
-    ON m1_chunks (token_count);
+CREATE INDEX IF NOT EXISTS idx_m1_token_count
+    ON m1_episodic (token_count);
 
 -- GIN index for M0 message ID arrays (lineage queries)
-CREATE INDEX IF NOT EXISTS idx_m1_m0_message_ids_gin 
-    ON m1_chunks USING gin (m0_message_ids);
+CREATE INDEX IF NOT EXISTS idx_m1_m0_message_ids_gin
+    ON m1_episodic USING gin (m0_message_ids);
 
 -- ============================================================================
 -- Utility Functions
@@ -200,7 +200,7 @@ BEGIN
         array_length(c.m0_message_ids, 1) as m0_message_count,
         c.chunking_strategy,
         c.created_at
-    FROM m1_chunks c
+    FROM m1_episodic c
     WHERE normalize_cosine_similarity(c.embedding <=> query_embedding) >= similarity_threshold
     ORDER BY c.embedding <=> query_embedding ASC
     LIMIT max_results;
@@ -216,23 +216,23 @@ RETURNS TABLE (
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
+    SELECT
         'M0 Messages'::VARCHAR(20) as layer,
         COUNT(*) as record_count,
-        pg_size_pretty(pg_total_relation_size('m0_messages')) as table_size
-    FROM m0_messages
+        pg_size_pretty(pg_total_relation_size('m0_raw')) as table_size
+    FROM m0_raw
     UNION ALL
-    SELECT 
+    SELECT
         'M1 Chunks'::VARCHAR(20) as layer,
         COUNT(*) as record_count,
-        pg_size_pretty(pg_total_relation_size('m1_chunks')) as table_size
-    FROM m1_chunks
+        pg_size_pretty(pg_total_relation_size('m1_episodic')) as table_size
+    FROM m1_episodic
     UNION ALL
-    SELECT 
+    SELECT
         'M1 Embeddings'::VARCHAR(20) as layer,
         COUNT(*) as record_count,
         'N/A'::TEXT as table_size
-    FROM m1_chunks 
+    FROM m1_episodic
     WHERE embedding IS NOT NULL;
 END;
 $$ LANGUAGE plpgsql;
@@ -253,8 +253,8 @@ SELECT
         ELSE 'Other'
     END as index_type,
     indexdef
-FROM pg_indexes 
-WHERE tablename IN ('m1_chunks') 
+FROM pg_indexes
+WHERE tablename IN ('m1_episodic')
 AND indexdef LIKE '%vector%';
 
 -- View for data lineage analysis
@@ -264,8 +264,8 @@ SELECT
     AVG(array_length(c.m0_message_ids, 1))::NUMERIC(10,4) as avg_m0_per_chunk,
     MIN(array_length(c.m0_message_ids, 1)) as min_m0_per_chunk,
     MAX(array_length(c.m0_message_ids, 1)) as max_m0_per_chunk,
-    (SELECT COUNT(*) FROM m0_messages) as total_m0_messages
-FROM m1_chunks c;
+    (SELECT COUNT(*) FROM m0_raw) as total_m0_messages
+FROM m1_episodic c;
 
 -- ============================================================================
 -- Initial Data Validation
@@ -288,7 +288,7 @@ BEGIN
 END $$;
 
 -- Log successful initialization
-INSERT INTO m0_messages (content, role, conversation_id, sequence_number, token_count, processing_status)
+INSERT INTO m0_raw (content, role, conversation_id, sequence_number, token_count, processing_status)
 VALUES (
     'MemFuse pgvectorscale database initialized successfully with StreamingDiskANN support',
     'system',
