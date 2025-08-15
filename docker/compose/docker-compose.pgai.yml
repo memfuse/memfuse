@@ -37,7 +37,7 @@ services:
     command: >
       postgres
       -c shared_preload_libraries='timescaledb'
-      -c max_connections=100
+      -c max_connections=800
       -c shared_buffers=256MB
       -c effective_cache_size=1GB
       -c maintenance_work_mem=64MB
@@ -58,6 +58,18 @@ services:
       -c log_min_duration_statement=1000
       -c diskann.query_search_list_size=100
       -c diskann.query_rescore=50
+      -c lock_timeout=30s
+      -c statement_timeout=60s
+      -c idle_in_transaction_session_timeout=300s
+      -c deadlock_timeout=1s
+      -c max_locks_per_transaction=256
+      -c max_pred_locks_per_transaction=256
+      -c synchronous_commit=off
+      -c wal_compression=on
+      -c checkpoint_timeout=15min
+      -c bgwriter_delay=50ms
+      -c bgwriter_lru_maxpages=200
+      -c bgwriter_lru_multiplier=4.0
     logging:
       driver: "json-file"
       options:

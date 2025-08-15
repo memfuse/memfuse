@@ -641,8 +641,18 @@ class GlobalConnectionManager:
             
             pool = self._pools[db_url]
             try:
-                await pool.close()
-                logger.debug(f"GlobalConnectionManager: Pool closed for {self._mask_url(db_url)}")
+                # Check if event loop is still running
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                    if loop.is_closed():
+                        logger.debug(f"GlobalConnectionManager: Event loop closed, skipping async pool close for {self._mask_url(db_url)}")
+                    else:
+                        await pool.close()
+                        logger.debug(f"GlobalConnectionManager: Pool closed for {self._mask_url(db_url)}")
+                except RuntimeError:
+                    # No running event loop
+                    logger.debug(f"GlobalConnectionManager: No running event loop, skipping async pool close for {self._mask_url(db_url)}")
             except Exception as e:
                 logger.error(f"GlobalConnectionManager: Error closing pool: {e}")
             

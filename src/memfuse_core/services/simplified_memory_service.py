@@ -26,6 +26,7 @@ from sentence_transformers import SentenceTransformer
 
 from ..interfaces import MessageInterface
 from ..interfaces.message_interface import MessageBatchList
+from .sync_connection_pool import sync_connection_pool
 
 
 class SimplifiedDatabaseManager:
@@ -376,7 +377,10 @@ class SimplifiedMemoryService(MessageInterface):
 
         logger.info("SimplifiedMemoryService: Starting initialization...")
 
-        # Initialize database connection
+        # Initialize synchronous connection pool
+        sync_connection_pool.initialize(self.db_config)
+
+        # Initialize database connection (fallback for schema operations)
         await self.db_manager.connect()
         await self.db_manager.initialize_schema()
 
@@ -574,43 +578,54 @@ class SimplifiedMemoryService(MessageInterface):
             raise
 
     async def _store_m1_chunks(self, chunks: List[Dict[str, Any]]) -> List[str]:
-        """Store M1 chunks with embeddings to database."""
+        """Store M1 chunks with embeddings to database using connection pool."""
         chunk_ids = []
 
         try:
-            with self.db_manager.conn.cursor() as cur:
-                insert_query = """
-                    INSERT INTO m1_episodic
-                    (chunk_id, content, chunking_strategy, token_count, embedding,
-                     m0_message_ids, conversation_id, created_at, embedding_generated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING chunk_id
-                """
+            # Use connection pool for better concurrency and connection management
+            with sync_connection_pool.get_connection() as conn:
+                # Process chunks in small batches to reduce lock contention
+                batch_size = 3  # Very small batches to minimize lock time
 
-                for chunk in chunks:
-                    # Generate embedding
-                    embedding = self.embedding_generator.generate_embedding(chunk['content'])
+                for i in range(0, len(chunks), batch_size):
+                    batch = chunks[i:i + batch_size]
 
-                    # Format m0_message_ids as PostgreSQL UUID array
-                    m0_ids_array = '{' + ','.join(chunk['m0_message_ids']) + '}'
+                    with conn.cursor() as cur:
+                        insert_query = """
+                            INSERT INTO m1_episodic
+                            (chunk_id, content, chunking_strategy, token_count, embedding,
+                             m0_message_ids, conversation_id, created_at, embedding_generated_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            RETURNING chunk_id
+                        """
 
-                    cur.execute(insert_query, (
-                        chunk['chunk_id'],
-                        chunk['content'],
-                        chunk['chunking_strategy'],
-                        chunk['token_count'],
-                        embedding.tolist(),  # Convert numpy array to list
-                        m0_ids_array,
-                        chunk['conversation_id'],
-                        chunk['created_at'],
-                        datetime.now()  # embedding_generated_at
-                    ))
+                        for chunk in batch:
+                            # Generate embedding
+                            embedding = self.embedding_generator.generate_embedding(chunk['content'])
 
-                    result = cur.fetchone()
-                    if result:
-                        chunk_ids.append(result[0])
-                    else:
-                        chunk_ids.append(chunk['chunk_id'])
+                            # Format m0_message_ids as PostgreSQL UUID array
+                            m0_ids_array = '{' + ','.join(chunk['m0_message_ids']) + '}'
+
+                            cur.execute(insert_query, (
+                                chunk['chunk_id'],
+                                chunk['content'],
+                                chunk['chunking_strategy'],
+                                chunk['token_count'],
+                                embedding.tolist(),  # Convert numpy array to list
+                                m0_ids_array,
+                                chunk['conversation_id'],
+                                chunk['created_at'],
+                                datetime.now()  # embedding_generated_at
+                            ))
+
+                            result = cur.fetchone()
+                            if result:
+                                chunk_ids.append(result[0])
+                            else:
+                                chunk_ids.append(chunk['chunk_id'])
+
+                    # Commit each small batch immediately
+                    conn.commit()
 
         except Exception as e:
             logger.error(f"Error storing M1 chunks: {e}")
@@ -774,7 +789,17 @@ class SimplifiedMemoryService(MessageInterface):
         """Query interface for compatibility with existing code."""
         return await self.query_similar_chunks(query_text, top_k)
 
-    def close(self):
+    async def close(self):
         """Close database connections."""
         if self.db_manager:
             self.db_manager.close()
+
+        # Close sync connection pool if it exists
+        try:
+            from .sync_connection_pool import sync_connection_pool
+            if sync_connection_pool._initialized:
+                sync_connection_pool.close()
+        except Exception as e:
+            logger.debug(f"Error closing sync connection pool: {e}")
+
+        return None  # Ensure we return something for await
