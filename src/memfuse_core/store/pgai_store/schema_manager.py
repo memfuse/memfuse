@@ -104,46 +104,60 @@ class SchemaManager:
         """Initialize M0 raw data memory schema."""
         try:
             async with self.pool.connection() as conn:
-                # Create M0 table with basic structure
+                # Create M0 table with demo-compatible structure
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS m0_raw (
-                        id TEXT PRIMARY KEY,
+                        message_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                         content TEXT NOT NULL,
-                        embedding VECTOR(384),
-                        needs_embedding BOOLEAN DEFAULT TRUE,
-                        session_id TEXT,
-                        user_id TEXT,
-                        chunk_id TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+                        conversation_id UUID NOT NULL,
+                        sequence_number INTEGER NOT NULL,
+                        token_count INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        processed_at TIMESTAMP WITH TIME ZONE,
+                        processing_status VARCHAR(20) DEFAULT 'pending'
+                            CHECK (processing_status IN ('pending', 'processing', 'completed', 'failed')),
+                        chunk_assignments UUID[] DEFAULT '{}',
+                        CONSTRAINT unique_conversation_sequence
+                            UNIQUE (conversation_id, sequence_number)
                     );
                 """)
                 
-                # Create basic indexes
+                # Create demo-compatible indexes
                 await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_m0_session_id ON m0_raw (session_id);
-                    CREATE INDEX IF NOT EXISTS idx_m0_user_id ON m0_raw (user_id);
-                    CREATE INDEX IF NOT EXISTS idx_m0_needs_embedding ON m0_raw (needs_embedding) WHERE needs_embedding = TRUE;
-                    CREATE INDEX IF NOT EXISTS idx_m0_embedding_hnsw ON m0_raw USING hnsw (embedding vector_cosine_ops);
+                    CREATE INDEX IF NOT EXISTS idx_m0_conversation_sequence
+                        ON m0_raw (conversation_id, sequence_number);
+                    CREATE INDEX IF NOT EXISTS idx_m0_processing_status
+                        ON m0_raw (processing_status)
+                        WHERE processing_status != 'completed';
+                    CREATE INDEX IF NOT EXISTS idx_m0_created_at
+                        ON m0_raw (created_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_m0_role
+                        ON m0_raw (role);
+                    CREATE INDEX IF NOT EXISTS idx_m0_token_count
+                        ON m0_raw (token_count);
+                    CREATE INDEX IF NOT EXISTS idx_m0_chunk_assignments_gin
+                        ON m0_raw USING gin (chunk_assignments);
                 """)
-                
-                # Create embedding trigger
+
+                # Create M1 processing trigger (M0 -> M1 pipeline)
                 await conn.execute("""
-                    CREATE OR REPLACE FUNCTION notify_m0_embedding_needed()
+                    CREATE OR REPLACE FUNCTION notify_m1_processing_needed()
                     RETURNS TRIGGER AS $$
                     BEGIN
-                        IF NEW.needs_embedding = TRUE THEN
-                            PERFORM pg_notify('m0_embedding_needed', NEW.id);
+                        -- Notify M1 layer that new raw data is available for processing
+                        IF NEW.content IS NOT NULL THEN
+                            PERFORM pg_notify('m1_processing_needed', NEW.message_id::text);
                         END IF;
                         RETURN NEW;
                     END;
                     $$ LANGUAGE plpgsql;
-                    
-                    DROP TRIGGER IF EXISTS trigger_m0_embedding_notification ON m0_raw;
-                    CREATE TRIGGER trigger_m0_embedding_notification
-                        AFTER INSERT OR UPDATE OF needs_embedding ON m0_raw
+
+                    DROP TRIGGER IF EXISTS trigger_m0_m1_processing_notification ON m0_raw;
+                    CREATE TRIGGER trigger_m0_m1_processing_notification
+                        AFTER INSERT ON m0_raw
                         FOR EACH ROW
-                        EXECUTE FUNCTION notify_m0_embedding_needed();
+                        EXECUTE FUNCTION notify_m1_processing_needed();
                 """)
                 
                 await conn.commit()

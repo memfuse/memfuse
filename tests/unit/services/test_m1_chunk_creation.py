@@ -9,7 +9,7 @@ import os
 import uuid
 
 # Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../..', 'src'))
 
 from memfuse_core.services.simplified_memory_service import SimplifiedMemoryService
 from memfuse_core.utils.config import config_manager

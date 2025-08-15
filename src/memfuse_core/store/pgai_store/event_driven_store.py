@@ -194,12 +194,13 @@ class EventDrivenPgaiStore:
         """Process embedding for a single record."""
         try:
             # Get record content
+            pk_field = self.core_store._get_primary_key_field()
             conn = await self.core_store.pool.connection()
             try:
                 cur = await conn.cursor()
                 await cur.execute(f"""
                     SELECT content FROM {self.table_name}
-                    WHERE id = %s AND needs_embedding = TRUE
+                    WHERE {pk_field} = %s AND needs_embedding = TRUE
                 """, (record_id,))
                 
                 result = await cur.fetchone()
@@ -224,7 +225,7 @@ class EventDrivenPgaiStore:
                 await cur.execute(f"""
                     UPDATE {self.table_name}
                     SET embedding = %s
-                    WHERE id = %s
+                    WHERE {pk_field} = %s
                 """, (embedding, record_id))
                 
                 await conn.commit()
@@ -240,11 +241,12 @@ class EventDrivenPgaiStore:
     
     async def _queue_pending_records(self) -> int:
         """Queue all pending records for immediate processing."""
+        pk_field = self.core_store._get_primary_key_field()
         conn = await self.core_store.pool.connection()
         try:
             cur = await conn.cursor()
             await cur.execute(f"""
-                SELECT id FROM {self.table_name}
+                SELECT {pk_field} FROM {self.table_name}
                 WHERE needs_embedding = TRUE AND retry_status != 'failed'
             """)
             

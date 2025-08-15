@@ -98,12 +98,12 @@ class M0RawDataLayer(MemoryLayer):
                             StorageType.SQL, record, metadata
                         )
                         if sql_result:
-                            successful_ids.append(record["id"])
-                            logger.debug(f"M0RawDataLayer: Successfully wrote record {record['id']}")
+                            successful_ids.append(record["message_id"])
+                            logger.debug(f"M0RawDataLayer: Successfully wrote record {record['message_id']}")
                         else:
-                            logger.warning(f"M0RawDataLayer: Failed to write record {record['id']}")
+                            logger.warning(f"M0RawDataLayer: Failed to write record {record['message_id']}")
                     except Exception as e:
-                        logger.error(f"M0RawDataLayer: Error writing record {record['id']}: {e}")
+                        logger.error(f"M0RawDataLayer: Error writing record {record['message_id']}: {e}")
 
                 if successful_ids:
                     storage_results[StorageType.SQL] = successful_ids
@@ -261,27 +261,30 @@ class M0RawDataLayer(MemoryLayer):
                 logger.warning(f"M0RawDataLayer: Empty content for item {item_id}, skipping")
                 return None
 
-            # Generate unique ID
-            unique_id = f"{item_id}_{str(uuid.uuid4())[:8]}"
+            # Generate unique message ID
+            message_id = str(uuid.uuid4())
 
-            # Create raw record for M0 table
+            # Get sequence number from item or metadata
+            sequence_number = 1  # Default value
+            if isinstance(item, dict):
+                # Try to get message_index from the item itself first
+                sequence_number = item.get("message_index", 0) + 1
+            if sequence_number == 1 and metadata:
+                # Fallback to metadata if not found in item
+                sequence_number = metadata.get("message_index", 0) + 1
+
+            # Create raw record for M0 table (demo schema compatible)
             record = {
-                "id": unique_id,
+                "message_id": message_id,
                 "content": content.strip(),
-                "session_id": metadata.get("session_id") if metadata else None,
-                "user_id": metadata.get("user_id") if metadata else None,
-                "message_role": role,
-                "round_id": metadata.get("round_id") if metadata else None,
-                "metadata": {
-                    "layer": "M0",
-                    "source_type": type(item).__name__,
-                    "original_item_id": item_id,
-                    **(metadata or {}),
-                    **item_metadata
-                }
+                "role": role,
+                "conversation_id": metadata.get("session_id") if metadata else str(uuid.uuid4()),
+                "sequence_number": sequence_number,
+                "token_count": max(1, len(content.strip()) // 4),  # Rough token estimate
+                "processing_status": "pending"
             }
 
-            logger.debug(f"M0RawDataLayer: Created raw record {unique_id} with content: {content[:50]}...")
+            logger.debug(f"M0RawDataLayer: Created raw record {message_id} with content: {content[:50]}...")
             return record
 
         except Exception as e:
@@ -493,12 +496,19 @@ class M1EpisodicLayer(MemoryLayer):
                 source_id = item.get("source_id")
                 operation_metadata = item.get("metadata", {})
 
-                # For now, create a placeholder content from the reference
-                # In a full implementation, we would query M0 storage to get actual content
-                content = f"M0 Reference: {source_id}"
+                # Extract actual content from the item if available
+                content = item.get("content", "")
+                if not content:
+                    # Try to get content from nested data
+                    if "message_ids" in operation_metadata:
+                        message_ids = operation_metadata["message_ids"]
+                        content = f"Episode from {len(message_ids)} messages"
+                    else:
+                        content = f"M0 Reference: {source_id}"
+
                 session_id = operation_metadata.get("session_id")
                 user_id = operation_metadata.get("user_id")
-                message_role = "unknown"
+                message_role = operation_metadata.get("message_role", "unknown")
 
                 logger.info(f"M1EpisodicLayer: Processing M0 reference {source_id}")
 
@@ -515,6 +525,23 @@ class M1EpisodicLayer(MemoryLayer):
                 session_id = metadata.get("session_id") if metadata else None
                 user_id = metadata.get("user_id") if metadata else None
                 message_role = "unknown"
+            elif hasattr(item, 'content') and hasattr(item, 'metadata'):
+                # Handle ChunkData objects
+                content = item.content
+                source_id = item.chunk_id if hasattr(item, 'chunk_id') else None
+                item_metadata = item.metadata or {}
+                session_id = item_metadata.get("session_id") or item_metadata.get("conversation_id")
+                user_id = item_metadata.get("user_id")
+                message_role = item_metadata.get("message_role", "unknown")
+
+                # Merge item metadata with passed metadata, giving priority to item metadata
+                if metadata:
+                    merged_metadata = {**metadata, **item_metadata}
+                else:
+                    merged_metadata = item_metadata
+                metadata = merged_metadata
+
+                logger.info(f"M1EpisodicLayer: Processing ChunkData object with conversation_id: {item_metadata.get('conversation_id')}")
             else:
                 content = str(item)
                 source_id = None
@@ -542,6 +569,12 @@ class M1EpisodicLayer(MemoryLayer):
                 "confidence": 0.8,  # Default confidence for M1 chunks
                 "timestamp": time.time()
             }
+
+            # Ensure conversation_id is preserved from original metadata or use session_id
+            if metadata and 'conversation_id' in metadata:
+                chunk_metadata['conversation_id'] = metadata['conversation_id']
+            elif session_id:
+                chunk_metadata['conversation_id'] = session_id
 
             return ChunkData(
                 content=content.strip(),
@@ -703,7 +736,7 @@ class M1EpisodicLayer(MemoryLayer):
             # Form basic episodes
             if len(content) > 50:  # Only form episodes from substantial content
                 episode = {
-                    "episode_content": content[:200] + "..." if len(content) > 200 else content,
+                    "content": content[:200] + "..." if len(content) > 200 else content,  # Use 'content' instead of 'episode_content'
                     "episode_type": "formed_episode",
                     "source": "m1_episodic_layer",
                     "timestamp": time.time(),
@@ -735,7 +768,7 @@ class M1EpisodicLayer(MemoryLayer):
 
                 # Create ChunkData object
                 chunk = ChunkData(
-                    content=episode.get("episode_content", ""),
+                    content=episode.get("content", ""),  # Use 'content' instead of 'episode_content'
                     metadata=chunk_metadata
                 )
                 chunks.append(chunk)

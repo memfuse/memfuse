@@ -59,6 +59,14 @@ class PgaiVectorWrapper(ChunkStoreInterface):
     async def query(self, query: Query, top_k: int = 5) -> List[ChunkData]:
         return await self.pgai_store.query(query, top_k)
 
+    async def retrieve(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
+        """Retrieve method for compatibility with multi-path retrieval system."""
+        # Convert string query to Query object
+        query_obj = Query(text=query, metadata=kwargs)
+        chunks = await self.pgai_store.query(query_obj, top_k)
+        return [{'id': c.chunk_id, 'content': c.content, 'metadata': c.metadata, 'score': 1.0}
+                for c in chunks]
+
     async def count(self) -> int:
         return await self.pgai_store.count()
 

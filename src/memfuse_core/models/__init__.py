@@ -57,7 +57,7 @@ from .api import (
     KnowledgeDelete
 )
 
-# Database schema models
+# Database schema models (now from schema/ directory which re-exports everything)
 from .schema import (
     BaseRecord,
     User,
@@ -86,6 +86,11 @@ from .config import (
     DEFAULT_API_KEY_HEADER,
     MODEL_PREFIXES
 )
+
+# Database schema management (from new schema/ directory)
+from .schema.manager import SchemaManager
+from .schema.m0_raw import M0RawSchema
+from .schema.m1_episodic import M1EpisodicSchema
 
 __all__ = [
     # Core models
@@ -125,5 +130,8 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL", "DEFAULT_EMBEDDING_DIM", "DEFAULT_TOP_K",
     "DEFAULT_SIMILARITY_THRESHOLD", "DEFAULT_GRAPH_RELATION", "DEFAULT_EDGE_WEIGHT",
     "VECTOR_ITEMS_FILE", "VECTOR_EMBEDDINGS_FILE", "GRAPH_NODES_FILE",
-    "GRAPH_EDGES_FILE", "DEFAULT_API_KEY_HEADER", "MODEL_PREFIXES"
+    "GRAPH_EDGES_FILE", "DEFAULT_API_KEY_HEADER", "MODEL_PREFIXES",
+
+    # Database schema management
+    "M0RawSchema", "M1EpisodicSchema", "SchemaManager"
 ]

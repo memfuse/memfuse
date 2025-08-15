@@ -127,7 +127,16 @@ class PgaiStore(ChunkStoreInterface):
 
         # Build database URL
         self.db_url = self._build_database_url()
-    
+
+    def _get_primary_key_field(self) -> str:
+        """Get the primary key field name for the current table."""
+        if self.table_name == "m0_raw":
+            return "message_id"
+        elif self.table_name == "m1_episodic":
+            return "chunk_id"
+        else:
+            return "id"
+
     def _build_database_url(self) -> str:
         """Build PostgreSQL database URL from configuration and environment variables."""
         import os
@@ -232,14 +241,16 @@ class PgaiStore(ChunkStoreInterface):
                 await self._setup_schema_with_retry()
                 logger.debug("Database schema setup completed")
 
-                # Create vectorizer if enabled and not exists
+                # Create vectorizer if enabled and not exists (skip for M0 table)
                 auto_embedding = self.pgai_config.get("auto_embedding", False)
                 logger.debug(f"Auto embedding enabled: {auto_embedding}")
 
-                if auto_embedding:
+                if auto_embedding and self.table_name != 'm0_raw':
                     logger.debug("Creating vectorizer...")
                     await self._create_vectorizer()
                     logger.debug("Vectorizer creation completed")
+                elif self.table_name == 'm0_raw':
+                    logger.debug("Skipping vectorizer creation for M0 table (no embedding needed)")
 
                     # Choose processing mode based on configuration and environment
                     immediate_trigger = self.pgai_config.get("immediate_trigger", False)
@@ -396,26 +407,46 @@ class PgaiStore(ChunkStoreInterface):
         logger.debug(f"Schema needs setup for {self.table_name}, proceeding with creation...")
         async with self.pool.connection() as conn:
             try:
-                # Create table compatible with existing m0_raw schema
-                logger.debug(f"Creating table {self.table_name} if not exists...")
-                await conn.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {self.table_name} (
-                        id TEXT PRIMARY KEY,
-                        content TEXT NOT NULL,
-                        metadata JSONB DEFAULT '{{}}',
-                        session_id TEXT,
-                        user_id TEXT,
-                        message_role TEXT,
-                        round_id TEXT,
-                        embedding VECTOR(384),
-                        needs_embedding BOOLEAN DEFAULT TRUE,
-                        retry_count INTEGER DEFAULT 0,
-                        last_retry_at TIMESTAMP,
-                        retry_status TEXT DEFAULT 'pending',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
+                # Create table using schema files
+                logger.debug(f"Creating table {self.table_name} using schema files...")
+
+                # Load and execute the appropriate schema file
+                import os
+                schema_dir = os.path.join(os.path.dirname(__file__), 'schemas')
+
+                if self.table_name == 'm0_raw':
+                    schema_file = os.path.join(schema_dir, 'm0_raw.sql')
+                elif self.table_name == 'm1_episodic':
+                    schema_file = os.path.join(schema_dir, 'm1_episodic.sql')
+                else:
+                    # Fallback for other tables - use simplified m0_raw schema
+                    schema_file = os.path.join(schema_dir, 'm0_raw.sql')
+
+                if os.path.exists(schema_file):
+                    with open(schema_file, 'r') as f:
+                        schema_sql = f.read()
+                    await conn.execute(schema_sql)
+                    logger.debug(f"Table {self.table_name} created using schema file")
+                else:
+                    logger.warning(f"Schema file not found: {schema_file}, using fallback")
+                    # Fallback to basic table creation
+                    await conn.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self.table_name} (
+                            message_id TEXT PRIMARY KEY,
+                            content TEXT NOT NULL,
+                            role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+                            conversation_id TEXT NOT NULL,
+                            sequence_number INTEGER NOT NULL,
+                            token_count INTEGER NOT NULL DEFAULT 0,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            processed_at TIMESTAMP WITH TIME ZONE,
+                            processing_status VARCHAR(20) DEFAULT 'pending'
+                                CHECK (processing_status IN ('pending', 'processing', 'completed', 'failed')),
+                            chunk_assignments TEXT[] DEFAULT '{{}}',
+                            CONSTRAINT unique_conversation_sequence
+                                UNIQUE (conversation_id, sequence_number)
+                        )
+                    """)
                 logger.debug(f"Table {self.table_name} creation completed")
 
                 # Add columns if they don't exist (for existing tables)
@@ -451,18 +482,21 @@ class PgaiStore(ChunkStoreInterface):
                             ALTER TABLE {self.table_name} ADD COLUMN round_id TEXT;
                         END IF;
 
-                        IF NOT EXISTS (
-                            SELECT 1 FROM information_schema.columns
-                            WHERE table_name = '{self.table_name}' AND column_name = 'embedding'
-                        ) THEN
-                            ALTER TABLE {self.table_name} ADD COLUMN embedding VECTOR(384);
-                        END IF;
+                        -- Only add embedding columns for non-M0 tables (M0 should not have embeddings)
+                        IF '{self.table_name}' != 'm0_raw' THEN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name = '{self.table_name}' AND column_name = 'embedding'
+                            ) THEN
+                                ALTER TABLE {self.table_name} ADD COLUMN embedding VECTOR(384);
+                            END IF;
 
-                        IF NOT EXISTS (
-                            SELECT 1 FROM information_schema.columns
-                            WHERE table_name = '{self.table_name}' AND column_name = 'needs_embedding'
-                        ) THEN
-                            ALTER TABLE {self.table_name} ADD COLUMN needs_embedding BOOLEAN DEFAULT TRUE;
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name = '{self.table_name}' AND column_name = 'needs_embedding'
+                            ) THEN
+                                ALTER TABLE {self.table_name} ADD COLUMN needs_embedding BOOLEAN DEFAULT TRUE;
+                            END IF;
                         END IF;
 
                         IF NOT EXISTS (
@@ -511,12 +545,13 @@ class PgaiStore(ChunkStoreInterface):
                     ON {self.table_name}(round_id)
                 """)
 
-                # Create index for retry mechanism
-                await conn.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_{self.table_name}_needs_embedding
-                    ON {self.table_name}(needs_embedding, retry_status)
-                    WHERE needs_embedding = TRUE
-                """)
+                # Create index for retry mechanism (skip for M0 table which has no embedding fields)
+                if self.table_name != 'm0_raw':
+                    await conn.execute(f"""
+                        CREATE INDEX IF NOT EXISTS idx_{self.table_name}_needs_embedding
+                        ON {self.table_name}(needs_embedding, retry_status)
+                        WHERE needs_embedding = TRUE
+                    """)
 
                 # Create trigger to update updated_at timestamp
                 await conn.execute(f"""
@@ -687,14 +722,15 @@ class PgaiStore(ChunkStoreInterface):
         """Process embedding notification for a specific record."""
         try:
             # Get record content
+            pk_field = self._get_primary_key_field()
             async with self.pool.connection() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute(f"""
-                        SELECT content FROM {self.table_name} 
-                        WHERE id = %s AND needs_embedding = TRUE
+                        SELECT content FROM {self.table_name}
+                        WHERE {pk_field} = %s AND needs_embedding = TRUE
                     """, (record_id,))
                     result = await cur.fetchone()
-                    
+
                     if not result:
                         logger.warning(f"Record {record_id} not found or doesn't need embedding")
                         return False
@@ -711,7 +747,7 @@ class PgaiStore(ChunkStoreInterface):
                     await cur.execute(f"""
                         UPDATE {self.table_name}
                         SET embedding = %s, needs_embedding = FALSE, retry_status = 'completed'
-                        WHERE id = %s
+                        WHERE {pk_field} = %s
                     """, (embedding, record_id))
                     await conn.commit()
                     
@@ -807,6 +843,7 @@ class PgaiStore(ChunkStoreInterface):
         """Background task to process records that need embeddings with retry support."""
         max_retries = self.pgai_config.get("max_retries", 3)
         retry_interval = self.pgai_config.get("retry_interval", 2.0)  # Faster polling for better responsiveness
+        pk_field = self._get_primary_key_field()
 
         while True:
             try:
@@ -818,8 +855,13 @@ class PgaiStore(ChunkStoreInterface):
                 # Get records that need embeddings, excluding permanently failed ones
                 async with self.pool.connection() as conn:
                     async with conn.cursor() as cur:
+                        # Skip embedding processing for M0 table (no embedding fields)
+                        if self.table_name == 'm0_raw':
+                            logger.debug(f"Skipping embedding processing for M0 table: {self.table_name}")
+                            return []
+
                         await cur.execute(f"""
-                            SELECT id, content, retry_count, last_retry_at
+                            SELECT {pk_field}, content, retry_count, last_retry_at
                             FROM {self.table_name}
                             WHERE needs_embedding = TRUE
                             AND content IS NOT NULL
@@ -854,7 +896,7 @@ class PgaiStore(ChunkStoreInterface):
                                     SET retry_count = %s,
                                         last_retry_at = CURRENT_TIMESTAMP,
                                         retry_status = 'processing'
-                                    WHERE id = %s
+                                    WHERE {pk_field} = %s
                                 """, (current_retry_count + 1, record_id))
 
                                 # Generate embedding
@@ -868,7 +910,7 @@ class PgaiStore(ChunkStoreInterface):
                                         retry_count = 0,
                                         retry_status = 'completed',
                                         last_retry_at = NULL
-                                    WHERE id = %s
+                                    WHERE {pk_field} = %s
                                 """, (embedding, record_id))
 
                                 logger.debug(f"Generated embedding for record {record_id} (retry: {is_retry})")
@@ -882,7 +924,7 @@ class PgaiStore(ChunkStoreInterface):
                                     await cur.execute(f"""
                                         UPDATE {self.table_name}
                                         SET retry_status = 'failed'
-                                        WHERE id = %s
+                                        WHERE {pk_field} = %s
                                     """, (record_id,))
                                     logger.warning(f"Record {record_id} marked as failed after {max_retries} retries")
                                 else:
@@ -890,7 +932,7 @@ class PgaiStore(ChunkStoreInterface):
                                     await cur.execute(f"""
                                         UPDATE {self.table_name}
                                         SET retry_status = 'pending'
-                                        WHERE id = %s
+                                        WHERE {pk_field} = %s
                                     """, (record_id,))
                                     logger.info(f"Record {record_id} will be retried (attempt {current_retry_count + 1}/{max_retries})")
 
@@ -931,28 +973,82 @@ class PgaiStore(ChunkStoreInterface):
                         message_role = chunk.metadata.get('message_role') if chunk.metadata else None
                         round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
-                        await cur.execute(f"""
-                            INSERT INTO {self.table_name}
-                            (id, content, metadata, session_id, user_id, message_role, round_id, needs_embedding)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
-                            ON CONFLICT (id) DO UPDATE SET
-                                content = EXCLUDED.content,
-                                metadata = EXCLUDED.metadata,
-                                session_id = EXCLUDED.session_id,
-                                user_id = EXCLUDED.user_id,
-                                message_role = EXCLUDED.message_role,
-                                round_id = EXCLUDED.round_id,
-                                needs_embedding = TRUE,
-                                updated_at = CURRENT_TIMESTAMP
-                        """, (
-                            chunk.chunk_id,
-                            chunk.content,
-                            metadata_json,
-                            session_id,
-                            user_id,
-                            message_role,
-                            round_id
-                        ))
+                        # Check table type and use correct field names
+                        if self.table_name == 'm0_raw':
+                            await cur.execute(f"""
+                                INSERT INTO {self.table_name}
+                                (message_id, content, session_id, user_id, message_role, round_id, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                                ON CONFLICT (message_id) DO UPDATE SET
+                                    content = EXCLUDED.content,
+                                    session_id = EXCLUDED.session_id,
+                                    user_id = EXCLUDED.user_id,
+                                    message_role = EXCLUDED.message_role,
+                                    round_id = EXCLUDED.round_id,
+                                    needs_embedding = TRUE
+                            """, (
+                                chunk.chunk_id,
+                                chunk.content,
+                                session_id,
+                                user_id,
+                                message_role,
+                                round_id
+                            ))
+                        elif self.table_name == 'm1_episodic':
+                            # M1 table uses chunk_id as primary key and has conversation_id
+                            conversation_id = chunk.metadata.get('conversation_id') or chunk.metadata.get('session_id') if chunk.metadata else None
+
+                            # Extract M1-specific fields from metadata
+                            chunking_strategy = chunk.metadata.get('chunking_strategy', 'semantic') if chunk.metadata else 'semantic'
+                            token_count = chunk.metadata.get('token_count', len(chunk.content.split())) if chunk.metadata else len(chunk.content.split())
+                            chunk_quality_score = chunk.metadata.get('confidence', 0.8) if chunk.metadata else 0.8
+                            m0_message_ids = chunk.metadata.get('message_ids', []) if chunk.metadata else []
+
+                            await cur.execute(f"""
+                                INSERT INTO {self.table_name}
+                                (chunk_id, content, conversation_id, chunking_strategy, token_count,
+                                 chunk_quality_score, m0_message_ids, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+                                ON CONFLICT (chunk_id) DO UPDATE SET
+                                    content = EXCLUDED.content,
+                                    conversation_id = EXCLUDED.conversation_id,
+                                    chunking_strategy = EXCLUDED.chunking_strategy,
+                                    token_count = EXCLUDED.token_count,
+                                    chunk_quality_score = EXCLUDED.chunk_quality_score,
+                                    m0_message_ids = EXCLUDED.m0_message_ids,
+                                    needs_embedding = TRUE
+                            """, (
+                                chunk.chunk_id,
+                                chunk.content,
+                                conversation_id,
+                                chunking_strategy,
+                                token_count,
+                                chunk_quality_score,
+                                m0_message_ids
+                            ))
+                        else:
+                            await cur.execute(f"""
+                                INSERT INTO {self.table_name}
+                                (id, content, metadata, session_id, user_id, message_role, round_id, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+                                ON CONFLICT (id) DO UPDATE SET
+                                    content = EXCLUDED.content,
+                                    metadata = EXCLUDED.metadata,
+                                    session_id = EXCLUDED.session_id,
+                                    user_id = EXCLUDED.user_id,
+                                    message_role = EXCLUDED.message_role,
+                                    round_id = EXCLUDED.round_id,
+                                    needs_embedding = TRUE,
+                                    updated_at = CURRENT_TIMESTAMP
+                            """, (
+                                chunk.chunk_id,
+                                chunk.content,
+                                metadata_json,
+                                session_id,
+                                user_id,
+                                message_role,
+                                round_id
+                            ))
                         chunk_ids.append(chunk.chunk_id)
 
                     logger.debug(f"Added {len(chunk_ids)} chunks to {self.table_name} for auto-embedding")
@@ -969,30 +1065,88 @@ class PgaiStore(ChunkStoreInterface):
                         message_role = chunk.metadata.get('message_role') if chunk.metadata else None
                         round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
-                        await cur.execute(f"""
-                            INSERT INTO {self.table_name}
-                            (id, content, metadata, session_id, user_id, message_role, round_id, embedding, needs_embedding)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE)
-                            ON CONFLICT (id) DO UPDATE SET
-                                content = EXCLUDED.content,
-                                metadata = EXCLUDED.metadata,
-                                session_id = EXCLUDED.session_id,
-                                user_id = EXCLUDED.user_id,
-                                message_role = EXCLUDED.message_role,
-                                round_id = EXCLUDED.round_id,
-                                embedding = EXCLUDED.embedding,
-                                needs_embedding = FALSE,
-                                updated_at = CURRENT_TIMESTAMP
-                        """, (
-                            chunk.chunk_id,
-                            chunk.content,
-                            metadata_json,
-                            session_id,
-                            user_id,
-                            message_role,
-                            round_id,
-                            embedding
-                        ))
+                        # Check table type and use correct field names
+                        if self.table_name == 'm0_raw':
+                            await cur.execute(f"""
+                                INSERT INTO {self.table_name}
+                                (message_id, content, session_id, user_id, message_role, round_id, embedding, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE)
+                                ON CONFLICT (message_id) DO UPDATE SET
+                                    content = EXCLUDED.content,
+                                    session_id = EXCLUDED.session_id,
+                                    user_id = EXCLUDED.user_id,
+                                    message_role = EXCLUDED.message_role,
+                                    round_id = EXCLUDED.round_id,
+                                    embedding = EXCLUDED.embedding,
+                                    needs_embedding = FALSE
+                            """, (
+                                chunk.chunk_id,
+                                chunk.content,
+                                session_id,
+                                user_id,
+                                message_role,
+                                round_id,
+                                embedding
+                            ))
+                        elif self.table_name == 'm1_episodic':
+                            # M1 table uses chunk_id as primary key and has conversation_id
+                            conversation_id = chunk.metadata.get('conversation_id') or chunk.metadata.get('session_id') if chunk.metadata else None
+
+                            # Extract M1-specific fields from metadata
+                            chunking_strategy = chunk.metadata.get('chunking_strategy', 'semantic') if chunk.metadata else 'semantic'
+                            token_count = chunk.metadata.get('token_count', len(chunk.content.split())) if chunk.metadata else len(chunk.content.split())
+                            chunk_quality_score = chunk.metadata.get('confidence', 0.8) if chunk.metadata else 0.8
+                            m0_message_ids = chunk.metadata.get('message_ids', []) if chunk.metadata else []
+
+                            await cur.execute(f"""
+                                INSERT INTO {self.table_name}
+                                (chunk_id, content, conversation_id, chunking_strategy, token_count,
+                                 chunk_quality_score, m0_message_ids, embedding, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+                                ON CONFLICT (chunk_id) DO UPDATE SET
+                                    content = EXCLUDED.content,
+                                    conversation_id = EXCLUDED.conversation_id,
+                                    chunking_strategy = EXCLUDED.chunking_strategy,
+                                    token_count = EXCLUDED.token_count,
+                                    chunk_quality_score = EXCLUDED.chunk_quality_score,
+                                    m0_message_ids = EXCLUDED.m0_message_ids,
+                                    embedding = EXCLUDED.embedding,
+                                    needs_embedding = FALSE
+                            """, (
+                                chunk.chunk_id,
+                                chunk.content,
+                                conversation_id,
+                                chunking_strategy,
+                                token_count,
+                                chunk_quality_score,
+                                m0_message_ids,
+                                embedding
+                            ))
+                        else:
+                            await cur.execute(f"""
+                                INSERT INTO {self.table_name}
+                                (id, content, metadata, session_id, user_id, message_role, round_id, embedding, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+                                ON CONFLICT (id) DO UPDATE SET
+                                    content = EXCLUDED.content,
+                                    metadata = EXCLUDED.metadata,
+                                    session_id = EXCLUDED.session_id,
+                                    user_id = EXCLUDED.user_id,
+                                    message_role = EXCLUDED.message_role,
+                                    round_id = EXCLUDED.round_id,
+                                    embedding = EXCLUDED.embedding,
+                                    needs_embedding = FALSE,
+                                    updated_at = CURRENT_TIMESTAMP
+                            """, (
+                                chunk.chunk_id,
+                                chunk.content,
+                                metadata_json,
+                                session_id,
+                                user_id,
+                                message_role,
+                                round_id,
+                                embedding
+                            ))
                         chunk_ids.append(chunk.chunk_id)
 
                     logger.debug(f"Added {len(chunk_ids)} chunks to {self.table_name} with immediate embeddings")
@@ -1069,12 +1223,13 @@ class PgaiStore(ChunkStoreInterface):
         """
         try:
             # Get record content
+            pk_field = self._get_primary_key_field()
             async with self.pool.connection() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute(f"""
                         SELECT content, metadata
                         FROM {self.table_name}
-                        WHERE id = %s AND needs_embedding = TRUE
+                        WHERE {pk_field} = %s AND needs_embedding = TRUE
                     """, (record_id,))
 
                     row = await cur.fetchone()
@@ -1101,7 +1256,7 @@ class PgaiStore(ChunkStoreInterface):
                         SET embedding = %s,
                             needs_embedding = FALSE,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE id = %s
+                        WHERE {pk_field} = %s
                     """, (embedding, record_id))
 
                     if cur.rowcount == 0:
@@ -1185,13 +1340,15 @@ class PgaiStore(ChunkStoreInterface):
             return []
 
         results = []
+        id_column = self._get_id_column()
+        metadata_select = self._get_metadata_select()
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 for chunk_id in chunk_ids:
                     await cur.execute(f"""
-                        SELECT id, content, metadata, created_at, updated_at
+                        SELECT {id_column}, content, {metadata_select}, created_at, updated_at
                         FROM {self.table_name}
-                        WHERE id = %s
+                        WHERE {id_column} = %s
                     """, (chunk_id,))
 
                     row = await cur.fetchone()
@@ -1242,12 +1399,13 @@ class PgaiStore(ChunkStoreInterface):
                 message_role = chunk.metadata.get('message_role') if chunk.metadata else None
                 round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
+                id_column = self._get_id_column()
                 await cur.execute(f"""
                     UPDATE {self.table_name}
-                    SET content = %s, metadata = %s, session_id = %s, user_id = %s, 
+                    SET content = %s, metadata = %s, session_id = %s, user_id = %s,
                         message_role = %s, round_id = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = %s
-                """, (chunk.content, metadata_json, session_id, user_id, 
+                    WHERE {id_column} = %s
+                """, (chunk.content, metadata_json, session_id, user_id,
                       message_role, round_id, embedding, chunk_id))
 
                 await conn.commit()
@@ -1284,12 +1442,13 @@ class PgaiStore(ChunkStoreInterface):
                     message_role = chunk.metadata.get('message_role') if chunk.metadata else None
                     round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
+                    id_column = self._get_id_column()
                     await cur.execute(f"""
                         UPDATE {self.table_name}
-                        SET content = %s, metadata = %s, session_id = %s, user_id = %s, 
+                        SET content = %s, metadata = %s, session_id = %s, user_id = %s,
                             message_role = %s, round_id = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = %s
-                    """, (chunk.content, metadata_json, session_id, user_id, 
+                        WHERE {id_column} = %s
+                    """, (chunk.content, metadata_json, session_id, user_id,
                           message_role, round_id, embedding, chunk_id))
 
                     results.append(cur.rowcount > 0)
@@ -1310,10 +1469,11 @@ class PgaiStore(ChunkStoreInterface):
         results = []
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
+                id_column = self._get_id_column()
                 for chunk_id in chunk_ids:
                     await cur.execute(f"""
                         DELETE FROM {self.table_name}
-                        WHERE id = %s
+                        WHERE {id_column} = %s
                     """, (chunk_id,))
 
                     results.append(cur.rowcount > 0)
@@ -1322,6 +1482,30 @@ class PgaiStore(ChunkStoreInterface):
 
         return results
 
+    def _get_id_column(self) -> str:
+        """Get the appropriate ID column name for the table."""
+        if self.table_name == 'm0_raw':
+            return 'message_id'
+        else:
+            return 'id'
+
+    def _get_metadata_select(self) -> str:
+        """Get the appropriate metadata SELECT clause for the table."""
+        if self.table_name == 'm0_raw':
+            return """json_build_object(
+                'session_id', session_id,
+                'user_id', user_id,
+                'message_role', message_role,
+                'round_id', round_id,
+                'role', role,
+                'conversation_id', conversation_id,
+                'sequence_number', sequence_number,
+                'token_count', token_count,
+                'processing_status', processing_status
+            ) as metadata"""
+        else:
+            return 'metadata'
+
     async def query(self, query: Query, top_k: int = 5) -> List[ChunkData]:
         """Query: Semantic search for relevant chunks based on query text."""
         if not self.initialized:
@@ -1329,11 +1513,13 @@ class PgaiStore(ChunkStoreInterface):
 
         # Use text-based search for now (could be enhanced with embeddings)
         query_text = query.text if hasattr(query, 'text') else str(query)
+        id_column = self._get_id_column()
+        metadata_select = self._get_metadata_select()
 
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(f"""
-                    SELECT id, content, metadata, created_at, updated_at
+                    SELECT {id_column}, content, {metadata_select}, created_at, updated_at
                     FROM {self.table_name}
                     WHERE content ILIKE %s
                     ORDER BY created_at DESC
@@ -1452,12 +1638,14 @@ class PgaiStore(ChunkStoreInterface):
         if not self.initialized:
             await self.initialize()
 
+        id_column = self._get_id_column()
+        metadata_select = self._get_metadata_select()
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(f"""
-                    SELECT id, content, metadata, created_at, updated_at
+                    SELECT {id_column}, content, {metadata_select}, created_at, updated_at
                     FROM {self.table_name}
-                    WHERE id = %s
+                    WHERE {id_column} = %s
                 """, (chunk_id,))
 
                 row = await cur.fetchone()
@@ -1487,9 +1675,10 @@ class PgaiStore(ChunkStoreInterface):
 
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
+                id_column = self._get_id_column()
                 await cur.execute(f"""
                     DELETE FROM {self.table_name}
-                    WHERE id = %s
+                    WHERE {id_column} = %s
                 """, (chunk_id,))
 
                 await conn.commit()
@@ -1540,14 +1729,26 @@ class PgaiStore(ChunkStoreInterface):
         if not self.initialized:
             await self.initialize()
 
+        id_column = self._get_id_column()
+        metadata_select = self._get_metadata_select()
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(f"""
-                    SELECT id, content, metadata, created_at, updated_at
-                    FROM {self.table_name}
-                    WHERE metadata->>'session_id' = %s
-                    ORDER BY created_at
-                """, (session_id,))
+                if self.table_name == 'm0_raw':
+                    # For m0_raw, use the actual session_id column
+                    await cur.execute(f"""
+                        SELECT {id_column}, content, {metadata_select}, created_at, updated_at
+                        FROM {self.table_name}
+                        WHERE session_id = %s
+                        ORDER BY created_at
+                    """, (session_id,))
+                else:
+                    # For other tables, use metadata JSON column
+                    await cur.execute(f"""
+                        SELECT {id_column}, content, {metadata_select}, created_at, updated_at
+                        FROM {self.table_name}
+                        WHERE metadata->>'session_id' = %s
+                        ORDER BY created_at
+                    """, (session_id,))
 
                 results = []
                 async for row in cur:
@@ -1569,14 +1770,26 @@ class PgaiStore(ChunkStoreInterface):
         if not self.initialized:
             await self.initialize()
 
+        id_column = self._get_id_column()
+        metadata_select = self._get_metadata_select()
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(f"""
-                    SELECT id, content, metadata, created_at, updated_at
-                    FROM {self.table_name}
-                    WHERE metadata->>'round_id' = %s
-                    ORDER BY created_at
-                """, (round_id,))
+                if self.table_name == 'm0_raw':
+                    # For m0_raw, use the actual round_id column
+                    await cur.execute(f"""
+                        SELECT {id_column}, content, {metadata_select}, created_at, updated_at
+                        FROM {self.table_name}
+                        WHERE round_id = %s
+                        ORDER BY created_at
+                    """, (round_id,))
+                else:
+                    # For other tables, use metadata JSON column
+                    await cur.execute(f"""
+                        SELECT {id_column}, content, {metadata_select}, created_at, updated_at
+                        FROM {self.table_name}
+                        WHERE metadata->>'round_id' = %s
+                        ORDER BY created_at
+                    """, (round_id,))
 
                 results = []
                 async for row in cur:
@@ -1598,14 +1811,26 @@ class PgaiStore(ChunkStoreInterface):
         if not self.initialized:
             await self.initialize()
 
+        id_column = self._get_id_column()
+        metadata_select = self._get_metadata_select()
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(f"""
-                    SELECT id, content, metadata, created_at, updated_at
-                    FROM {self.table_name}
-                    WHERE metadata->>'user_id' = %s
-                    ORDER BY created_at
-                """, (user_id,))
+                if self.table_name == 'm0_raw':
+                    # For m0_raw, use the actual user_id column
+                    await cur.execute(f"""
+                        SELECT {id_column}, content, {metadata_select}, created_at, updated_at
+                        FROM {self.table_name}
+                        WHERE user_id = %s
+                        ORDER BY created_at
+                    """, (user_id,))
+                else:
+                    # For other tables, use metadata JSON column
+                    await cur.execute(f"""
+                        SELECT {id_column}, content, {metadata_select}, created_at, updated_at
+                        FROM {self.table_name}
+                        WHERE metadata->>'user_id' = %s
+                        ORDER BY created_at
+                    """, (user_id,))
 
                 results = []
                 async for row in cur:
@@ -1627,14 +1852,26 @@ class PgaiStore(ChunkStoreInterface):
         if not self.initialized:
             await self.initialize()
 
+        id_column = self._get_id_column()
+        metadata_select = self._get_metadata_select()
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(f"""
-                    SELECT id, content, metadata, created_at, updated_at
-                    FROM {self.table_name}
-                    WHERE metadata->>'strategy_type' = %s
-                    ORDER BY created_at
-                """, (strategy_type,))
+                if self.table_name == 'm0_raw':
+                    # For m0_raw, strategy_type is not a direct column, so we'll skip this filter
+                    # or we could add it to the metadata JSON construction if needed
+                    await cur.execute(f"""
+                        SELECT {id_column}, content, {metadata_select}, created_at, updated_at
+                        FROM {self.table_name}
+                        ORDER BY created_at
+                    """)
+                else:
+                    # For other tables, use metadata JSON column
+                    await cur.execute(f"""
+                        SELECT {id_column}, content, {metadata_select}, created_at, updated_at
+                        FROM {self.table_name}
+                        WHERE metadata->>'strategy_type' = %s
+                        ORDER BY created_at
+                    """, (strategy_type,))
 
                 results = []
                 async for row in cur:

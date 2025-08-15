@@ -381,7 +381,7 @@ class MultiLayerPgaiStore:
                 # Handle both dict and FormedEpisode objects
                 if isinstance(episode, dict):
                     episode_chunk = ChunkData(
-                        content=episode.get('episode_content', ''),
+                        content=episode.get('content', ''),  # Use 'content' instead of 'episode_content'
                         metadata={
                             'episode_type': episode.get('episode_type', 'general'),
                             'episode_category': episode.get('episode_category', {}),

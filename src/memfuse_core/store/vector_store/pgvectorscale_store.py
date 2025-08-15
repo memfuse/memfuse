@@ -16,10 +16,12 @@ from psycopg2.extras import RealDictCursor
 from loguru import logger
 
 from .base import VectorStore
-from ...rag.chunk.integrated import IntegratedChunkingProcessor
 from ...rag.chunk.base import ChunkData
-from ...rag.encode.base import EncoderBase
+from ...rag.chunk.integrated import IntegratedChunkingProcessor
 from ...rag.encode.MiniLM import MiniLMEncoder
+from ...memory import M0Processor, M1Processor
+from ...models.schema import SchemaManager
+from ...rag.encode.embedding_service import EmbeddingService
 
 
 class PgVectorScaleStore(VectorStore):
@@ -35,7 +37,7 @@ class PgVectorScaleStore(VectorStore):
     def __init__(
         self,
         data_dir: str = "",
-        encoder: Optional[EncoderBase] = None,
+        encoder: Optional[Any] = None,
         model_name: str = "all-MiniLM-L6-v2",
         cache_size: int = 100,
         buffer_size: int = 10,
@@ -70,7 +72,16 @@ class PgVectorScaleStore(VectorStore):
         # M0/M1 layer configuration
         self.chunk_token_limit = 200  # Token limit per M1 chunk
 
-        # Initialize chunking processor
+        # Initialize new components
+        self.schema_manager = SchemaManager()
+        self.m0_processor = M0Processor()
+        self.m1_processor = M1Processor(embedding_model=model_name)
+        self.embedding_service = EmbeddingService(
+            model_name=model_name,
+            cache_size=cache_size
+        )
+
+        # Keep legacy chunking processor for compatibility
         self.chunking_processor = IntegratedChunkingProcessor(
             strategy_name='contextual',
             max_words_per_chunk=self.chunk_token_limit
@@ -93,10 +104,17 @@ class PgVectorScaleStore(VectorStore):
                 else:
                     logger.warning("PgVectorScaleStore: pgvectorscale extension not found, using standard pgvector")
 
-            # Verify tables exist
+            # Verify tables exist using schema manager
+            await self._verify_schema_with_manager()
+
+            # Also run legacy schema verification for compatibility
             await self._verify_schema()
 
-            # Initialize encoder with global model management
+            # Initialize new components
+            await self.m1_processor.initialize()
+            await self.embedding_service.initialize()
+
+            # Initialize encoder with global model management (for compatibility)
             await self._initialize_encoder()
 
             # Initialize chunking processor
@@ -154,7 +172,35 @@ class PgVectorScaleStore(VectorStore):
         except Exception as e:
             logger.error(f"PgVectorScaleStore: Encoder initialization failed: {e}")
             raise
-    
+
+    async def _verify_schema_with_manager(self) -> None:
+        """Verify schema using the schema manager."""
+        try:
+            # Check if tables exist
+            table_names = self.schema_manager.get_table_names()
+
+            with self.conn.cursor() as cur:
+                for table_name in table_names:
+                    cur.execute("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables
+                            WHERE table_name = %s
+                        );
+                    """, (table_name,))
+
+                    exists = cur.fetchone()[0]
+                    if not exists:
+                        logger.warning(f"PgVectorScaleStore: Table {table_name} does not exist")
+                        # Could auto-create here if needed
+                    else:
+                        logger.debug(f"PgVectorScaleStore: Table {table_name} exists")
+
+            logger.info("PgVectorScaleStore: Schema verification with manager completed")
+
+        except Exception as e:
+            logger.error(f"PgVectorScaleStore: Schema verification with manager failed: {e}")
+            raise
+
     async def _verify_schema(self) -> None:
         """Verify that required M0/M1 tables exist."""
         try:
@@ -249,29 +295,154 @@ class PgVectorScaleStore(VectorStore):
         added_ids = []
         
         try:
-            # Step 1: Insert raw messages into M0 layer
-            m0_message_ids = await self._insert_m0_messages(chunks)
-            
-            # Step 2: Create M1 chunks with intelligent chunking
-            m1_chunk_ids = await self._create_m1_chunks(chunks, m0_message_ids)
-            
+            # Step 1: Process messages for M0 layer using M0 processor
+            session_id = chunks[0].metadata.get('session_id', str(uuid.uuid4())) if chunks else str(uuid.uuid4())
+
+            # Convert chunks to messages for M0 processing
+            messages = []
+            for chunk in chunks:
+                message = {
+                    'content': chunk.content,
+                    'role': chunk.metadata.get('role', 'user')
+                }
+                messages.append(message)
+
+            # Process with M0 processor
+            m0_records = await self.m0_processor.process_messages(messages, session_id)
+
+            # Insert M0 records into database
+            m0_message_ids = await self._insert_m0_records(m0_records)
+
+            # Step 2: Process chunks for M1 layer using M1 processor
+            m1_records = await self.m1_processor.process_chunks(chunks, m0_message_ids, session_id)
+
+            # Insert M1 records into database
+            m1_chunk_ids = await self._insert_m1_records(m1_records)
+
             added_ids.extend(m1_chunk_ids)
-            
+
             # Update metrics
             self.metrics["add_time"] += time.time() - start_time
             self.metrics["add_count"] += len(chunks)
-            
+
             # Invalidate query cache
             self.query_cache = {}
-            
+
             logger.info(f"PgVectorScaleStore: Added {len(chunks)} chunks -> {len(m0_message_ids)} M0 messages -> {len(m1_chunk_ids)} M1 chunks")
-            
+
             return added_ids
-            
+
         except Exception as e:
             logger.error(f"PgVectorScaleStore: Add operation failed: {e}")
             raise
-    
+
+    async def _insert_m0_records(self, m0_records: List[Dict[str, Any]]) -> List[str]:
+        """Insert M0 records into database."""
+        m0_ids = []
+
+        try:
+            with self.conn.cursor() as cur:
+                insert_query = """
+                    INSERT INTO m0_raw
+                    (message_id, content, role, conversation_id, sequence_number, token_count,
+                     processing_status, chunk_assignments, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING message_id
+                """
+
+                for record in m0_records:
+                    cur.execute(insert_query, (
+                        record['message_id'],
+                        record['content'],
+                        record['role'],
+                        record['conversation_id'],
+                        record['sequence_number'],
+                        record['token_count'],
+                        record['processing_status'],
+                        record['chunk_assignments'],
+                        record['created_at'],
+                        record['updated_at']
+                    ))
+
+                    result = cur.fetchone()
+                    if result:
+                        m0_ids.append(result[0])
+
+                logger.info(f"PgVectorScaleStore: Inserted {len(m0_ids)} M0 records")
+                return m0_ids
+
+        except Exception as e:
+            logger.error(f"PgVectorScaleStore: M0 record insertion failed: {e}")
+            raise
+
+    async def _insert_m1_records(self, m1_records: List[Dict[str, Any]]) -> List[str]:
+        """Insert M1 records into database."""
+        m1_ids = []
+
+        try:
+            with self.conn.cursor() as cur:
+                insert_query = """
+                    INSERT INTO m1_episodic
+                    (chunk_id, content, chunking_strategy, token_count, embedding, needs_embedding,
+                     m0_message_ids, conversation_id, created_at, updated_at,
+                     embedding_generated_at, embedding_model, chunk_quality_score)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::uuid[], %s, %s, %s, %s, %s, %s)
+                    RETURNING chunk_id
+                """
+
+                for record in m1_records:
+                    # Handle embedding conversion - can be None for async processing
+                    embedding_str = None
+                    needs_embedding = True
+
+                    if 'embedding' in record and record['embedding'] is not None:
+                        embedding_vector = record['embedding']
+                        if isinstance(embedding_vector, list):
+                            # Convert list to string format for vector type: '[1,2,3]'
+                            embedding_str = '[' + ','.join(map(str, embedding_vector)) + ']'
+                            needs_embedding = False
+                        elif hasattr(embedding_vector, 'tolist'):
+                            # It's a numpy array
+                            embedding_str = '[' + ','.join(map(str, embedding_vector.tolist())) + ']'
+                            needs_embedding = False
+                        elif hasattr(embedding_vector, '__iter__'):
+                            # It's some other iterable
+                            embedding_str = '[' + ','.join(map(str, embedding_vector)) + ']'
+                            needs_embedding = False
+                        else:
+                            logger.warning(f"Unexpected embedding format: {type(embedding_vector)}, treating as needs_embedding=True")
+
+                    # Override needs_embedding if explicitly set in record
+                    if 'needs_embedding' in record:
+                        needs_embedding = record['needs_embedding']
+
+                    cur.execute(insert_query, (
+                        record['chunk_id'],
+                        record['content'],
+                        record['chunking_strategy'],
+                        record['token_count'],
+                        embedding_str,  # Can be None for async processing
+                        needs_embedding,
+                        record['m0_message_ids'],
+                        record['conversation_id'],
+                        record['created_at'],
+                        record['updated_at'],
+                        record.get('embedding_generated_at'),  # Can be None
+                        record['embedding_model'],
+                        record['chunk_quality_score']
+                    ))
+
+                    result = cur.fetchone()
+                    if result:
+                        m1_ids.append(result[0])
+
+                logger.info(f"PgVectorScaleStore: Inserted {len(m1_ids)} M1 records")
+                return m1_ids
+
+        except Exception as e:
+            logger.error(f"PgVectorScaleStore: M1 record insertion failed: {e}")
+            raise
+
     async def _insert_m0_messages(self, chunks: List[ChunkData]) -> List[str]:
         """Insert raw messages into M0 raw layer."""
         m0_ids = []
@@ -280,46 +451,30 @@ class PgVectorScaleStore(VectorStore):
             with self.conn.cursor() as cur:
                 insert_query = """
                     INSERT INTO m0_raw
-                    (id, content, session_id, user_id, message_role, round_id, metadata, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
+                    (message_id, content, role, conversation_id, sequence_number, token_count,
+                     processing_status, chunk_assignments, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING message_id
                 """
 
                 for i, chunk in enumerate(chunks):
                     message_id = str(uuid.uuid4())
 
-                    # Extract metadata for dedicated columns
-                    session_id = chunk.metadata.get('session_id')
-                    user_id = chunk.metadata.get('user_id')
-                    message_role = chunk.metadata.get('role', 'user')
-                    round_id = chunk.metadata.get('round_id')
-
-                    # Extract other metadata
+                    # Extract metadata
+                    role = chunk.metadata.get('role', 'user')
                     conversation_id = chunk.metadata.get('conversation_id', str(uuid.uuid4()))
                     sequence_number = chunk.metadata.get('sequence_number', i + 1)
-                    batch_index = chunk.metadata.get('batch_index', 0)
-                    message_index = chunk.metadata.get('message_index', i)
-
-                    # Prepare metadata for M0 raw storage (excluding fields that have dedicated columns)
-                    m0_metadata = {
-                        'conversation_id': conversation_id,
-                        'sequence_number': sequence_number,
-                        'batch_index': batch_index,
-                        'message_index': message_index,
-                        'token_count': max(1, len(chunk.content) // 4),
-                        'processing_status': 'pending',
-                        **{k: v for k, v in chunk.metadata.items()
-                           if k not in ['session_id', 'user_id', 'role', 'round_id']}
-                    }
+                    token_count = max(1, len(chunk.content) // 4)
 
                     cur.execute(insert_query, (
                         message_id,
                         chunk.content,
-                        session_id,
-                        user_id,
-                        message_role,
-                        round_id,
-                        json.dumps(m0_metadata),
+                        role,
+                        conversation_id,
+                        sequence_number,
+                        token_count,
+                        'pending',  # processing_status
+                        [],  # chunk_assignments (empty initially)
                         datetime.now()
                     ))
 
@@ -369,50 +524,35 @@ class PgVectorScaleStore(VectorStore):
             with self.conn.cursor() as cur:
                 insert_query = """
                     INSERT INTO m1_episodic
-                    (id, source_id, source_session_id, source_user_id, episode_content,
-                     episode_type, confidence, entities, temporal_info, source_context,
-                     metadata, embedding, needs_embedding, retry_status, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
+                    (chunk_id, content, chunking_strategy, token_count, embedding,
+                     m0_message_ids, conversation_id, embedding_generated_at,
+                     embedding_model, chunk_quality_score, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s::uuid[], %s, %s, %s, %s, %s)
+                    RETURNING chunk_id
                 """
 
                 for i, (chunk, embedding) in enumerate(zip(validated_chunks, embeddings)):
                     chunk_id = str(uuid.uuid4())
 
-                    # Map to corresponding M0 message IDs (simplified mapping)
-                    source_id = m0_message_ids[min(i, len(m0_message_ids) - 1)]
-
                     # Extract metadata
                     conversation_id = chunk.metadata.get('conversation_id', str(uuid.uuid4()))
                     token_count = chunk.metadata.get('estimated_tokens', max(1, len(chunk.content) // 4))
                     chunking_strategy = chunk.metadata.get('chunking_strategy', 'token_based')
-                    user_id = chunk.metadata.get('user_id', 'demo_user')
 
-                    # Prepare episodic memory metadata
-                    episode_metadata = {
-                        'chunking_strategy': chunking_strategy,
-                        'token_count': token_count,
-                        'm0_message_ids': m0_message_ids,
-                        'conversation_id': conversation_id,
-                        'embedding_model': self.model_name,
-                        **chunk.metadata
-                    }
+                    # Convert UUIDs to strings for the array (psycopg2 compatibility)
+                    m0_uuid_array = [str(uid) for uid in m0_message_ids]
 
                     cur.execute(insert_query, (
                         chunk_id,
-                        source_id,  # source_id (first M0 message)
-                        conversation_id,  # source_session_id
-                        user_id,  # source_user_id
-                        chunk.content,  # episode_content
-                        'conversation_chunk',  # episode_type
-                        1.0,  # confidence
-                        json.dumps([]),  # entities (empty for now)
-                        json.dumps({}),  # temporal_info (empty for now)
-                        f"Chunked from {len(m0_message_ids)} M0 messages",  # source_context
-                        json.dumps(episode_metadata),  # metadata
+                        chunk.content,
+                        chunking_strategy,
+                        token_count,
                         embedding.tolist(),  # embedding
-                        False,  # needs_embedding (already generated)
-                        'completed',  # retry_status
+                        m0_uuid_array,  # m0_message_ids array (as UUID objects)
+                        conversation_id,
+                        datetime.now(),  # embedding_generated_at
+                        self.model_name,  # embedding_model
+                        1.0,  # chunk_quality_score
                         datetime.now()  # created_at
                     ))
 
@@ -454,16 +594,16 @@ class PgVectorScaleStore(VectorStore):
                 # Direct query on m1_episodic with normalized similarity scores
                 cur.execute("""
                     SELECT
-                        id,
-                        episode_content,
+                        chunk_id,
+                        content,
                         (1.0 - (embedding <=> %s::vector) / 2.0) as similarity_score,
                         (embedding <=> %s::vector) as distance,
-                        source_id,
-                        source_session_id,
-                        source_user_id,
-                        episode_type,
-                        confidence,
-                        metadata,
+                        chunking_strategy,
+                        token_count,
+                        m0_message_ids,
+                        conversation_id,
+                        embedding_model,
+                        chunk_quality_score,
                         created_at
                     FROM m1_episodic
                     WHERE (1.0 - (embedding <=> %s::vector) / 2.0) >= %s
@@ -480,32 +620,23 @@ class PgVectorScaleStore(VectorStore):
                 # Convert results to ChunkData objects
                 results = []
                 for row in rows:
-                    # Parse metadata JSON (handle both string and dict cases)
-                    if row['metadata']:
-                        if isinstance(row['metadata'], str):
-                            episode_metadata = json.loads(row['metadata'])
-                        else:
-                            episode_metadata = row['metadata']
-                    else:
-                        episode_metadata = {}
-
                     metadata = {
-                        'chunk_id': row['id'],
+                        'chunk_id': row['chunk_id'],
                         'similarity_score': float(row['similarity_score']),
                         'distance': float(row['distance']),
-                        'source_id': row['source_id'],
-                        'source_session_id': row['source_session_id'],
-                        'source_user_id': row['source_user_id'],
-                        'episode_type': row['episode_type'],
-                        'confidence': row['confidence'],
+                        'chunking_strategy': row['chunking_strategy'],
+                        'token_count': row['token_count'],
+                        'm0_message_ids': row['m0_message_ids'],
+                        'conversation_id': row['conversation_id'],
+                        'embedding_model': row['embedding_model'],
+                        'chunk_quality_score': row['chunk_quality_score'],
                         'created_at': row['created_at'],
-                        'source': 'pgvectorscale_m1_episodic',
-                        **episode_metadata
+                        'source': 'pgvectorscale_m1_episodic'
                     }
 
                     chunk = ChunkData(
-                        content=row['episode_content'],
-                        chunk_id=row['id'],
+                        content=row['content'],
+                        chunk_id=row['chunk_id'],
                         metadata=metadata
                     )
                     results.append(chunk)
@@ -538,7 +669,7 @@ class PgVectorScaleStore(VectorStore):
             with self.conn.cursor() as cur:
                 # Delete from M1 episodic memories
                 cur.execute("""
-                    DELETE FROM m1_episodic WHERE id = ANY(%s)
+                    DELETE FROM m1_episodic WHERE chunk_id = ANY(%s)
                 """, (chunk_ids,))
 
                 deleted_m1 = cur.rowcount
@@ -643,7 +774,7 @@ class PgVectorScaleStore(VectorStore):
                 cur.execute("""
                     SELECT chunk_id, content, chunking_strategy, token_count,
                            m0_message_ids, conversation_id, created_at
-                    FROM m1_chunks
+                    FROM m1_episodic
                     WHERE chunk_id = ANY(%s)
                 """, (chunk_ids,))
 
@@ -684,7 +815,7 @@ class PgVectorScaleStore(VectorStore):
         try:
             with self.conn.cursor() as cur:
                 cur.execute("""
-                    SELECT embedding FROM m1_chunks WHERE chunk_id = %s
+                    SELECT embedding FROM m1_episodic WHERE chunk_id = %s
                 """, (chunk_id,))
 
                 result = cur.fetchone()
@@ -743,7 +874,7 @@ class PgVectorScaleStore(VectorStore):
         try:
             with self.conn.cursor() as cur:
                 cur.execute("""
-                    UPDATE m1_chunks
+                    UPDATE m1_episodic
                     SET content = %s, embedding = %s, embedding_generated_at = %s
                     WHERE chunk_id = %s
                 """, (chunk.content, embedding.tolist(), datetime.now(), chunk_id))
@@ -761,7 +892,7 @@ class PgVectorScaleStore(VectorStore):
 
         try:
             with self.conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM m1_chunks")
+                cur.execute("SELECT COUNT(*) FROM m1_episodic")
                 result = cur.fetchone()
                 return result[0] if result else 0
 
@@ -777,11 +908,11 @@ class PgVectorScaleStore(VectorStore):
         try:
             with self.conn.cursor() as cur:
                 # Clear M1 chunks
-                cur.execute("DELETE FROM m1_chunks")
+                cur.execute("DELETE FROM m1_episodic")
                 m1_deleted = cur.rowcount
 
                 # Clear M0 messages
-                cur.execute("DELETE FROM m0_messages")
+                cur.execute("DELETE FROM m0_raw")
                 m0_deleted = cur.rowcount
 
                 logger.info(f"PgVectorScaleStore: Cleared {m1_deleted} M1 chunks and {m0_deleted} M0 messages")
@@ -800,7 +931,7 @@ class PgVectorScaleStore(VectorStore):
             with self.conn.cursor() as cur:
                 # Delete from M1 chunks
                 cur.execute("""
-                    DELETE FROM m1_chunks WHERE chunk_id = ANY(%s)
+                    DELETE FROM m1_episodic WHERE chunk_id = ANY(%s)
                     RETURNING chunk_id
                 """, (chunk_ids,))
 
@@ -829,7 +960,7 @@ class PgVectorScaleStore(VectorStore):
                 cur.execute("""
                     SELECT chunk_id, content, chunking_strategy, token_count,
                            m0_message_ids, conversation_id, created_at
-                    FROM m1_chunks
+                    FROM m1_episodic
                     WHERE conversation_id = %s
                     ORDER BY created_at
                 """, (session_id,))
@@ -871,7 +1002,7 @@ class PgVectorScaleStore(VectorStore):
                 cur.execute("""
                     SELECT chunk_id, content, chunking_strategy, token_count,
                            m0_message_ids, conversation_id, created_at
-                    FROM m1_chunks
+                    FROM m1_episodic
                     WHERE chunking_strategy = %s
                     ORDER BY created_at
                 """, (strategy,))

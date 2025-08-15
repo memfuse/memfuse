@@ -27,11 +27,14 @@ class TriggerManager:
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 # Create notification function
+                # Determine the primary key field based on table name
+                pk_field = "message_id" if self.table_name == "m0_raw" else "id"
+
                 await cur.execute(f"""
                     CREATE OR REPLACE FUNCTION notify_embedding_needed_{self.table_name}()
                     RETURNS TRIGGER AS $$
                     BEGIN
-                        PERFORM pg_notify('{self.channel_name}', NEW.id);
+                        PERFORM pg_notify('{self.channel_name}', NEW.{pk_field}::text);
                         RETURN NEW;
                     END;
                     $$ LANGUAGE plpgsql;
@@ -185,10 +188,12 @@ class RetryProcessor:
         """Check if record should be retried."""
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
+                # Determine the primary key field based on table name
+                pk_field = "message_id" if self.table_name == "m0_raw" else "id"
                 await cur.execute(f"""
                     SELECT retry_count, last_retry_at, retry_status
                     FROM {self.table_name}
-                    WHERE id = %s
+                    WHERE {pk_field} = %s
                 """, (record_id,))
 
                 result = await cur.fetchone()
@@ -218,12 +223,14 @@ class RetryProcessor:
         """Mark a retry attempt."""
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
+                # Determine the primary key field based on table name
+                pk_field = "message_id" if self.table_name == "m0_raw" else "id"
                 await cur.execute(f"""
                     UPDATE {self.table_name}
                     SET retry_count = retry_count + 1,
                         last_retry_at = CURRENT_TIMESTAMP,
                         retry_status = 'processing'
-                    WHERE id = %s
+                    WHERE {pk_field} = %s
                 """, (record_id,))
             await conn.commit()
 
@@ -231,13 +238,15 @@ class RetryProcessor:
         """Mark successful processing."""
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
+                # Determine the primary key field based on table name
+                pk_field = "message_id" if self.table_name == "m0_raw" else "id"
                 await cur.execute(f"""
                     UPDATE {self.table_name}
                     SET needs_embedding = FALSE,
                         retry_count = 0,
                         retry_status = 'completed',
                         last_retry_at = NULL
-                    WHERE id = %s
+                    WHERE {pk_field} = %s
                 """, (record_id,))
             await conn.commit()
 
@@ -245,10 +254,12 @@ class RetryProcessor:
         """Mark final failure."""
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
+                # Determine the primary key field based on table name
+                pk_field = "message_id" if self.table_name == "m0_raw" else "id"
                 await cur.execute(f"""
                     UPDATE {self.table_name}
                     SET retry_status = 'failed'
-                    WHERE id = %s
+                    WHERE {pk_field} = %s
                 """, (record_id,))
             await conn.commit()
 
@@ -416,8 +427,10 @@ class ImmediateTriggerCoordinator:
         """Get current retry count for a record."""
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
+                # Determine the primary key field based on table name
+                pk_field = "message_id" if self.table_name == "m0_raw" else "id"
                 await cur.execute(f"""
-                    SELECT retry_count FROM {self.table_name} WHERE id = %s
+                    SELECT retry_count FROM {self.table_name} WHERE {pk_field} = %s
                 """, (record_id,))
 
                 result = await cur.fetchone()

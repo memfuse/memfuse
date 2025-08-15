@@ -58,12 +58,50 @@ class StoreBackendAdapter(StorageBackend):
         try:
             # All storage types now use 'add' method - just need proper data conversion
             if self.storage_type == StorageType.VECTOR:
-                # Vector/Keyword/Graph stores: add(chunks: List[ChunkData])
+                # Vector stores: add(chunks: List[ChunkData])
                 data_list = self._prepare_data_for_store(data)
                 if not data_list:
                     logger.warning("StoreBackendAdapter: No valid data to write to vector store")
                     return ""
-                result_ids = await self.store.add(data_list)
+
+                # Handle dynamic table names for multi-layer architecture
+                table_metadata = metadata
+                if hasattr(data, 'metadata') and data.metadata:
+                    table_metadata = data.metadata
+                elif isinstance(data, dict) and 'metadata' in data:
+                    table_metadata = data['metadata']
+
+                # Get the appropriate table name for this layer
+                table_name = self._get_table_name_for_storage_type(table_metadata)
+
+                # Check if we need to use a different table for this layer
+                if hasattr(self.store, 'add_to_table'):
+                    # Store supports dynamic table names
+                    result_ids = await self.store.add_to_table(table_name, data_list)
+                elif hasattr(self.store, 'pgai_store') and hasattr(self.store.pgai_store, 'table_name'):
+                    # For PgaiVectorWrapper, temporarily change the table name
+                    original_table_name = self.store.pgai_store.table_name
+                    original_embedding_view = self.store.pgai_store.embedding_view
+                    original_vectorizer_name = self.store.pgai_store.vectorizer_name
+
+                    try:
+                        # Temporarily change table configuration
+                        self.store.pgai_store.table_name = table_name
+                        self.store.pgai_store.embedding_view = f"{table_name}_embedding"
+                        self.store.pgai_store.vectorizer_name = f"{table_name}_vectorizer"
+                        logger.info(f"StoreBackendAdapter: Temporarily changed vector store table to: {table_name}")
+
+                        result_ids = await self.store.add(data_list)
+                    finally:
+                        # Restore original table configuration
+                        self.store.pgai_store.table_name = original_table_name
+                        self.store.pgai_store.embedding_view = original_embedding_view
+                        self.store.pgai_store.vectorizer_name = original_vectorizer_name
+                        logger.info(f"StoreBackendAdapter: Restored vector store table to: {original_table_name}")
+                else:
+                    # Fallback to default behavior
+                    result_ids = await self.store.add(data_list)
+
                 return result_ids[0] if result_ids else ""
 
             elif self.storage_type == StorageType.KEYWORD:
@@ -122,91 +160,144 @@ class StoreBackendAdapter(StorageBackend):
         import uuid
         from datetime import datetime
 
-        # Handle different data types
+        # Determine layer from metadata to decide whether to add updated_at
+        layer = "M0"  # Default to M0
         if isinstance(data, ChunkData):
-            # ChunkData object (from M1, M2 layers)
-            # Determine content field name based on layer
-            layer = "M0"  # Default
             if data.metadata and "layer" in data.metadata:
                 layer = data.metadata["layer"]
             elif metadata and "layer" in metadata:
                 layer = metadata["layer"]
+        elif metadata and "layer" in metadata:
+            layer = metadata["layer"]
 
-            # Map layer to content field name
+        # Handle different data types
+        if isinstance(data, ChunkData):
+            # ChunkData object (from M1, M2 layers)
+            # Determine content field name based on layer
+
+            # Map layer to content field name and primary key field name
             content_field_mapping = {
                 "M0": "content",
-                "M1": "episode_content",
+                "M1": "content",  # Use 'content' instead of 'episode_content' to match database schema
                 "M2": "semantic_content",
                 "M3": "procedural_content"
             }
+            primary_key_mapping = {
+                "M0": "message_id",
+                "M1": "chunk_id",
+                "M2": "chunk_id",
+                "M3": "chunk_id"
+            }
             content_field = content_field_mapping.get(layer, "content")
+            primary_key_field = primary_key_mapping.get(layer, "id")
 
             db_data = {
-                'id': data.chunk_id or str(uuid.uuid4()),
+                primary_key_field: data.chunk_id or str(uuid.uuid4()),
                 content_field: data.content,
-                'created_at': datetime.now(),
-                'updated_at': datetime.now()
+                'created_at': datetime.now()
             }
+
+            # Only add updated_at for tables that have this field
+            # M1 episodic table doesn't have updated_at field
+            if layer != "M1":
+                db_data['updated_at'] = datetime.now()
 
             # Extract specific fields from metadata for M1 layer
             if layer == "M1" and data.metadata:
-                # Extract confidence field for M1 episodic table
+                # Map confidence to chunk_quality_score for M1 episodic table
                 if 'confidence' in data.metadata:
-                    db_data['confidence'] = data.metadata['confidence']
+                    db_data['chunk_quality_score'] = data.metadata['confidence']
                 else:
-                    db_data['confidence'] = 0.8  # Default confidence
+                    db_data['chunk_quality_score'] = 0.8  # Default quality score
 
-                # Extract other M1-specific fields
-                if 'episode_type' in data.metadata:
-                    db_data['episode_type'] = data.metadata['episode_type']
-                if 'source_id' in data.metadata:
-                    db_data['source_id'] = data.metadata['source_id']
+                # Set conversation_id for M1 table (required field)
                 if 'session_id' in data.metadata:
-                    db_data['source_session_id'] = data.metadata['session_id']
-                if 'user_id' in data.metadata:
-                    db_data['source_user_id'] = data.metadata['user_id']
+                    db_data['conversation_id'] = data.metadata['session_id']
+                elif 'conversation_id' in data.metadata:
+                    db_data['conversation_id'] = data.metadata['conversation_id']
+                else:
+                    # Generate new conversation_id if not provided
+                    conversation_id = str(uuid.uuid4())
+                    db_data['conversation_id'] = conversation_id
+                    logger.warning(f"StoreBackendAdapter: No session_id/conversation_id found in metadata, generated: {conversation_id}")
 
-            # Add ChunkData metadata
-            if data.metadata:
-                db_data['metadata'] = data.metadata
-            elif metadata:
-                db_data['metadata'] = metadata
+                # Set m0_message_ids for lineage tracking (required field)
+                if 'message_ids' in data.metadata:
+                    db_data['m0_message_ids'] = data.metadata['message_ids']
+                elif 'source_message_ids' in data.metadata:
+                    db_data['m0_message_ids'] = data.metadata['source_message_ids']
+                else:
+                    # Default to empty array if no message IDs provided
+                    db_data['m0_message_ids'] = []
+                    logger.warning(f"StoreBackendAdapter: No message_ids found in metadata for M1 chunk")
 
-            logger.debug(f"StoreBackendAdapter: Prepared ChunkData for database: id={db_data['id']}, layer={layer}, content_field={content_field}, content_length={len(data.content)}")
+                # Set other M1-specific fields that exist in the table
+                if 'chunking_strategy' in data.metadata:
+                    db_data['chunking_strategy'] = data.metadata['chunking_strategy']
+                else:
+                    db_data['chunking_strategy'] = 'semantic'  # Default for M1 layer (episodic processing)
+
+                if 'token_count' in data.metadata:
+                    db_data['token_count'] = data.metadata['token_count']
+                else:
+                    # Estimate token count if not provided
+                    db_data['token_count'] = len(data.content.split()) if data.content else 0
+
+            # Note: M1 table doesn't have a metadata column, so we don't add it
+
+            logger.info(f"StoreBackendAdapter: Prepared ChunkData for database: {primary_key_field}={db_data[primary_key_field]}, layer={layer}, content_field={content_field}, content_length={len(data.content)}")
+            logger.info(f"StoreBackendAdapter: db_data keys: {list(db_data.keys())}")
 
         elif isinstance(data, dict):
             # Dictionary data (e.g., from M0 raw records)
-            db_data = {
-                'id': data.get('id', str(uuid.uuid4())),
-                'content': data.get('content', ''),
-                'created_at': datetime.now(),
-                'updated_at': datetime.now()
-            }
+            # Check if this is a new demo schema record (has message_id)
+            if 'message_id' in data:
+                # New demo schema - use fields as-is
+                db_data = data.copy()
+                # Ensure created_at is set if not present
+                if 'created_at' not in db_data:
+                    db_data['created_at'] = datetime.now()
+            else:
+                # Legacy schema - convert to old format
+                # Default to using 'id' for legacy compatibility
+                primary_key_field = 'id'
+                db_data = {
+                    primary_key_field: data.get('id', str(uuid.uuid4())),
+                    'content': data.get('content', ''),
+                    'created_at': datetime.now()
+                }
+                # Only add updated_at for tables that have this field
+                # M1 episodic table doesn't have updated_at field
+                if layer != "M1":
+                    db_data['updated_at'] = datetime.now()
 
-            # Add M0-specific fields if present
-            if 'session_id' in data:
-                db_data['session_id'] = data['session_id']
-            if 'user_id' in data:
-                db_data['user_id'] = data['user_id']
-            if 'message_role' in data:
-                db_data['message_role'] = data['message_role']
-            if 'round_id' in data:
-                db_data['round_id'] = data['round_id']
+                # Add M0-specific fields if present
+                if 'session_id' in data:
+                    db_data['session_id'] = data['session_id']
+                if 'user_id' in data:
+                    db_data['user_id'] = data['user_id']
+                if 'message_role' in data:
+                    db_data['message_role'] = data['message_role']
+                if 'round_id' in data:
+                    db_data['round_id'] = data['round_id']
 
-            # Add metadata
-            if 'metadata' in data:
-                db_data['metadata'] = data['metadata']
-            elif metadata:
-                db_data['metadata'] = metadata
+                # Add metadata
+                if 'metadata' in data:
+                    db_data['metadata'] = data['metadata']
+                elif metadata:
+                    db_data['metadata'] = metadata
 
         elif hasattr(data, 'id') and hasattr(data, 'content'):
-            # Item-like object
+            # Item-like object - use 'id' for legacy compatibility
             db_data = {
                 'id': data.id or str(uuid.uuid4()),
                 'content': data.content,
-                'created_at': datetime.now(),
-                'updated_at': datetime.now()
+                'created_at': datetime.now()
             }
+            # Only add updated_at for tables that have this field
+            # M1 episodic table doesn't have updated_at field
+            if layer != "M1":
+                db_data['updated_at'] = datetime.now()
 
             # Add metadata if available
             if hasattr(data, 'metadata') and data.metadata:
@@ -221,7 +312,9 @@ class StoreBackendAdapter(StorageBackend):
                 db_data['id'] = str(uuid.uuid4())
             if 'created_at' not in db_data:
                 db_data['created_at'] = datetime.now()
-            if 'updated_at' not in db_data:
+            # Only add updated_at for tables that have this field
+            # M1 episodic table doesn't have updated_at field
+            if 'updated_at' not in db_data and layer != "M1":
                 db_data['updated_at'] = datetime.now()
             if metadata and 'metadata' not in db_data:
                 db_data['metadata'] = metadata
@@ -231,9 +324,12 @@ class StoreBackendAdapter(StorageBackend):
             db_data = {
                 'id': str(uuid.uuid4()),
                 'content': data,
-                'created_at': datetime.now(),
-                'updated_at': datetime.now()
+                'created_at': datetime.now()
             }
+            # Only add updated_at for tables that have this field
+            # M1 episodic table doesn't have updated_at field
+            if layer != "M1":
+                db_data['updated_at'] = datetime.now()
             if metadata:
                 db_data['metadata'] = metadata
         else:
@@ -241,9 +337,12 @@ class StoreBackendAdapter(StorageBackend):
             db_data = {
                 'id': str(uuid.uuid4()),
                 'content': str(data),
-                'created_at': datetime.now(),
-                'updated_at': datetime.now()
+                'created_at': datetime.now()
             }
+            # Only add updated_at for tables that have this field
+            # M1 episodic table doesn't have updated_at field
+            if layer != "M1":
+                db_data['updated_at'] = datetime.now()
             if metadata:
                 db_data['metadata'] = metadata
 
@@ -275,10 +374,23 @@ class StoreBackendAdapter(StorageBackend):
             logger.info(f"StorageAdapter: Selecting table for layer '{layer}' -> '{table_name}' (metadata: {metadata})")
 
             return table_name
+        elif self.storage_type == StorageType.VECTOR:
+            # Vector storage also needs layer-specific table names
+            layer_table_mapping = {
+                "M0": "m0_raw",
+                "M1": "m1_episodic",
+                "M2": "m2_semantic",
+                "M3": "m3_procedural"
+            }
+            table_name = layer_table_mapping.get(layer, "m0_raw")
+
+            # Debug logging
+            logger.info(f"StorageAdapter: Selecting vector table for layer '{layer}' -> '{table_name}' (metadata: {metadata})")
+
+            return table_name
         else:
-            # For non-SQL storage types, use generic names
+            # For other storage types, use generic names
             table_mapping = {
-                StorageType.VECTOR: "vector_data",
                 StorageType.KEYWORD: "keyword_data",
                 StorageType.GRAPH: "graph_data"
             }
@@ -724,8 +836,11 @@ class UnifiedStorageManager(StorageManager):
 
             # Note: Since we use PostgreSQL, we don't need user-specific data directories
             if storage_type == StorageType.VECTOR:
+                # Determine table name based on layer context
+                table_name = self._get_table_name_for_layer(storage_type, config)
                 store = await StoreFactory.create_vector_store(
-                    backend=backend_enum
+                    backend=backend_enum,
+                    table_name=table_name
                 )
             elif storage_type == StorageType.GRAPH:
                 store = await StoreFactory.create_graph_store(
@@ -750,6 +865,83 @@ class UnifiedStorageManager(StorageManager):
         except Exception as e:
             logger.error(f"UnifiedStorageManager: Failed to create {storage_type.value} backend: {e}")
             return None
+
+    def _get_table_name_for_layer(self, storage_type: StorageType, layer_config: Dict[str, Any]) -> str:
+        """Get the appropriate table name for a storage type and layer.
+
+        Args:
+            storage_type: Type of storage (VECTOR, SQL, etc.)
+            layer_config: Layer configuration containing layer information
+
+        Returns:
+            Table name to use for this storage type and layer
+        """
+        # Since layer_config only contains storage backend config, we need to get layer info from global config
+        try:
+            from ..utils.config import config_manager
+            global_config = config_manager.get_config()
+            memory_layers_config = global_config.get("store", {}).get("memory_layers", {})
+
+            # Find the layer that matches the current context by checking which layer is being processed
+            # We'll use a simple heuristic: check the call stack to see which layer is calling this
+            import inspect
+            frame = inspect.currentframe()
+            layer_name = "M0"  # Default
+
+            # Walk up the call stack to find layer context
+            while frame:
+                frame_locals = frame.f_locals
+                frame_globals = frame.f_globals
+
+                # Check for layer type in locals
+                if 'self' in frame_locals:
+                    obj = frame_locals['self']
+                    if hasattr(obj, 'layer_type'):
+                        layer_type = obj.layer_type
+                        if hasattr(layer_type, 'value'):
+                            layer_name = layer_type.value.upper()
+                            break
+                        elif isinstance(layer_type, str):
+                            layer_name = layer_type.upper()
+                            break
+
+                frame = frame.f_back
+
+            logger.info(f"UnifiedStorageManager: Detected layer context: '{layer_name}'")
+
+            # Map layers to table names for vector storage
+            if storage_type == StorageType.VECTOR:
+                layer_table_mapping = {
+                    "M0": "m0_raw",
+                    "M1": "m1_episodic",
+                    "M2": "m2_semantic",
+                    "M3": "m3_procedural"
+                }
+                table_name = layer_table_mapping.get(layer_name, "m0_raw")
+                logger.info(f"UnifiedStorageManager: Selected vector table '{table_name}' for layer '{layer_name}'")
+                return table_name
+            elif storage_type == StorageType.SQL:
+                # SQL storage uses the same table mapping
+                layer_table_mapping = {
+                    "M0": "m0_raw",
+                    "M1": "m1_episodic",
+                    "M2": "m2_semantic",
+                    "M3": "m3_procedural"
+                }
+                return layer_table_mapping.get(layer_name, "m0_raw")
+            else:
+                # For other storage types, use generic names
+                return "data"
+
+        except Exception as e:
+            logger.warning(f"UnifiedStorageManager: Error detecting layer context: {e}, defaulting to M0")
+            # Fallback to M0 if detection fails
+            if storage_type == StorageType.VECTOR:
+                return "m0_raw"
+            elif storage_type == StorageType.SQL:
+                return "m0_raw"
+            else:
+                return "data"
 
     def _get_unified_backend_config(self, storage_type: StorageType, layer_config: Dict[str, Any]) -> Dict[str, Any]:
         """Get unified backend configuration with proper hierarchy.

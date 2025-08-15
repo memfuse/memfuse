@@ -320,17 +320,14 @@ class MemoryLayerImpl(MemoryLayer):
 
             if self.config.m1_enabled and self.hierarchy_manager:
                 try:
-                    # M1 should process M0 raw data, not the original message batch
-                    # Get M0 processed items from the result
-                    m0_layer_result = m0_result.layer_results.get("M0")
-                    m0_processed_items = m0_layer_result.processed_items if m0_layer_result else []
+                    # FIXED: Pass original message content to M1, not just M0 IDs
+                    # M1 needs actual message content for chunking and embedding
+                    logger.debug(f"MemoryLayerImpl: Processing original message content for M1 layer")
 
-                    if m0_processed_items:
-                        logger.debug(f"MemoryLayerImpl: Processing {len(m0_processed_items)} M0 items for M1 layer")
+                    # Prepare original message data for M1 processing (chunking + embedding)
+                    m1_input_data = self._prepare_original_data_for_m1(message_batch_list, async_metadata)
 
-                        # Prepare M0 data for M1 processing (chunking + embedding)
-                        m1_input_data = self._prepare_m0_data_for_m1(m0_processed_items, async_metadata)
-
+                    if m1_input_data:
                         m1_result = await self.hierarchy_manager.write_to_layer(
                             layer_name="M1",
                             data=m1_input_data,
@@ -338,6 +335,8 @@ class MemoryLayerImpl(MemoryLayer):
                         )
                         async_results["M1"] = {"success": m1_result.success if hasattr(m1_result, 'success') else False}
                         logger.info(f"MemoryLayerImpl: M1 async processing completed - success: {m1_result.success if hasattr(m1_result, 'success') else False}")
+                    else:
+                        logger.warning("MemoryLayerImpl: No M1 input data prepared, skipping M1 processing")
 
                 except Exception as e:
                     logger.error(f"MemoryLayerImpl: M1 async processing failed: {e}")
@@ -370,8 +369,54 @@ class MemoryLayerImpl(MemoryLayer):
         except Exception as e:
             logger.error(f"MemoryLayerImpl: Async M1/M2 processing failed: {e}")
 
+    def _prepare_original_data_for_m1(self, message_batch_list: MessageBatchList, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Prepare original message data for M1 layer processing.
+
+        Args:
+            message_batch_list: Original message batches with actual content
+            metadata: Metadata from the original operation
+
+        Returns:
+            List of data items formatted for M1 processing with actual content
+        """
+        try:
+            m1_data = []
+
+            # Process each message batch
+            for batch_idx, message_batch in enumerate(message_batch_list):
+                for msg_idx, message in enumerate(message_batch):
+                    # Create M1 item with actual message content
+                    m1_item = {
+                        "content": message.get("content", ""),
+                        "role": message.get("role", "user"),
+                        "source_layer": "M0",
+                        "target_layer": "M1",
+                        "operation_type": "m0_to_m1_processing",
+                        "batch_index": batch_idx,
+                        "message_index": msg_idx,
+                        "message_id": message.get("message_id", f"msg_{batch_idx}_{msg_idx}"),
+                        "session_id": metadata.get("session_id"),
+                        "user_id": metadata.get("user_id"),
+                        "metadata": {
+                            **metadata,
+                            "original_message": message,
+                            "processing_timestamp": time.time()
+                        }
+                    }
+                    m1_data.append(m1_item)
+
+            logger.debug(f"MemoryLayerImpl: Prepared {len(m1_data)} items for M1 processing from original messages")
+            return m1_data
+
+        except Exception as e:
+            logger.error(f"MemoryLayerImpl: Failed to prepare original data for M1: {e}")
+            return []
+
     def _prepare_m0_data_for_m1(self, m0_processed_items: List[str], metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Prepare M0 processed items for M1 layer processing.
+
+        DEPRECATED: This method only passes M0 IDs, not actual content.
+        Use _prepare_original_data_for_m1 instead for better M1 processing.
 
         Args:
             m0_processed_items: List of M0 record IDs that were successfully stored
