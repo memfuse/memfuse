@@ -40,6 +40,7 @@ graph TB
 3. **Compatibility**: Normalized similarity scores enable cross-system integration
 4. **Scalability**: Incremental updates support real-time streaming data
 5. **Reliability**: Complete data lineage and integrity validation
+6. **User Isolation**: Strict user-based filtering ensures data privacy and security
 
 ## Layer Architecture
 
@@ -444,6 +445,62 @@ def migrate_vectors_to_pgvectorscale():
     validate_migration_integrity()
 ```
 
+## Query Optimization and User Filtering
+
+### User-Based Query Filtering
+
+The system implements strict user-based filtering to ensure data privacy and security:
+
+```sql
+-- User-filtered vector similarity search
+SELECT
+    c.chunk_id,
+    c.content,
+    normalize_cosine_similarity(c.embedding <=> %s::vector) as similarity_score,
+    (c.embedding <=> %s::vector) as distance,
+    array_length(c.m0_message_ids, 1) as m0_message_count,
+    c.chunking_strategy,
+    c.created_at
+FROM m1_episodic c
+JOIN sessions s ON c.conversation_id::text = s.id
+JOIN users u ON s.user_id = u.id
+WHERE u.name = %s  -- User filtering
+  AND normalize_cosine_similarity(c.embedding <=> %s::vector) >= %s
+ORDER BY c.embedding <=> %s::vector ASC
+LIMIT %s;
+```
+
+### Query Performance Optimizations
+
+1. **Broader Search Strategy**: Search with 3x the requested top_k to improve result diversity
+2. **Adaptive Thresholds**: Dynamic similarity thresholds based on query patterns
+3. **Session-Conversation Mapping**: Proper mapping between session IDs and conversation IDs for user isolation
+4. **Chunk Type Handling**: Optimized handling of different result types (messages, chunks, knowledge)
+
+### API Layer Enhancements
+
+The API layer has been optimized to handle mixed result types:
+
+```python
+# Enhanced result type detection
+result_type = result.get("type") or result.get("metadata", {}).get("type")
+
+if result_type == "chunk":
+    # Direct chunk handling without database verification
+    chunk_result = {
+        "id": result_id,
+        "content": result.get("content"),
+        "score": result.get("score", 0),
+        "type": "chunk",
+        "role": None,  # Chunks don't have roles
+        "metadata": {
+            "user_id": user_id,
+            "level": 1,  # M1 layer
+            "source": "memory_database"
+        }
+    }
+```
+
 ## Future Enhancements
 
 ### Planned Features
@@ -452,6 +509,7 @@ def migrate_vectors_to_pgvectorscale():
 2. **Federated Search**: Cross-database vector similarity search
 3. **Real-Time Analytics**: Streaming analytics on vector similarity patterns
 4. **Auto-Tuning**: Automatic parameter optimization based on workload
+5. **Advanced User Filtering**: Role-based access control and fine-grained permissions
 
 ### Research Directions
 
@@ -469,5 +527,7 @@ The simplified MemFuse architecture with pgvectorscale provides a production-rea
 - **Compatibility**: Normalized similarity scores enable cross-system integration
 - **Scalability**: Incremental updates support real-time streaming data
 - **Reliability**: Complete data lineage and integrity validation
+- **Security**: Strict user-based filtering ensures data privacy and isolation
+- **Query Optimization**: Advanced query strategies for improved accuracy and performance
 
 This architecture is ready for immediate production deployment and provides a solid foundation for future enhancements and scaling requirements.

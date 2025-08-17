@@ -168,7 +168,7 @@ class SimplifiedChunkProcessor:
     def __init__(self, chunk_token_limit: int = 200):
         self.chunk_token_limit = chunk_token_limit
 
-    def create_chunks(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def create_chunks(self, messages: List[Dict[str, Any]], session_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Create M1 chunks using token-based strategy."""
         chunks = []
         current_chunk_messages = []
@@ -182,7 +182,7 @@ class SimplifiedChunkProcessor:
             # Check if adding this message would exceed token limit
             if current_token_count + token_count > self.chunk_token_limit and current_chunk_messages:
                 # Create chunk from accumulated messages
-                chunk = self._create_chunk_from_messages(current_chunk_messages)
+                chunk = self._create_chunk_from_messages(current_chunk_messages, session_id)
                 chunks.append(chunk)
 
                 # Start new chunk
@@ -195,25 +195,23 @@ class SimplifiedChunkProcessor:
 
         # Handle remaining messages
         if current_chunk_messages:
-            chunk = self._create_chunk_from_messages(current_chunk_messages)
+            chunk = self._create_chunk_from_messages(current_chunk_messages, session_id)
             chunks.append(chunk)
 
         logger.info(f"✅ Created {len(chunks)} M1 chunks from {len(messages)} messages")
         return chunks
     
-    def _create_chunk_from_messages(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _create_chunk_from_messages(self, messages: List[Dict[str, Any]], session_id: Optional[str] = None) -> Dict[str, Any]:
         """Create a single M1 chunk from a list of M0 messages."""
         # Combine message contents
         combined_content = " ".join([msg.get('content', '') for msg in messages])
-        
+
         # Calculate total token count
         total_tokens = sum([max(1, len(msg.get('content', '')) // 4) for msg in messages])
-        
-        # Extract conversation_id and message_ids
-        conversation_id = messages[0].get('metadata', {}).get('conversation_id')
-        if not conversation_id:
-            conversation_id = str(uuid.uuid4())
-            
+
+        # Use session_id as conversation_id for proper user filtering
+        conversation_id = session_id if session_id else str(uuid.uuid4())
+
         # Generate valid UUIDs for message_ids
         message_ids = []
         for msg in messages:
@@ -225,7 +223,7 @@ class SimplifiedChunkProcessor:
             except ValueError:
                 # If not a valid UUID, generate a new one
                 message_ids.append(str(uuid.uuid4()))
-        
+
         chunk = {
             'chunk_id': str(uuid.uuid4()),
             'content': combined_content,
@@ -235,7 +233,7 @@ class SimplifiedChunkProcessor:
             'm0_message_ids': message_ids,
             'created_at': datetime.now()
         }
-        
+
         return chunk
 
 
@@ -402,6 +400,9 @@ class SimplifiedMemoryService(MessageInterface):
 
             logger.info(f"SimplifiedMemoryService: Processing {len(message_batch_list)} message lists")
 
+            # Extract session_id from kwargs (passed from API)
+            provided_session_id = kwargs.get('session_id')
+
             # Flatten message batch list
             all_messages = []
             for message_list in message_batch_list:
@@ -411,19 +412,19 @@ class SimplifiedMemoryService(MessageInterface):
                 return self._success_response([], "No messages to process")
 
             # Step 1: Create session and round (like traditional MemoryService)
-            session_id, round_id = await self._prepare_session_and_round(message_batch_list)
+            session_id, round_id = await self._prepare_session_and_round(message_batch_list, provided_session_id)
             logger.info(f"SimplifiedMemoryService: Prepared session_id={session_id}, round_id={round_id}")
 
             # Step 2: Store to messages and rounds tables (for compatibility)
             await self._store_to_messages_rounds_tables(all_messages, session_id, round_id)
             logger.info(f"✅ Stored {len(all_messages)} messages to messages/rounds tables")
 
-            # Step 3: Store M0 messages
-            message_ids = await self._store_m0_messages(all_messages)
+            # Step 3: Store M0 messages with session_id as conversation_id
+            message_ids = await self._store_m0_messages(all_messages, session_id)
             logger.info(f"✅ Stored {len(message_ids)} M0 messages")
 
-            # Step 4: Create and store M1 chunks
-            chunks = self.chunk_processor.create_chunks(all_messages)
+            # Step 4: Create and store M1 chunks with session_id as conversation_id
+            chunks = self.chunk_processor.create_chunks(all_messages, session_id)
             chunk_ids = await self._store_m1_chunks(chunks)
             logger.info(f"✅ Stored {len(chunk_ids)} M1 chunks")
 
@@ -438,8 +439,8 @@ class SimplifiedMemoryService(MessageInterface):
             logger.error(f"SimplifiedMemoryService: Error in add_batch: {e}")
             return self._error_response(f"Error processing message batch: {str(e)}")
 
-    async def _store_m0_messages(self, messages: List[Dict[str, Any]]) -> List[str]:
-        """Store M0 messages to database."""
+    async def _store_m0_messages(self, messages: List[Dict[str, Any]], session_id: str) -> List[str]:
+        """Store M0 messages to database with session_id as conversation_id."""
         message_ids = []
 
         try:
@@ -464,16 +465,8 @@ class SimplifiedMemoryService(MessageInterface):
                     content = message.get('content', '')
                     role = message.get('role', 'user')
 
-                    # Extract or generate conversation_id
-                    conversation_id = message.get('metadata', {}).get('conversation_id')
-                    if not conversation_id:
-                        conversation_id = str(uuid.uuid4())
-                    else:
-                        # Validate conversation_id UUID format
-                        try:
-                            uuid.UUID(conversation_id)
-                        except ValueError:
-                            conversation_id = str(uuid.uuid4())
+                    # Use session_id as conversation_id for proper user filtering
+                    conversation_id = session_id
 
                     # Estimate token count
                     token_count = max(1, len(content) // 4)
@@ -506,26 +499,29 @@ class SimplifiedMemoryService(MessageInterface):
 
         return message_ids
 
-    async def _prepare_session_and_round(self, message_batch_list: MessageBatchList) -> tuple[str, str]:
+    async def _prepare_session_and_round(self, message_batch_list: MessageBatchList, provided_session_id: Optional[str] = None) -> tuple[str, str]:
         """Prepare session and round IDs from message batch list."""
         import uuid
 
-        # Extract session_id from first message if available
-        session_id = None
-        for message_list in message_batch_list:
-            for message in message_list:
-                metadata = message.get('metadata', {})
-                if 'session_id' in metadata:
-                    session_id = metadata['session_id']
-                    break
-                # Also check conversation_id as fallback
-                if 'conversation_id' in metadata:
-                    session_id = metadata['conversation_id']
-                    break
-            if session_id:
-                break
+        # Use provided session_id first (from API parameter)
+        session_id = provided_session_id
 
-        # Generate session_id if not found
+        # If no provided session_id, extract from first message if available
+        if not session_id:
+            for message_list in message_batch_list:
+                for message in message_list:
+                    metadata = message.get('metadata', {})
+                    if 'session_id' in metadata:
+                        session_id = metadata['session_id']
+                        break
+                    # Also check conversation_id as fallback
+                    if 'conversation_id' in metadata:
+                        session_id = metadata['conversation_id']
+                        break
+                if session_id:
+                    break
+
+        # Generate session_id if still not found
         if not session_id:
             session_id = str(uuid.uuid4())
 
@@ -637,39 +633,66 @@ class SimplifiedMemoryService(MessageInterface):
         self,
         query_text: str,
         top_k: int = 10,
-        similarity_threshold: float = 0.1
+        similarity_threshold: float = 0.0,  # Lower threshold to get more results
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Query similar chunks using vector similarity search."""
         try:
             # Generate query embedding
             query_embedding = self.embedding_generator.generate_embedding(query_text)
 
-            # Execute similarity search
-            with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
-                    SELECT * FROM search_similar_chunks(%s::vector, %s, %s)
-                """, (query_embedding.tolist(), similarity_threshold, top_k))
+            # Apply user filtering if user_id is provided
+            if user_id:
+                # Use user-filtered search
+                with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT
+                            c.chunk_id,
+                            c.content,
+                            normalize_cosine_similarity(c.embedding <=> %s::vector) as similarity_score,
+                            (c.embedding <=> %s::vector) as distance,
+                            array_length(c.m0_message_ids, 1) as m0_message_count,
+                            c.chunking_strategy,
+                            c.created_at
+                        FROM m1_episodic c
+                        JOIN sessions s ON c.conversation_id::text = s.id
+                        JOIN users u ON s.user_id = u.id
+                        WHERE u.name = %s
+                          AND normalize_cosine_similarity(c.embedding <=> %s::vector) >= %s
+                        ORDER BY c.embedding <=> %s::vector ASC
+                        LIMIT %s
+                    """, (query_embedding.tolist(), query_embedding.tolist(), user_id,
+                          query_embedding.tolist(), similarity_threshold, query_embedding.tolist(), top_k))
+                    rows = cur.fetchall()
+            else:
+                # No filtering, use original search function
+                with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT * FROM search_similar_chunks(%s::vector, %s, %s)
+                    """, (query_embedding.tolist(), similarity_threshold, top_k))
+                    rows = cur.fetchall()
 
-                results = []
-                for row in cur.fetchall():
-                    # Convert to QueryBuffer-compatible format
-                    result = {
-                        'id': str(row['chunk_id']),
-                        'content': row['content'],
-                        'score': row['similarity_score'],  # Already normalized 0-1
-                        'distance': row['distance'],
-                        'created_at': row['created_at'].isoformat() if row['created_at'] else None,
-                        'metadata': {
-                            'source': 'memory_database',
-                            'chunking_strategy': row['chunking_strategy'],
-                            'm0_message_count': row['m0_message_count'],
-                            'type': 'chunk'
-                        }
+            results = []
+            for row in rows:
+                # Convert to QueryBuffer-compatible format
+                result = {
+                    'id': str(row['chunk_id']),
+                    'content': row['content'],
+                    'score': row['similarity_score'],  # Already normalized 0-1
+                    'distance': row['distance'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                    'metadata': {
+                        'source': 'memory_database',
+                        'chunking_strategy': row['chunking_strategy'],
+                        'm0_message_count': row['m0_message_count'],
+                        'type': 'chunk'
                     }
-                    results.append(result)
+                }
+                results.append(result)
 
-                logger.info(f"✅ Vector search returned {len(results)} results for query: '{query_text[:50]}...'")
-                return results
+            logger.info(f"✅ Vector search returned {len(results)} results for query: '{query_text[:50]}...'")
+            return results
 
         except Exception as e:
             logger.error(f"Error in vector similarity search: {e}")
@@ -782,12 +805,72 @@ class SimplifiedMemoryService(MessageInterface):
 
     async def query(
         self,
-        query_text: str,
+        query: Optional[str] = None,
+        query_text: Optional[str] = None,
         top_k: int = 10,
+        store_type: Optional[str] = None,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        include_messages: bool = True,
+        include_knowledge: bool = True,
+        include_chunks: bool = True,
         **kwargs
-    ) -> List[Dict[str, Any]]:
-        """Query interface for compatibility with existing code."""
-        return await self.query_similar_chunks(query_text, top_k)
+    ) -> Dict[str, Any]:
+        """Query interface for compatibility with existing code.
+
+        Args:
+            query: Query string (BufferService compatibility)
+            query_text: Query string (alternative parameter name)
+            top_k: Maximum number of results to return
+            store_type: Type of store to query (ignored in current implementation)
+            session_id: Session ID to filter results (optional)
+            include_messages: Whether to include messages in results
+            include_knowledge: Whether to include knowledge in results
+            include_chunks: Whether to include chunks in results
+            **kwargs: Additional parameters
+
+        Returns:
+            Dictionary with status, code, and query results (BufferService compatible format)
+        """
+        # Handle parameter compatibility - accept both 'query' and 'query_text'
+        actual_query = query or query_text
+        if not actual_query:
+            return self._error_response("Query text is required", 400)
+
+        try:
+            # Increase search scope to get more diverse results
+            # This helps when the correct answer might not be in the top few results
+            search_top_k = max(top_k * 3, 15)  # Search more broadly, then filter
+
+            # Get raw results from similarity search with user filtering
+            raw_results = await self.query_similar_chunks(
+                actual_query,
+                search_top_k,
+                user_id=user_id,
+                session_id=session_id
+            )
+
+            # Take the requested top_k from the broader search
+            results = raw_results[:top_k]
+
+            # Format response to match BufferService expectations
+            response = {
+                "status": "success",
+                "code": 200,
+                "data": {
+                    "results": results,
+                    "total": len(results)
+                },
+                "message": f"Retrieved {len(results)} results from memory database (searched {len(raw_results)} candidates)",
+                "errors": None
+            }
+
+            logger.info(f"SimplifiedMemoryService.query: Returning {len(results)} results for query: '{actual_query[:50]}...' (searched {search_top_k} candidates)")
+            return response
+
+        except Exception as e:
+            logger.error(f"SimplifiedMemoryService.query: Error: {e}")
+            return self._error_response(f"Query failed: {str(e)}")
 
     async def close(self):
         """Close database connections."""

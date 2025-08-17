@@ -375,7 +375,10 @@ async def query_memory(
         if not result_id:
             continue
 
-        if result.get("type") == "message":
+        # Check type from both top-level and metadata (for backward compatibility)
+        result_type = result.get("type") or result.get("metadata", {}).get("type")
+
+        if result_type == "message":
             # Check if this is a buffer result (from memory) vs database result
             # Include all buffer sources: round_buffer, hybrid_buffer, write_buffer, etc.
             buffer_sources = ["write_buffer", "speculative_buffer", "query_buffer", "hybrid_buffer", "round_buffer"]
@@ -421,7 +424,52 @@ async def query_memory(
                                         "retrieval": result.get("metadata", {}).get("retrieval", {})
                                     }
                                 }
-        elif result.get("type") == "knowledge":
+                else:
+                    # Message not found in database - treat as chunk result
+                    if result_id not in message_map or result.get("score", 0) > message_map[result_id].get("score", 0):
+                        chunk_result = {
+                            "id": result_id,
+                            "content": result.get("content"),
+                            "score": result.get("score", 0),
+                            "type": "chunk",
+                            "role": None,
+                            "created_at": result.get("created_at"),
+                            "updated_at": result.get("updated_at"),
+                            "metadata": {
+                                "user_id": user_id,
+                                "agent_id": None,
+                                "session_id": result.get("metadata", {}).get("session_id"),
+                                "session_name": None,
+                                "scope": None,
+                                "level": 1,
+                                "retrieval": result.get("metadata", {}).get("retrieval", {}),
+                                "source": "memory_database"
+                            }
+                        }
+                        message_map[result_id] = chunk_result
+        elif result_type == "chunk":
+            # For chunk results from M1 layer, use them directly
+            if result_id not in message_map or result.get("score", 0) > message_map[result_id].get("score", 0):
+                message_map[result_id] = {
+                    "id": result_id,
+                    "content": result.get("content"),
+                    "score": result.get("score", 0),
+                    "type": "chunk",
+                    "role": None,
+                    "created_at": result.get("created_at"),
+                    "updated_at": result.get("updated_at"),
+                    "metadata": {
+                        "user_id": user_id,
+                        "agent_id": None,
+                        "session_id": result.get("metadata", {}).get("session_id"),
+                        "session_name": None,
+                        "scope": None,
+                        "level": 1,
+                        "retrieval": result.get("metadata", {}).get("retrieval", {}),
+                        "source": "memory_database"
+                    }
+                }
+        elif result_type == "knowledge":
             # For knowledge items, just store them by ID
             if result_id not in knowledge_map or result.get("score", 0) > knowledge_map[result_id].get("score", 0):
                 knowledge_map[result_id] = {
@@ -492,10 +540,14 @@ async def query_memory(
                     logger.info(f"Added database result to unique_results: {result_id}")
                 else:
                     logger.info(f"Message not found in database, skipping: {result_id}")
-                # If message not found in database, skip this result (don't add to unique_results)
+            elif result.get("type") == "chunk":
+                # For chunk results, use them directly
+                if "metadata" not in result:
+                    result["metadata"] = {}
+                result["metadata"]["user_id"] = user_id
+                unique_results[result_id] = result
             else:
-                # For buffer results or knowledge items, use the result as-is
-                logger.info(f"Adding buffer/knowledge result to unique_results: {result_id}")
+                # For buffer results, knowledge items, or other types, use as-is
                 unique_results[result_id] = result
 
     # Convert back to a list

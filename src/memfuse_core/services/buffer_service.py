@@ -140,6 +140,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 result = await self.memory_service.query(
                     query=query,
                     top_k=max_results,
+                    user_id=self.user_id,  # Pass user_id for filtering
                     include_messages=True,
                     include_knowledge=True,
                     include_chunks=True
@@ -626,6 +627,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     top_k=top_k,
                     store_type=store_type,
                     session_id=session_id,
+                    user_id=self.user_id,  # Pass user_id for filtering
                     include_messages=include_messages,
                     include_knowledge=include_knowledge,
                     include_chunks=include_chunks
