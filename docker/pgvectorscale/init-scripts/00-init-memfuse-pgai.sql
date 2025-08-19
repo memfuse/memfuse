@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS m0_raw (
     role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
 
     -- Streaming context
-    conversation_id UUID NOT NULL,
+    session_id UUID NOT NULL,
     sequence_number INTEGER NOT NULL,
 
     -- Token analysis for chunking decisions
@@ -75,8 +75,8 @@ CREATE TABLE IF NOT EXISTS m0_raw (
     chunk_assignments UUID[] DEFAULT '{}',
 
     -- Performance optimization
-    CONSTRAINT unique_conversation_sequence
-        UNIQUE (conversation_id, sequence_number)
+    CONSTRAINT unique_session_sequence
+        UNIQUE (session_id, sequence_number)
 );
 
 -- Create function to update updated_at timestamp for M0
@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
 
     -- M0 lineage tracking
     m0_message_ids UUID[] NOT NULL DEFAULT '{}',
-    conversation_id UUID NOT NULL,
+    session_id UUID NOT NULL,
 
     -- Temporal tracking
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -160,8 +160,8 @@ CREATE TRIGGER m1_episodic_updated_at_trigger
 
 -- M0 Raw Data Indexes (Demo-Compatible)
 -- Indexes for M0 layer performance
-CREATE INDEX IF NOT EXISTS idx_m0_conversation_sequence
-    ON m0_raw (conversation_id, sequence_number);
+CREATE INDEX IF NOT EXISTS idx_m0_session_sequence
+    ON m0_raw (session_id, sequence_number);
 
 CREATE INDEX IF NOT EXISTS idx_m0_processing_status
     ON m0_raw (processing_status)
@@ -182,8 +182,8 @@ CREATE INDEX IF NOT EXISTS idx_m0_chunk_assignments_gin
 
 -- M1 Episodic Memory Indexes (Demo-Compatible)
 -- Additional indexes for M1 layer performance
-CREATE INDEX IF NOT EXISTS idx_m1_conversation_id
-    ON m1_episodic (conversation_id);
+CREATE INDEX IF NOT EXISTS idx_m1_session_id
+    ON m1_episodic (session_id);
 
 CREATE INDEX IF NOT EXISTS idx_m1_chunking_strategy
     ON m1_episodic (chunking_strategy);
@@ -384,7 +384,7 @@ BEGIN
 END $$;
 
 -- Log successful initialization
-INSERT INTO m0_raw (content, role, conversation_id, sequence_number, token_count, processing_status)
+INSERT INTO m0_raw (content, role, session_id, sequence_number, token_count, processing_status)
 VALUES (
     'MemFuse pgvectorscale database initialized successfully with StreamingDiskANN support',
     'system',

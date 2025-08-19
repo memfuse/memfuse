@@ -209,8 +209,8 @@ class SimplifiedChunkProcessor:
         # Calculate total token count
         total_tokens = sum([max(1, len(msg.get('content', '')) // 4) for msg in messages])
 
-        # Use session_id as conversation_id for proper user filtering
-        conversation_id = session_id if session_id else str(uuid.uuid4())
+        # Use session_id for proper user filtering
+        session_id = session_id if session_id else str(uuid.uuid4())
 
         # Generate valid UUIDs for message_ids
         message_ids = []
@@ -229,7 +229,7 @@ class SimplifiedChunkProcessor:
             'content': combined_content,
             'chunking_strategy': 'token_based',
             'token_count': total_tokens,
-            'conversation_id': conversation_id,
+            'session_id': session_id,
             'm0_message_ids': message_ids,
             'created_at': datetime.now()
         }
@@ -419,11 +419,11 @@ class SimplifiedMemoryService(MessageInterface):
             await self._store_to_messages_rounds_tables(all_messages, session_id, round_id)
             logger.info(f"✅ Stored {len(all_messages)} messages to messages/rounds tables")
 
-            # Step 3: Store M0 messages with session_id as conversation_id
+            # Step 3: Store M0 messages with session_id
             message_ids = await self._store_m0_messages(all_messages, session_id)
             logger.info(f"✅ Stored {len(message_ids)} M0 messages")
 
-            # Step 4: Create and store M1 chunks with session_id as conversation_id
+            # Step 4: Create and store M1 chunks with session_id
             chunks = self.chunk_processor.create_chunks(all_messages, session_id)
             chunk_ids = await self._store_m1_chunks(chunks)
             logger.info(f"✅ Stored {len(chunk_ids)} M1 chunks")
@@ -440,14 +440,14 @@ class SimplifiedMemoryService(MessageInterface):
             return self._error_response(f"Error processing message batch: {str(e)}")
 
     async def _store_m0_messages(self, messages: List[Dict[str, Any]], session_id: str) -> List[str]:
-        """Store M0 messages to database with session_id as conversation_id."""
+        """Store M0 messages to database with session_id."""
         message_ids = []
 
         try:
             with self.db_manager.conn.cursor() as cur:
                 insert_query = """
                     INSERT INTO m0_raw
-                    (message_id, content, role, conversation_id, sequence_number, token_count, created_at, processing_status)
+                    (message_id, content, role, session_id, sequence_number, token_count, created_at, processing_status)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING message_id
                 """
@@ -465,9 +465,6 @@ class SimplifiedMemoryService(MessageInterface):
                     content = message.get('content', '')
                     role = message.get('role', 'user')
 
-                    # Use session_id as conversation_id for proper user filtering
-                    conversation_id = session_id
-
                     # Estimate token count
                     token_count = max(1, len(content) // 4)
 
@@ -480,7 +477,7 @@ class SimplifiedMemoryService(MessageInterface):
                         message_id,
                         content,
                         role,
-                        conversation_id,
+                        session_id,
                         i + 1,  # sequence_number
                         token_count,
                         created_at,
@@ -514,10 +511,7 @@ class SimplifiedMemoryService(MessageInterface):
                     if 'session_id' in metadata:
                         session_id = metadata['session_id']
                         break
-                    # Also check conversation_id as fallback
-                    if 'conversation_id' in metadata:
-                        session_id = metadata['conversation_id']
-                        break
+
                 if session_id:
                     break
 
@@ -590,7 +584,7 @@ class SimplifiedMemoryService(MessageInterface):
                         insert_query = """
                             INSERT INTO m1_episodic
                             (chunk_id, content, chunking_strategy, token_count, embedding,
-                             m0_message_ids, conversation_id, created_at, embedding_generated_at)
+                             m0_message_ids, session_id, created_at, embedding_generated_at)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                             RETURNING chunk_id
                         """
@@ -609,7 +603,7 @@ class SimplifiedMemoryService(MessageInterface):
                                 chunk['token_count'],
                                 embedding.tolist(),  # Convert numpy array to list
                                 m0_ids_array,
-                                chunk['conversation_id'],
+                                chunk['session_id'],
                                 chunk['created_at'],
                                 datetime.now()  # embedding_generated_at
                             ))
@@ -656,7 +650,7 @@ class SimplifiedMemoryService(MessageInterface):
                             c.chunking_strategy,
                             c.created_at
                         FROM m1_episodic c
-                        JOIN sessions s ON c.conversation_id::text = s.id
+                        JOIN sessions s ON c.session_id::text = s.id
                         JOIN users u ON s.user_id = u.id
                         WHERE u.name = %s
                           AND normalize_cosine_similarity(c.embedding <=> %s::vector) >= %s
@@ -765,7 +759,7 @@ class SimplifiedMemoryService(MessageInterface):
         try:
             with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
                 # Build query
-                query = "SELECT * FROM m0_raw WHERE conversation_id = %s"
+                query = "SELECT * FROM m0_raw WHERE session_id = %s"
                 params = [session_id]
 
                 # Add ordering
@@ -790,7 +784,7 @@ class SimplifiedMemoryService(MessageInterface):
                         "content": row["content"],
                         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
                         "metadata": {
-                            "conversation_id": str(row["conversation_id"]),
+                            "session_id": str(row["session_id"]),
                             "sequence_number": row["sequence_number"],
                             "token_count": row["token_count"]
                         }

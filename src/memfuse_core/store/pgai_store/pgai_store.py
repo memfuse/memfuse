@@ -1495,10 +1495,8 @@ class PgaiStore(ChunkStoreInterface):
             return """json_build_object(
                 'session_id', session_id,
                 'user_id', user_id,
-                'message_role', message_role,
-                'round_id', round_id,
                 'role', role,
-                'conversation_id', conversation_id,
+                'round_id', round_id,
                 'sequence_number', sequence_number,
                 'token_count', token_count,
                 'processing_status', processing_status

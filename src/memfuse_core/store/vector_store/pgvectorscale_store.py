@@ -601,7 +601,7 @@ class PgVectorScaleStore(VectorStore):
                         chunking_strategy,
                         token_count,
                         m0_message_ids,
-                        conversation_id,
+                        session_id,
                         embedding_model,
                         chunk_quality_score,
                         created_at
@@ -959,9 +959,9 @@ class PgVectorScaleStore(VectorStore):
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     SELECT chunk_id, content, chunking_strategy, token_count,
-                           m0_message_ids, conversation_id, created_at
+                           m0_message_ids, session_id, created_at
                     FROM m1_episodic
-                    WHERE conversation_id = %s
+                    WHERE session_id = %s
                     ORDER BY created_at
                 """, (session_id,))
 
@@ -974,7 +974,7 @@ class PgVectorScaleStore(VectorStore):
                         'chunking_strategy': row['chunking_strategy'],
                         'token_count': row['token_count'],
                         'm0_message_ids': row['m0_message_ids'],
-                        'conversation_id': row['conversation_id'],
+                        'session_id': row['session_id'],
                         'created_at': row['created_at'],
                         'source': 'pgvectorscale_m1'
                     }

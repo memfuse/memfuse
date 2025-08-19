@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
 
     -- M0 lineage tracking
     m0_message_ids TEXT[] NOT NULL DEFAULT '{}',
-    conversation_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
 
     -- Temporal tracking
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -58,8 +58,8 @@ CREATE INDEX IF NOT EXISTS idx_m1_embedding_hnsw
     WITH (m = 16, ef_construction = 64);
 
 -- Additional indexes for M1 layer performance
-CREATE INDEX IF NOT EXISTS idx_m1_conversation_id
-    ON m1_episodic (conversation_id);
+CREATE INDEX IF NOT EXISTS idx_m1_session_id
+    ON m1_episodic (session_id);
 
 CREATE INDEX IF NOT EXISTS idx_m1_chunking_strategy
     ON m1_episodic (chunking_strategy);
@@ -147,7 +147,7 @@ COMMENT ON COLUMN m1_episodic.chunking_strategy IS 'Strategy used for chunking: 
 COMMENT ON COLUMN m1_episodic.token_count IS 'Number of tokens in the chunk';
 COMMENT ON COLUMN m1_episodic.embedding IS '384-dimensional vector embedding for similarity search';
 COMMENT ON COLUMN m1_episodic.m0_message_ids IS 'Array of M0 message IDs that contributed to this chunk (lineage tracking)';
-COMMENT ON COLUMN m1_episodic.conversation_id IS 'Conversation context identifier';
+COMMENT ON COLUMN m1_episodic.session_id IS 'Session context identifier (unified from conversation_id)';
 COMMENT ON COLUMN m1_episodic.embedding_generated_at IS 'Timestamp when embedding was generated';
 COMMENT ON COLUMN m1_episodic.embedding_model IS 'Model used for embedding generation';
 COMMENT ON COLUMN m1_episodic.chunk_quality_score IS 'Quality score for the chunk (0.0 to 1.0)';

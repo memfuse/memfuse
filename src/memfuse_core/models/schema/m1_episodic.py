@@ -65,10 +65,10 @@ class M1EpisodicSchema(BaseSchema):
                 comment="Array of M0 message IDs that contributed to this chunk"
             ),
             ColumnDefinition(
-                name="conversation_id",
+                name="session_id",
                 data_type="UUID",
                 nullable=False,
-                comment="Conversation identifier"
+                comment="Session identifier"
             ),
             
             # Temporal tracking
@@ -148,9 +148,9 @@ class M1EpisodicSchema(BaseSchema):
             
             # Additional indexes for M1 layer performance
             IndexDefinition(
-                name="idx_m1_conversation_id",
-                columns=["conversation_id"],
-                comment="Index for conversation-based queries"
+                name="idx_m1_session_id",
+                columns=["session_id"],
+                comment="Index for session-based queries"
             ),
             IndexDefinition(
                 name="idx_m1_chunking_strategy",

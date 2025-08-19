@@ -35,13 +35,13 @@ class M0RawSchema(BaseSchema):
                 check_constraint="role IN ('user', 'assistant', 'system')",
                 comment="Message role"
             ),
-            
+
             # Streaming context
             ColumnDefinition(
-                name="conversation_id",
+                name="session_id",
                 data_type="UUID",
                 nullable=False,
-                comment="Conversation identifier"
+                comment="Session identifier"
             ),
             ColumnDefinition(
                 name="sequence_number",
@@ -103,14 +103,14 @@ class M0RawSchema(BaseSchema):
     
     def define_indexes(self) -> List[IndexDefinition]:
         return [
-            # Performance optimization for conversation queries
+            # Performance optimization for session queries
             IndexDefinition(
-                name="idx_m0_conversation_sequence",
-                columns=["conversation_id", "sequence_number"],
+                name="idx_m0_session_sequence",
+                columns=["session_id", "sequence_number"],
                 unique=True,
-                comment="Unique index for conversation sequence"
+                comment="Unique index for session sequence"
             ),
-            
+
             # Index for processing status queries
             IndexDefinition(
                 name="idx_m0_processing_status",
@@ -139,7 +139,7 @@ class M0RawSchema(BaseSchema):
     
     def define_constraints(self) -> List[str]:
         return [
-            "CONSTRAINT unique_conversation_sequence UNIQUE (conversation_id, sequence_number)"
+            "CONSTRAINT unique_session_sequence UNIQUE (session_id, sequence_number)"
         ]
     
     def get_trigger_functions_sql(self) -> List[str]:

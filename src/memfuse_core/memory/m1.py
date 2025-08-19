@@ -83,7 +83,7 @@ class M1Processor:
                     'embedding': embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding),
                     'needs_embedding': False,  # Embedding is generated synchronously
                     'm0_message_ids': m0_message_ids,
-                    'conversation_id': session_id,
+                    'session_id': session_id,
                     'created_at': datetime.now(),
                     'updated_at': datetime.now(),
                     'embedding_generated_at': datetime.now(),

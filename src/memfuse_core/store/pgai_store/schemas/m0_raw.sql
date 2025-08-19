@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS m0_raw (
     role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
 
     -- Streaming context
-    conversation_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
     sequence_number INTEGER NOT NULL,
 
     -- Token analysis for chunking decisions
@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS m0_raw (
     chunk_assignments TEXT[] DEFAULT '{}',
 
     -- Performance optimization
-    CONSTRAINT unique_conversation_sequence
-        UNIQUE (conversation_id, sequence_number)
+    CONSTRAINT unique_session_sequence
+        UNIQUE (session_id, sequence_number)
 );
 
 -- =============================================================================
@@ -43,8 +43,8 @@ CREATE TABLE IF NOT EXISTS m0_raw (
 -- =============================================================================
 
 -- Indexes for M0 layer performance
-CREATE INDEX IF NOT EXISTS idx_m0_conversation_sequence
-    ON m0_raw (conversation_id, sequence_number);
+CREATE INDEX IF NOT EXISTS idx_m0_session_sequence
+    ON m0_raw (session_id, sequence_number);
 
 CREATE INDEX IF NOT EXISTS idx_m0_processing_status
     ON m0_raw (processing_status)
@@ -116,8 +116,8 @@ COMMENT ON TABLE m0_raw IS 'M0 Raw Messages Layer - Stores original streaming me
 COMMENT ON COLUMN m0_raw.message_id IS 'Unique identifier for the raw message';
 COMMENT ON COLUMN m0_raw.content IS 'Original message content without any processing';
 COMMENT ON COLUMN m0_raw.role IS 'Message role: user, assistant, or system';
-COMMENT ON COLUMN m0_raw.conversation_id IS 'Conversation context identifier';
-COMMENT ON COLUMN m0_raw.sequence_number IS 'Message sequence number within conversation';
+COMMENT ON COLUMN m0_raw.session_id IS 'Session context identifier';
+COMMENT ON COLUMN m0_raw.sequence_number IS 'Message sequence number within session';
 COMMENT ON COLUMN m0_raw.token_count IS 'Token count for chunking decisions';
 COMMENT ON COLUMN m0_raw.processing_status IS 'Processing status for M1 chunking pipeline';
 COMMENT ON COLUMN m0_raw.chunk_assignments IS 'Array of M1 chunk IDs created from this message';

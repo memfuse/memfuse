@@ -44,7 +44,7 @@ class M0Processor:
                 'message_id': message_id,
                 'content': message['content'],
                 'role': message['role'],
-                'conversation_id': session_id,
+                'session_id': session_id,
                 'sequence_number': i + 1,
                 'token_count': token_count,
                 'created_at': datetime.now(),
