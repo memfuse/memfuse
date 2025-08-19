@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
     embedding vector(384),
 
     -- M0 lineage tracking
-    m0_message_ids TEXT[] NOT NULL DEFAULT '{}',
+    m0_raw_ids TEXT[] NOT NULL DEFAULT '{}',
     session_id TEXT NOT NULL,
 
     -- Temporal tracking
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
     CONSTRAINT m1_chunks_embedding_not_null
         CHECK (embedding IS NOT NULL),
     CONSTRAINT m1_chunks_m0_lineage_not_empty
-        CHECK (array_length(m0_message_ids, 1) > 0)
+        CHECK (array_length(m0_raw_ids, 1) > 0)
 );
 
 -- =============================================================================
@@ -74,8 +74,8 @@ CREATE INDEX IF NOT EXISTS idx_m1_chunk_quality_score
     ON m1_episodic (chunk_quality_score);
 
 -- GIN index for M0 message ID arrays (lineage queries)
-CREATE INDEX IF NOT EXISTS idx_m1_m0_message_ids_gin
-    ON m1_episodic USING gin (m0_message_ids);
+CREATE INDEX IF NOT EXISTS idx_m1_m0_raw_ids_gin
+    ON m1_episodic USING gin (m0_raw_ids);
 
 -- =============================================================================
 -- AUTOMATIC TIMESTAMP UPDATE TRIGGER
@@ -146,7 +146,7 @@ COMMENT ON COLUMN m1_episodic.content IS 'Chunked content optimized for semantic
 COMMENT ON COLUMN m1_episodic.chunking_strategy IS 'Strategy used for chunking: token_based, semantic, conversation_turn, or hybrid';
 COMMENT ON COLUMN m1_episodic.token_count IS 'Number of tokens in the chunk';
 COMMENT ON COLUMN m1_episodic.embedding IS '384-dimensional vector embedding for similarity search';
-COMMENT ON COLUMN m1_episodic.m0_message_ids IS 'Array of M0 message IDs that contributed to this chunk (lineage tracking)';
+COMMENT ON COLUMN m1_episodic.m0_raw_ids IS 'Array of M0 message IDs that contributed to this chunk (lineage tracking)';
 COMMENT ON COLUMN m1_episodic.session_id IS 'Session context identifier (unified from conversation_id)';
 COMMENT ON COLUMN m1_episodic.embedding_generated_at IS 'Timestamp when embedding was generated';
 COMMENT ON COLUMN m1_episodic.embedding_model IS 'Model used for embedding generation';

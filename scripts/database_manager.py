@@ -52,9 +52,7 @@ OPTIONAL_EXTENSIONS_SQL = [
 
 M0_INDEXES_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_m0_session_id ON m0_raw (session_id);",
-    "CREATE INDEX IF NOT EXISTS idx_m0_user_id ON m0_raw (user_id);",
-    "CREATE INDEX IF NOT EXISTS idx_m0_message_role ON m0_raw (message_role);",
-    "CREATE INDEX IF NOT EXISTS idx_m0_round_id ON m0_raw (round_id);",
+    "CREATE INDEX IF NOT EXISTS idx_m0_role ON m0_raw (role);",
     "CREATE INDEX IF NOT EXISTS idx_m0_needs_embedding ON m0_raw (needs_embedding) WHERE needs_embedding = TRUE;",
     "CREATE INDEX IF NOT EXISTS idx_m0_retry_status ON m0_raw (retry_status);",
     "CREATE INDEX IF NOT EXISTS idx_m0_retry_count ON m0_raw (retry_count);",
@@ -85,16 +83,30 @@ M1_INDEXES_SQL = [
 M0_TABLE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS m0_raw (
     -- Primary identification
-    id              TEXT PRIMARY KEY,
+    message_id      TEXT PRIMARY KEY,
 
     -- Core content
     content         TEXT NOT NULL,
+    role            VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
 
-    -- Context tracking
-    session_id      TEXT,  -- Session context
-    user_id         TEXT,  -- User context
-    message_role    TEXT,  -- Message role (user, assistant, system)
-    round_id        TEXT,  -- Round context
+    -- Streaming context
+    session_id      TEXT NOT NULL,
+    sequence_number INTEGER NOT NULL,
+
+    -- Token analysis for chunking decisions
+    token_count     INTEGER NOT NULL DEFAULT 0,
+
+    -- Temporal tracking
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    processed_at    TIMESTAMP WITH TIME ZONE,
+
+    -- Processing status
+    processing_status VARCHAR(20) DEFAULT 'pending'
+        CHECK (processing_status IN ('pending', 'processing', 'completed', 'failed')),
+
+    -- Lineage tracking
+    chunk_assignments TEXT[] DEFAULT '{}',
 
     -- General metadata
     metadata        JSONB DEFAULT '{}'::jsonb,
@@ -106,9 +118,9 @@ CREATE TABLE IF NOT EXISTS m0_raw (
     last_retry_at   TIMESTAMP,  -- Timestamp of last retry attempt
     retry_status    TEXT DEFAULT 'pending' CHECK (retry_status IN ('pending', 'processing', 'completed', 'failed')),
 
-    -- Audit timestamps
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    -- Performance optimization
+    CONSTRAINT unique_session_sequence
+        UNIQUE (session_id, sequence_number)
 );
 """
 

@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
     embedding vector(384),
 
     -- M0 lineage tracking
-    m0_message_ids UUID[] NOT NULL DEFAULT '{}',
+    m0_raw_ids UUID[] NOT NULL DEFAULT '{}',
     conversation_id UUID NOT NULL,
 
     -- Temporal tracking
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
     CONSTRAINT m1_chunks_embedding_not_null
         CHECK (embedding IS NOT NULL),
     CONSTRAINT m1_chunks_m0_lineage_not_empty
-        CHECK (array_length(m0_message_ids, 1) > 0)
+        CHECK (array_length(m0_raw_ids, 1) > 0)
 );
 
 -- ============================================================================
@@ -155,8 +155,8 @@ CREATE INDEX IF NOT EXISTS idx_m1_token_count
     ON m1_episodic (token_count);
 
 -- GIN index for M0 message ID arrays (lineage queries)
-CREATE INDEX IF NOT EXISTS idx_m1_m0_message_ids_gin
-    ON m1_episodic USING gin (m0_message_ids);
+CREATE INDEX IF NOT EXISTS idx_m1_m0_raw_ids_gin
+    ON m1_episodic USING gin (m0_raw_ids);
 
 -- ============================================================================
 -- Utility Functions
@@ -197,7 +197,7 @@ BEGIN
         c.content,
         normalize_cosine_similarity(c.embedding <=> query_embedding) as similarity_score,
         (c.embedding <=> query_embedding) as distance,
-        array_length(c.m0_message_ids, 1) as m0_message_count,
+        array_length(c.m0_raw_ids, 1) as m0_message_count,
         c.chunking_strategy,
         c.created_at
     FROM m1_episodic c
@@ -261,9 +261,9 @@ AND indexdef LIKE '%vector%';
 CREATE OR REPLACE VIEW data_lineage_summary AS
 SELECT
     COUNT(DISTINCT c.chunk_id) as total_chunks,
-    AVG(array_length(c.m0_message_ids, 1))::NUMERIC(10,4) as avg_m0_per_chunk,
-    MIN(array_length(c.m0_message_ids, 1)) as min_m0_per_chunk,
-    MAX(array_length(c.m0_message_ids, 1)) as max_m0_per_chunk,
+    AVG(array_length(c.m0_raw_ids, 1))::NUMERIC(10,4) as avg_m0_per_chunk,
+    MIN(array_length(c.m0_raw_ids, 1)) as min_m0_per_chunk,
+    MAX(array_length(c.m0_raw_ids, 1)) as max_m0_per_chunk,
     (SELECT COUNT(*) FROM m0_raw) as total_m0_messages
 FROM m1_episodic c;
 

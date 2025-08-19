@@ -36,12 +36,24 @@ class M0RawSchema(BaseSchema):
                 comment="Message role"
             ),
 
-            # Streaming context
+            # User and session context
+            ColumnDefinition(
+                name="user_id",
+                data_type="UUID",
+                nullable=False,
+                comment="User identifier"
+            ),
             ColumnDefinition(
                 name="session_id",
                 data_type="UUID",
                 nullable=False,
                 comment="Session identifier"
+            ),
+            ColumnDefinition(
+                name="round_id",
+                data_type="UUID",
+                nullable=True,
+                comment="Round identifier"
             ),
             ColumnDefinition(
                 name="sequence_number",
@@ -109,6 +121,20 @@ class M0RawSchema(BaseSchema):
                 columns=["session_id", "sequence_number"],
                 unique=True,
                 comment="Unique index for session sequence"
+            ),
+
+            # Index for user queries
+            IndexDefinition(
+                name="idx_m0_user_id",
+                columns=["user_id"],
+                comment="Index for user-based filtering"
+            ),
+
+            # Index for round queries
+            IndexDefinition(
+                name="idx_m0_round_id",
+                columns=["round_id"],
+                comment="Index for round-based filtering"
             ),
 
             # Index for processing status queries

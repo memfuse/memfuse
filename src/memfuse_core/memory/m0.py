@@ -18,33 +18,43 @@ class M0Processor:
         self,
         messages: List[Dict[str, Any]],
         session_id: str,
+        user_id: Optional[str] = None,
+        round_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """Process raw messages for M0 storage.
-        
+
         Args:
             messages: List of message dictionaries with 'content' and 'role'
             session_id: Session identifier
+            user_id: User identifier (optional, will generate if not provided)
+            round_id: Round identifier (optional)
             metadata: Optional metadata
-            
+
         Returns:
             List of processed M0 records ready for database insertion
         """
         processed_messages = []
-        
+
+        # Generate user_id if not provided
+        if user_id is None:
+            user_id = str(uuid.uuid4())
+
         for i, message in enumerate(messages):
             # Generate unique message ID
             message_id = str(uuid.uuid4())
-            
+
             # Calculate token count (simple approximation)
             token_count = self._estimate_token_count(message.get('content', ''))
-            
+
             # Create M0 record
             m0_record = {
                 'message_id': message_id,
                 'content': message['content'],
                 'role': message['role'],
+                'user_id': user_id,
                 'session_id': session_id,
+                'round_id': round_id,
                 'sequence_number': i + 1,
                 'token_count': token_count,
                 'created_at': datetime.now(),

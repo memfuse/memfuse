@@ -87,7 +87,7 @@ CREATE TABLE m1_chunks (
     chunking_strategy VARCHAR(50) NOT NULL,
     token_count INTEGER NOT NULL,
     embedding vector(384),
-    m0_message_ids UUID[] NOT NULL,
+    m0_raw_ids UUID[] NOT NULL,
     conversation_id UUID NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE,
     embedding_model VARCHAR(100),
@@ -458,7 +458,7 @@ SELECT
     c.content,
     normalize_cosine_similarity(c.embedding <=> %s::vector) as similarity_score,
     (c.embedding <=> %s::vector) as distance,
-    array_length(c.m0_message_ids, 1) as m0_message_count,
+    array_length(c.m0_raw_ids, 1) as m0_message_count,
     c.chunking_strategy,
     c.created_at
 FROM m1_episodic c

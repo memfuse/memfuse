@@ -304,9 +304,9 @@ verify_data_integrity() {
     docker exec "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -c "
         SELECT 
             COUNT(DISTINCT chunk_id) as total_chunks,
-            AVG(array_length(m0_message_ids, 1)) as avg_m0_per_chunk,
-            MIN(array_length(m0_message_ids, 1)) as min_m0_per_chunk,
-            MAX(array_length(m0_message_ids, 1)) as max_m0_per_chunk
+            AVG(array_length(m0_raw_ids, 1)) as avg_m0_per_chunk,
+            MIN(array_length(m0_raw_ids, 1)) as min_m0_per_chunk,
+            MAX(array_length(m0_raw_ids, 1)) as max_m0_per_chunk
         FROM m1_episodic;
     "
     

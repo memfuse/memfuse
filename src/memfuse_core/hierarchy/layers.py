@@ -508,7 +508,7 @@ class M1EpisodicLayer(MemoryLayer):
 
                 session_id = operation_metadata.get("session_id")
                 user_id = operation_metadata.get("user_id")
-                message_role = operation_metadata.get("message_role", "unknown")
+                message_role = operation_metadata.get("role", "unknown")
 
                 logger.info(f"M1EpisodicLayer: Processing M0 reference {source_id}")
 
@@ -518,7 +518,7 @@ class M1EpisodicLayer(MemoryLayer):
                 source_id = item.get("id")
                 session_id = item.get("session_id")
                 user_id = item.get("user_id")
-                message_role = item.get("message_role", "unknown")
+                message_role = item.get("role", "unknown")
             elif isinstance(item, str):
                 content = item
                 source_id = None
@@ -532,7 +532,7 @@ class M1EpisodicLayer(MemoryLayer):
                 item_metadata = item.metadata or {}
                 session_id = item_metadata.get("session_id") or item_metadata.get("conversation_id")
                 user_id = item_metadata.get("user_id")
-                message_role = item_metadata.get("message_role", "unknown")
+                message_role = item_metadata.get("role", "unknown")
 
                 # Merge item metadata with passed metadata, giving priority to item metadata
                 if metadata:

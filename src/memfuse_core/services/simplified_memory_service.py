@@ -14,6 +14,7 @@ Key features:
 """
 
 import asyncio
+import json
 import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional
@@ -168,7 +169,7 @@ class SimplifiedChunkProcessor:
     def __init__(self, chunk_token_limit: int = 200):
         self.chunk_token_limit = chunk_token_limit
 
-    def create_chunks(self, messages: List[Dict[str, Any]], session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def create_chunks(self, messages: List[Dict[str, Any]], session_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Create M1 chunks using token-based strategy."""
         chunks = []
         current_chunk_messages = []
@@ -182,7 +183,7 @@ class SimplifiedChunkProcessor:
             # Check if adding this message would exceed token limit
             if current_token_count + token_count > self.chunk_token_limit and current_chunk_messages:
                 # Create chunk from accumulated messages
-                chunk = self._create_chunk_from_messages(current_chunk_messages, session_id)
+                chunk = self._create_chunk_from_messages(current_chunk_messages, session_id, user_id)
                 chunks.append(chunk)
 
                 # Start new chunk
@@ -195,13 +196,13 @@ class SimplifiedChunkProcessor:
 
         # Handle remaining messages
         if current_chunk_messages:
-            chunk = self._create_chunk_from_messages(current_chunk_messages, session_id)
+            chunk = self._create_chunk_from_messages(current_chunk_messages, session_id, user_id)
             chunks.append(chunk)
 
         logger.info(f"✅ Created {len(chunks)} M1 chunks from {len(messages)} messages")
         return chunks
     
-    def _create_chunk_from_messages(self, messages: List[Dict[str, Any]], session_id: Optional[str] = None) -> Dict[str, Any]:
+    def _create_chunk_from_messages(self, messages: List[Dict[str, Any]], session_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Create a single M1 chunk from a list of M0 messages."""
         # Combine message contents
         combined_content = " ".join([msg.get('content', '') for msg in messages])
@@ -229,9 +230,11 @@ class SimplifiedChunkProcessor:
             'content': combined_content,
             'chunking_strategy': 'token_based',
             'token_count': total_tokens,
+            'user_id': user_id if user_id else str(uuid.uuid4()),
             'session_id': session_id,
-            'm0_message_ids': message_ids,
-            'created_at': datetime.now()
+            'm0_raw_ids': message_ids,
+            'created_at': datetime.now(),
+            'metadata': {}  # Default empty metadata
         }
 
         return chunk
@@ -419,12 +422,14 @@ class SimplifiedMemoryService(MessageInterface):
             await self._store_to_messages_rounds_tables(all_messages, session_id, round_id)
             logger.info(f"✅ Stored {len(all_messages)} messages to messages/rounds tables")
 
-            # Step 3: Store M0 messages with session_id
-            message_ids = await self._store_m0_messages(all_messages, session_id)
+            # Step 3: Store M0 messages with session_id, user_id, and round_id
+            # Generate a user_id for this batch (could be extracted from messages or kwargs in the future)
+            user_id = kwargs.get('user_id', str(uuid.uuid4()))
+            message_ids = await self._store_m0_messages(all_messages, session_id, user_id, round_id)
             logger.info(f"✅ Stored {len(message_ids)} M0 messages")
 
-            # Step 4: Create and store M1 chunks with session_id
-            chunks = self.chunk_processor.create_chunks(all_messages, session_id)
+            # Step 4: Create and store M1 chunks with session_id and user_id
+            chunks = self.chunk_processor.create_chunks(all_messages, session_id, user_id)
             chunk_ids = await self._store_m1_chunks(chunks)
             logger.info(f"✅ Stored {len(chunk_ids)} M1 chunks")
 
@@ -439,16 +444,29 @@ class SimplifiedMemoryService(MessageInterface):
             logger.error(f"SimplifiedMemoryService: Error in add_batch: {e}")
             return self._error_response(f"Error processing message batch: {str(e)}")
 
-    async def _store_m0_messages(self, messages: List[Dict[str, Any]], session_id: str) -> List[str]:
+    async def _store_m0_messages(self, messages: List[Dict[str, Any]], session_id: str, user_id: str = None, round_id: str = None) -> List[str]:
         """Store M0 messages to database with session_id."""
         message_ids = []
+
+        # Generate user_id if not provided
+        if user_id is None:
+            user_id = str(uuid.uuid4())
 
         try:
             with self.db_manager.conn.cursor() as cur:
                 insert_query = """
                     INSERT INTO m0_raw
-                    (message_id, content, role, session_id, sequence_number, token_count, created_at, processing_status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (message_id, content, role, user_id, session_id, round_id, sequence_number, token_count, created_at, processing_status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (session_id, sequence_number) DO UPDATE SET
+                        message_id = EXCLUDED.message_id,
+                        content = EXCLUDED.content,
+                        role = EXCLUDED.role,
+                        user_id = EXCLUDED.user_id,
+                        round_id = EXCLUDED.round_id,
+                        token_count = EXCLUDED.token_count,
+                        created_at = EXCLUDED.created_at,
+                        processing_status = EXCLUDED.processing_status
                     RETURNING message_id
                 """
 
@@ -477,7 +495,9 @@ class SimplifiedMemoryService(MessageInterface):
                         message_id,
                         content,
                         role,
+                        user_id,
                         session_id,
+                        round_id,
                         i + 1,  # sequence_number
                         token_count,
                         created_at,
@@ -584,8 +604,19 @@ class SimplifiedMemoryService(MessageInterface):
                         insert_query = """
                             INSERT INTO m1_episodic
                             (chunk_id, content, chunking_strategy, token_count, embedding,
-                             m0_message_ids, session_id, created_at, embedding_generated_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             m0_raw_ids, user_id, session_id, created_at, embedding_generated_at, metadata)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (chunk_id) DO UPDATE SET
+                                content = EXCLUDED.content,
+                                chunking_strategy = EXCLUDED.chunking_strategy,
+                                token_count = EXCLUDED.token_count,
+                                embedding = EXCLUDED.embedding,
+                                m0_raw_ids = EXCLUDED.m0_raw_ids,
+                                user_id = EXCLUDED.user_id,
+                                session_id = EXCLUDED.session_id,
+                                created_at = EXCLUDED.created_at,
+                                embedding_generated_at = EXCLUDED.embedding_generated_at,
+                                metadata = EXCLUDED.metadata
                             RETURNING chunk_id
                         """
 
@@ -593,8 +624,13 @@ class SimplifiedMemoryService(MessageInterface):
                             # Generate embedding
                             embedding = self.embedding_generator.generate_embedding(chunk['content'])
 
-                            # Format m0_message_ids as PostgreSQL UUID array
-                            m0_ids_array = '{' + ','.join(chunk['m0_message_ids']) + '}'
+                            # Format m0_raw_ids as PostgreSQL UUID array - fix field name
+                            m0_ids = chunk.get('m0_message_ids', chunk.get('m0_raw_ids', []))
+                            m0_ids_array = '{' + ','.join(str(id) for id in m0_ids if id) + '}' if m0_ids else '{}'
+
+                            # Convert metadata dict to JSON string
+                            metadata = chunk.get('metadata', {})
+                            metadata_json = json.dumps(metadata) if metadata else '{}'
 
                             cur.execute(insert_query, (
                                 chunk['chunk_id'],
@@ -603,9 +639,11 @@ class SimplifiedMemoryService(MessageInterface):
                                 chunk['token_count'],
                                 embedding.tolist(),  # Convert numpy array to list
                                 m0_ids_array,
+                                chunk.get('user_id', str(uuid.uuid4())),  # user_id
                                 chunk['session_id'],
-                                chunk['created_at'],
-                                datetime.now()  # embedding_generated_at
+                                chunk.get('created_at', datetime.now()),  # created_at
+                                datetime.now(),  # embedding_generated_at
+                                metadata_json  # metadata as JSON string
                             ))
 
                             result = cur.fetchone()
@@ -646,7 +684,7 @@ class SimplifiedMemoryService(MessageInterface):
                             c.content,
                             normalize_cosine_similarity(c.embedding <=> %s::vector) as similarity_score,
                             (c.embedding <=> %s::vector) as distance,
-                            array_length(c.m0_message_ids, 1) as m0_message_count,
+                            array_length(c.m0_raw_ids, 1) as m0_message_count,
                             c.chunking_strategy,
                             c.created_at
                         FROM m1_episodic c

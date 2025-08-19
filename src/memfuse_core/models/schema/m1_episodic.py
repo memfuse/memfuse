@@ -58,11 +58,17 @@ class M1EpisodicSchema(BaseSchema):
             
             # M0 lineage tracking
             ColumnDefinition(
-                name="m0_message_ids",
+                name="m0_raw_ids",
                 data_type="UUID[]",
                 nullable=False,
                 default="'{}'",
                 comment="Array of M0 message IDs that contributed to this chunk"
+            ),
+            ColumnDefinition(
+                name="user_id",
+                data_type="UUID",
+                nullable=False,
+                comment="User identifier"
             ),
             ColumnDefinition(
                 name="session_id",
@@ -126,6 +132,15 @@ class M1EpisodicSchema(BaseSchema):
                 default="0.0",
                 comment="Quality score of the chunk"
             ),
+
+            # Additional metadata
+            ColumnDefinition(
+                name="metadata",
+                data_type="JSONB",
+                nullable=False,
+                default="'{}'::jsonb",
+                comment="Additional metadata for the chunk"
+            ),
         ]
     
     def define_indexes(self) -> List[IndexDefinition]:
@@ -151,6 +166,11 @@ class M1EpisodicSchema(BaseSchema):
                 name="idx_m1_session_id",
                 columns=["session_id"],
                 comment="Index for session-based queries"
+            ),
+            IndexDefinition(
+                name="idx_m1_user_id",
+                columns=["user_id"],
+                comment="Index for user-based queries"
             ),
             IndexDefinition(
                 name="idx_m1_chunking_strategy",
@@ -183,10 +203,18 @@ class M1EpisodicSchema(BaseSchema):
 
             # GIN index for M0 message ID arrays (lineage queries)
             IndexDefinition(
-                name="idx_m1_m0_message_ids_gin",
-                columns=["m0_message_ids"],
+                name="idx_m1_m0_raw_ids_gin",
+                columns=["m0_raw_ids"],
                 index_type="gin",
                 comment="GIN index for M0 lineage queries"
+            ),
+
+            # GIN index for metadata queries
+            IndexDefinition(
+                name="idx_m1_metadata_gin",
+                columns=["metadata"],
+                index_type="gin",
+                comment="GIN index for metadata queries"
             ),
         ]
     
@@ -202,7 +230,7 @@ class M1EpisodicSchema(BaseSchema):
     
     def define_constraints(self) -> List[str]:
         return [
-            "CONSTRAINT m1_chunks_m0_lineage_not_empty CHECK (array_length(m0_message_ids, 1) > 0)"
+            "CONSTRAINT m1_chunks_m0_lineage_not_empty CHECK (array_length(m0_raw_ids, 1) > 0)"
         ]
     
     def get_trigger_functions_sql(self) -> List[str]:

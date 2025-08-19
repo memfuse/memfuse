@@ -311,10 +311,10 @@ class PgVectorScaleStore(VectorStore):
             m0_records = await self.m0_processor.process_messages(messages, session_id)
 
             # Insert M0 records into database
-            m0_message_ids = await self._insert_m0_records(m0_records)
+            m0_raw_ids = await self._insert_m0_records(m0_records)
 
             # Step 2: Process chunks for M1 layer using M1 processor
-            m1_records = await self.m1_processor.process_chunks(chunks, m0_message_ids, session_id)
+            m1_records = await self.m1_processor.process_chunks(chunks, m0_raw_ids, session_id)
 
             # Insert M1 records into database
             m1_chunk_ids = await self._insert_m1_records(m1_records)
@@ -328,7 +328,7 @@ class PgVectorScaleStore(VectorStore):
             # Invalidate query cache
             self.query_cache = {}
 
-            logger.info(f"PgVectorScaleStore: Added {len(chunks)} chunks -> {len(m0_message_ids)} M0 messages -> {len(m1_chunk_ids)} M1 chunks")
+            logger.info(f"PgVectorScaleStore: Added {len(chunks)} chunks -> {len(m0_raw_ids)} M0 messages -> {len(m1_chunk_ids)} M1 chunks")
 
             return added_ids
 
@@ -384,7 +384,7 @@ class PgVectorScaleStore(VectorStore):
                 insert_query = """
                     INSERT INTO m1_episodic
                     (chunk_id, content, chunking_strategy, token_count, embedding, needs_embedding,
-                     m0_message_ids, conversation_id, created_at, updated_at,
+                     m0_raw_ids, conversation_id, created_at, updated_at,
                      embedding_generated_at, embedding_model, chunk_quality_score)
                     VALUES (%s, %s, %s, %s, %s, %s, %s::uuid[], %s, %s, %s, %s, %s, %s)
                     RETURNING chunk_id
@@ -423,7 +423,7 @@ class PgVectorScaleStore(VectorStore):
                         record['token_count'],
                         embedding_str,  # Can be None for async processing
                         needs_embedding,
-                        record['m0_message_ids'],
+                        record['m0_raw_ids'],
                         record['conversation_id'],
                         record['created_at'],
                         record['updated_at'],
@@ -489,7 +489,7 @@ class PgVectorScaleStore(VectorStore):
             logger.error(f"PgVectorScaleStore: M0 insertion failed: {e}")
             raise
     
-    async def _create_m1_chunks(self, chunks: List[ChunkData], m0_message_ids: List[str]) -> List[str]:
+    async def _create_m1_chunks(self, chunks: List[ChunkData], m0_raw_ids: List[str]) -> List[str]:
         """Create M1 chunks with embeddings using intelligent chunking strategy."""
         m1_ids = []
 
@@ -525,7 +525,7 @@ class PgVectorScaleStore(VectorStore):
                 insert_query = """
                     INSERT INTO m1_episodic
                     (chunk_id, content, chunking_strategy, token_count, embedding,
-                     m0_message_ids, conversation_id, embedding_generated_at,
+                     m0_raw_ids, conversation_id, embedding_generated_at,
                      embedding_model, chunk_quality_score, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s::uuid[], %s, %s, %s, %s, %s)
                     RETURNING chunk_id
@@ -540,7 +540,7 @@ class PgVectorScaleStore(VectorStore):
                     chunking_strategy = chunk.metadata.get('chunking_strategy', 'token_based')
 
                     # Convert UUIDs to strings for the array (psycopg2 compatibility)
-                    m0_uuid_array = [str(uid) for uid in m0_message_ids]
+                    m0_uuid_array = [str(uid) for uid in m0_raw_ids]
 
                     cur.execute(insert_query, (
                         chunk_id,
@@ -548,7 +548,7 @@ class PgVectorScaleStore(VectorStore):
                         chunking_strategy,
                         token_count,
                         embedding.tolist(),  # embedding
-                        m0_uuid_array,  # m0_message_ids array (as UUID objects)
+                        m0_uuid_array,  # m0_raw_ids array (as UUID objects)
                         conversation_id,
                         datetime.now(),  # embedding_generated_at
                         self.model_name,  # embedding_model
@@ -600,7 +600,7 @@ class PgVectorScaleStore(VectorStore):
                         (embedding <=> %s::vector) as distance,
                         chunking_strategy,
                         token_count,
-                        m0_message_ids,
+                        m0_raw_ids,
                         session_id,
                         embedding_model,
                         chunk_quality_score,
@@ -626,7 +626,7 @@ class PgVectorScaleStore(VectorStore):
                         'distance': float(row['distance']),
                         'chunking_strategy': row['chunking_strategy'],
                         'token_count': row['token_count'],
-                        'm0_message_ids': row['m0_message_ids'],
+                        'm0_raw_ids': row['m0_raw_ids'],
                         'conversation_id': row['conversation_id'],
                         'embedding_model': row['embedding_model'],
                         'chunk_quality_score': row['chunk_quality_score'],
@@ -773,7 +773,7 @@ class PgVectorScaleStore(VectorStore):
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     SELECT chunk_id, content, chunking_strategy, token_count,
-                           m0_message_ids, conversation_id, created_at
+                           m0_raw_ids, conversation_id, created_at
                     FROM m1_episodic
                     WHERE chunk_id = ANY(%s)
                 """, (chunk_ids,))
@@ -787,7 +787,7 @@ class PgVectorScaleStore(VectorStore):
                         'chunk_id': row['chunk_id'],
                         'chunking_strategy': row['chunking_strategy'],
                         'token_count': row['token_count'],
-                        'm0_message_ids': row['m0_message_ids'],
+                        'm0_raw_ids': row['m0_raw_ids'],
                         'conversation_id': row['conversation_id'],
                         'created_at': row['created_at'],
                         'source': 'pgvectorscale_m1'
@@ -959,7 +959,7 @@ class PgVectorScaleStore(VectorStore):
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     SELECT chunk_id, content, chunking_strategy, token_count,
-                           m0_message_ids, session_id, created_at
+                           m0_raw_ids, session_id, created_at
                     FROM m1_episodic
                     WHERE session_id = %s
                     ORDER BY created_at
@@ -973,7 +973,7 @@ class PgVectorScaleStore(VectorStore):
                         'chunk_id': row['chunk_id'],
                         'chunking_strategy': row['chunking_strategy'],
                         'token_count': row['token_count'],
-                        'm0_message_ids': row['m0_message_ids'],
+                        'm0_raw_ids': row['m0_raw_ids'],
                         'session_id': row['session_id'],
                         'created_at': row['created_at'],
                         'source': 'pgvectorscale_m1'
@@ -1001,7 +1001,7 @@ class PgVectorScaleStore(VectorStore):
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     SELECT chunk_id, content, chunking_strategy, token_count,
-                           m0_message_ids, conversation_id, created_at
+                           m0_raw_ids, conversation_id, created_at
                     FROM m1_episodic
                     WHERE chunking_strategy = %s
                     ORDER BY created_at
@@ -1015,7 +1015,7 @@ class PgVectorScaleStore(VectorStore):
                         'chunk_id': row['chunk_id'],
                         'chunking_strategy': row['chunking_strategy'],
                         'token_count': row['token_count'],
-                        'm0_message_ids': row['m0_message_ids'],
+                        'm0_raw_ids': row['m0_raw_ids'],
                         'conversation_id': row['conversation_id'],
                         'created_at': row['created_at'],
                         'source': 'pgvectorscale_m1'

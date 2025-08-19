@@ -215,7 +215,7 @@ CREATE TABLE m1_chunks (
     chunking_strategy VARCHAR(50) NOT NULL,
     token_count INTEGER NOT NULL,
     embedding vector(384),
-    m0_message_ids UUID[] NOT NULL,
+    m0_raw_ids UUID[] NOT NULL,
     conversation_id UUID NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE,
     embedding_generated_at TIMESTAMP WITH TIME ZONE

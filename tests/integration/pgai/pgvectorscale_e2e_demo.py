@@ -77,7 +77,7 @@ class M1Chunk:
     chunking_strategy: str
     token_count: int
     embedding: np.ndarray
-    m0_message_ids: List[str]
+    m0_raw_ids: List[str]
     conversation_id: str
     created_at: datetime
 
@@ -278,7 +278,7 @@ class PgVectorScaleDemo:
             chunking_strategy='token_based',
             token_count=total_tokens,
             embedding=embedding,
-            m0_message_ids=[msg.message_id for msg in messages],
+            m0_raw_ids=[msg.message_id for msg in messages],
             conversation_id=self.conversation_id,
             created_at=datetime.now()
         )
@@ -294,13 +294,13 @@ class PgVectorScaleDemo:
                 insert_query = """
                     INSERT INTO m1_episodic 
                     (chunk_id, content, chunking_strategy, token_count, embedding, 
-                     m0_message_ids, conversation_id, created_at, embedding_generated_at)
+                     m0_raw_ids, conversation_id, created_at, embedding_generated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
                 for chunk in chunks:
                     # Convert UUID strings to proper UUID array format
-                    m0_ids_array = '{' + ','.join(chunk.m0_message_ids) + '}'
+                    m0_ids_array = '{' + ','.join(chunk.m0_raw_ids) + '}'
 
                     cur.execute(insert_query, (
                         chunk.chunk_id,

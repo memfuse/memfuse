@@ -55,8 +55,10 @@ CREATE TABLE IF NOT EXISTS m0_raw (
     content TEXT NOT NULL,
     role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
 
-    -- Streaming context
+    -- User and session context
+    user_id UUID NOT NULL,
     session_id UUID NOT NULL,
+    round_id UUID,
     sequence_number INTEGER NOT NULL,
 
     -- Token analysis for chunking decisions
@@ -121,7 +123,8 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
     needs_embedding BOOLEAN DEFAULT TRUE,
 
     -- M0 lineage tracking
-    m0_message_ids UUID[] NOT NULL DEFAULT '{}',
+    m0_raw_ids UUID[] NOT NULL DEFAULT '{}',
+    user_id UUID NOT NULL,
     session_id UUID NOT NULL,
 
     -- Temporal tracking
@@ -133,9 +136,12 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
     embedding_model VARCHAR(100) DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
     chunk_quality_score FLOAT DEFAULT 0.0,
 
+    -- Additional metadata
+    metadata JSONB DEFAULT '{}'::jsonb,
+
     -- Constraints (removed embedding NOT NULL constraint to support async processing)
     CONSTRAINT m1_chunks_m0_lineage_not_empty
-        CHECK (array_length(m0_message_ids, 1) > 0)
+        CHECK (array_length(m0_raw_ids, 1) > 0)
 );
 
 -- Create function to update updated_at timestamp for M1
@@ -163,6 +169,12 @@ CREATE TRIGGER m1_episodic_updated_at_trigger
 CREATE INDEX IF NOT EXISTS idx_m0_session_sequence
     ON m0_raw (session_id, sequence_number);
 
+CREATE INDEX IF NOT EXISTS idx_m0_user_id
+    ON m0_raw (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_m0_round_id
+    ON m0_raw (round_id);
+
 CREATE INDEX IF NOT EXISTS idx_m0_processing_status
     ON m0_raw (processing_status)
     WHERE processing_status != 'completed';
@@ -185,6 +197,9 @@ CREATE INDEX IF NOT EXISTS idx_m0_chunk_assignments_gin
 CREATE INDEX IF NOT EXISTS idx_m1_session_id
     ON m1_episodic (session_id);
 
+CREATE INDEX IF NOT EXISTS idx_m1_user_id
+    ON m1_episodic (user_id);
+
 CREATE INDEX IF NOT EXISTS idx_m1_chunking_strategy
     ON m1_episodic (chunking_strategy);
 
@@ -203,8 +218,12 @@ CREATE INDEX IF NOT EXISTS idx_m1_needs_embedding
     WHERE needs_embedding = TRUE;
 
 -- GIN index for M0 message ID arrays (lineage queries)
-CREATE INDEX IF NOT EXISTS idx_m1_m0_message_ids_gin
-    ON m1_episodic USING gin (m0_message_ids);
+CREATE INDEX IF NOT EXISTS idx_m1_m0_raw_ids_gin
+    ON m1_episodic USING gin (m0_raw_ids);
+
+-- GIN index for metadata queries
+CREATE INDEX IF NOT EXISTS idx_m1_metadata_gin
+    ON m1_episodic USING gin (metadata);
 
 -- =============================================================================
 -- SECTION 5: High-Performance Vector Indexes
@@ -291,7 +310,7 @@ BEGIN
         c.content,
         normalize_cosine_similarity(c.embedding <=> query_embedding) as similarity_score,
         (c.embedding <=> query_embedding) as distance,
-        array_length(c.m0_message_ids, 1) as m0_message_count,
+        array_length(c.m0_raw_ids, 1) as m0_message_count,
         c.chunking_strategy,
         c.created_at
     FROM m1_episodic c
@@ -355,9 +374,9 @@ AND indexdef LIKE '%vector%';
 CREATE OR REPLACE VIEW data_lineage_summary AS
 SELECT
     COUNT(DISTINCT c.chunk_id) as total_chunks,
-    AVG(array_length(c.m0_message_ids, 1))::NUMERIC(10,4) as avg_m0_per_chunk,
-    MIN(array_length(c.m0_message_ids, 1)) as min_m0_per_chunk,
-    MAX(array_length(c.m0_message_ids, 1)) as max_m0_per_chunk,
+    AVG(array_length(c.m0_raw_ids, 1))::NUMERIC(10,4) as avg_m0_per_chunk,
+    MIN(array_length(c.m0_raw_ids, 1)) as min_m0_per_chunk,
+    MAX(array_length(c.m0_raw_ids, 1)) as max_m0_per_chunk,
     (SELECT COUNT(*) FROM m0_raw) as total_m0_messages
 FROM m1_episodic c;
 
@@ -384,10 +403,11 @@ BEGIN
 END $$;
 
 -- Log successful initialization
-INSERT INTO m0_raw (content, role, session_id, sequence_number, token_count, processing_status)
+INSERT INTO m0_raw (content, role, user_id, session_id, sequence_number, token_count, processing_status)
 VALUES (
     'MemFuse pgvectorscale database initialized successfully with StreamingDiskANN support',
     'system',
+    uuid_generate_v4(),
     uuid_generate_v4(),
     1,
     12,

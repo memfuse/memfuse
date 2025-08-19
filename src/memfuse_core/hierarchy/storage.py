@@ -221,14 +221,14 @@ class StoreBackendAdapter(StorageBackend):
                     db_data['conversation_id'] = conversation_id
                     logger.warning(f"StoreBackendAdapter: No session_id/conversation_id found in metadata, generated: {conversation_id}")
 
-                # Set m0_message_ids for lineage tracking (required field)
+                # Set m0_raw_ids for lineage tracking (required field)
                 if 'message_ids' in data.metadata:
-                    db_data['m0_message_ids'] = data.metadata['message_ids']
+                    db_data['m0_raw_ids'] = data.metadata['message_ids']
                 elif 'source_message_ids' in data.metadata:
-                    db_data['m0_message_ids'] = data.metadata['source_message_ids']
+                    db_data['m0_raw_ids'] = data.metadata['source_message_ids']
                 else:
                     # Default to empty array if no message IDs provided
-                    db_data['m0_message_ids'] = []
+                    db_data['m0_raw_ids'] = []
                     logger.warning(f"StoreBackendAdapter: No message_ids found in metadata for M1 chunk")
 
                 # Set other M1-specific fields that exist in the table
@@ -276,8 +276,8 @@ class StoreBackendAdapter(StorageBackend):
                     db_data['session_id'] = data['session_id']
                 if 'user_id' in data:
                     db_data['user_id'] = data['user_id']
-                if 'message_role' in data:
-                    db_data['message_role'] = data['message_role']
+                if 'role' in data:
+                    db_data['role'] = data['role']
                 if 'round_id' in data:
                     db_data['round_id'] = data['round_id']
 

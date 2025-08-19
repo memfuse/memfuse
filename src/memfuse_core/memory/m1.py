@@ -37,18 +37,20 @@ class M1Processor:
     async def process_chunks(
         self,
         chunks: List[ChunkData],
-        m0_message_ids: List[str],
+        m0_raw_ids: List[str],
         session_id: str,
+        user_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """Process chunks for M1 storage with embeddings.
-        
+
         Args:
             chunks: List of ChunkData objects
-            m0_message_ids: List of M0 message IDs for lineage tracking
+            m0_raw_ids: List of M0 message IDs for lineage tracking
             session_id: Session identifier
+            user_id: User identifier (optional, will generate if not provided)
             metadata: Optional metadata
-            
+
         Returns:
             List of processed M1 records ready for database insertion
         """
@@ -56,24 +58,28 @@ class M1Processor:
             await self.initialize()
         
         processed_chunks = []
-        
+
+        # Generate user_id if not provided
+        if user_id is None:
+            user_id = str(uuid.uuid4())
+
         try:
             # Step 1: Apply intelligent chunking strategy
             optimized_chunks = await self._apply_chunking_strategy(chunks, session_id)
-            
+
             # Step 2: Generate embeddings for all chunks
             embeddings = await self._generate_embeddings(optimized_chunks)
-            
+
             # Step 3: Create M1 records
             for i, (chunk, embedding) in enumerate(zip(optimized_chunks, embeddings)):
                 chunk_id = str(uuid.uuid4())
-                
+
                 # Calculate token count
                 token_count = self._estimate_token_count(chunk.content)
-                
+
                 # Determine chunking strategy
                 chunking_strategy = chunk.metadata.get('chunking_strategy', 'token_based')
-                
+
                 # Create M1 record
                 m1_record = {
                     'chunk_id': chunk_id,
@@ -82,7 +88,8 @@ class M1Processor:
                     'token_count': token_count,
                     'embedding': embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding),
                     'needs_embedding': False,  # Embedding is generated synchronously
-                    'm0_message_ids': m0_message_ids,
+                    'm0_raw_ids': m0_raw_ids,
+                    'user_id': user_id,
                     'session_id': session_id,
                     'created_at': datetime.now(),
                     'updated_at': datetime.now(),

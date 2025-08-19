@@ -468,12 +468,7 @@ class PgaiStore(ChunkStoreInterface):
                             ALTER TABLE {self.table_name} ADD COLUMN user_id TEXT;
                         END IF;
 
-                        IF NOT EXISTS (
-                            SELECT 1 FROM information_schema.columns
-                            WHERE table_name = '{self.table_name}' AND column_name = 'message_role'
-                        ) THEN
-                            ALTER TABLE {self.table_name} ADD COLUMN message_role TEXT;
-                        END IF;
+
 
                         IF NOT EXISTS (
                             SELECT 1 FROM information_schema.columns
@@ -617,7 +612,7 @@ class PgaiStore(ChunkStoreInterface):
                     # Check for required columns
                     column_names = {col[0] for col in columns}
                     required_columns = {
-                        'id', 'content', 'metadata', 'session_id', 'user_id', 'message_role', 'round_id',
+                        'id', 'content', 'metadata', 'session_id', 'user_id', 'round_id',
                         'embedding', 'needs_embedding', 'retry_count', 'last_retry_at', 'retry_status',
                         'created_at', 'updated_at'
                     }
@@ -967,23 +962,21 @@ class PgaiStore(ChunkStoreInterface):
                     # Auto-embedding mode: insert without embeddings, let background task handle it
                     for chunk in chunks:
                         metadata_json = self._prepare_metadata(chunk.metadata)
-                        # Extract session_id, user_id, message_role, round_id from metadata
+                        # Extract session_id, user_id, round_id from metadata
                         session_id = chunk.metadata.get('session_id') if chunk.metadata else None
                         user_id = chunk.metadata.get('user_id') if chunk.metadata else None
-                        message_role = chunk.metadata.get('message_role') if chunk.metadata else None
                         round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
                         # Check table type and use correct field names
                         if self.table_name == 'm0_raw':
                             await cur.execute(f"""
                                 INSERT INTO {self.table_name}
-                                (message_id, content, session_id, user_id, message_role, round_id, needs_embedding)
-                                VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                                (message_id, content, session_id, user_id, round_id, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, TRUE)
                                 ON CONFLICT (message_id) DO UPDATE SET
                                     content = EXCLUDED.content,
                                     session_id = EXCLUDED.session_id,
                                     user_id = EXCLUDED.user_id,
-                                    message_role = EXCLUDED.message_role,
                                     round_id = EXCLUDED.round_id,
                                     needs_embedding = TRUE
                             """, (
@@ -991,7 +984,6 @@ class PgaiStore(ChunkStoreInterface):
                                 chunk.content,
                                 session_id,
                                 user_id,
-                                message_role,
                                 round_id
                             ))
                         elif self.table_name == 'm1_episodic':
@@ -1002,12 +994,12 @@ class PgaiStore(ChunkStoreInterface):
                             chunking_strategy = chunk.metadata.get('chunking_strategy', 'semantic') if chunk.metadata else 'semantic'
                             token_count = chunk.metadata.get('token_count', len(chunk.content.split())) if chunk.metadata else len(chunk.content.split())
                             chunk_quality_score = chunk.metadata.get('confidence', 0.8) if chunk.metadata else 0.8
-                            m0_message_ids = chunk.metadata.get('message_ids', []) if chunk.metadata else []
+                            m0_raw_ids = chunk.metadata.get('message_ids', []) if chunk.metadata else []
 
                             await cur.execute(f"""
                                 INSERT INTO {self.table_name}
                                 (chunk_id, content, conversation_id, chunking_strategy, token_count,
-                                 chunk_quality_score, m0_message_ids, needs_embedding)
+                                 chunk_quality_score, m0_raw_ids, needs_embedding)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
                                 ON CONFLICT (chunk_id) DO UPDATE SET
                                     content = EXCLUDED.content,
@@ -1015,7 +1007,7 @@ class PgaiStore(ChunkStoreInterface):
                                     chunking_strategy = EXCLUDED.chunking_strategy,
                                     token_count = EXCLUDED.token_count,
                                     chunk_quality_score = EXCLUDED.chunk_quality_score,
-                                    m0_message_ids = EXCLUDED.m0_message_ids,
+                                    m0_raw_ids = EXCLUDED.m0_raw_ids,
                                     needs_embedding = TRUE
                             """, (
                                 chunk.chunk_id,
@@ -1024,19 +1016,18 @@ class PgaiStore(ChunkStoreInterface):
                                 chunking_strategy,
                                 token_count,
                                 chunk_quality_score,
-                                m0_message_ids
+                                m0_raw_ids
                             ))
                         else:
                             await cur.execute(f"""
                                 INSERT INTO {self.table_name}
-                                (id, content, metadata, session_id, user_id, message_role, round_id, needs_embedding)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+                                (id, content, metadata, session_id, user_id, round_id, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, TRUE)
                                 ON CONFLICT (id) DO UPDATE SET
                                     content = EXCLUDED.content,
                                     metadata = EXCLUDED.metadata,
                                     session_id = EXCLUDED.session_id,
                                     user_id = EXCLUDED.user_id,
-                                    message_role = EXCLUDED.message_role,
                                     round_id = EXCLUDED.round_id,
                                     needs_embedding = TRUE,
                                     updated_at = CURRENT_TIMESTAMP
@@ -1046,7 +1037,6 @@ class PgaiStore(ChunkStoreInterface):
                                 metadata_json,
                                 session_id,
                                 user_id,
-                                message_role,
                                 round_id
                             ))
                         chunk_ids.append(chunk.chunk_id)
@@ -1059,23 +1049,21 @@ class PgaiStore(ChunkStoreInterface):
 
                     for chunk, embedding in zip(chunks, embeddings):
                         metadata_json = self._prepare_metadata(chunk.metadata)
-                        # Extract session_id, user_id, message_role, round_id from metadata
+                        # Extract session_id, user_id, round_id from metadata
                         session_id = chunk.metadata.get('session_id') if chunk.metadata else None
                         user_id = chunk.metadata.get('user_id') if chunk.metadata else None
-                        message_role = chunk.metadata.get('message_role') if chunk.metadata else None
                         round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
                         # Check table type and use correct field names
                         if self.table_name == 'm0_raw':
                             await cur.execute(f"""
                                 INSERT INTO {self.table_name}
-                                (message_id, content, session_id, user_id, message_role, round_id, embedding, needs_embedding)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE)
+                                (message_id, content, session_id, user_id, round_id, embedding, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, FALSE)
                                 ON CONFLICT (message_id) DO UPDATE SET
                                     content = EXCLUDED.content,
                                     session_id = EXCLUDED.session_id,
                                     user_id = EXCLUDED.user_id,
-                                    message_role = EXCLUDED.message_role,
                                     round_id = EXCLUDED.round_id,
                                     embedding = EXCLUDED.embedding,
                                     needs_embedding = FALSE
@@ -1084,7 +1072,6 @@ class PgaiStore(ChunkStoreInterface):
                                 chunk.content,
                                 session_id,
                                 user_id,
-                                message_role,
                                 round_id,
                                 embedding
                             ))
@@ -1096,12 +1083,12 @@ class PgaiStore(ChunkStoreInterface):
                             chunking_strategy = chunk.metadata.get('chunking_strategy', 'semantic') if chunk.metadata else 'semantic'
                             token_count = chunk.metadata.get('token_count', len(chunk.content.split())) if chunk.metadata else len(chunk.content.split())
                             chunk_quality_score = chunk.metadata.get('confidence', 0.8) if chunk.metadata else 0.8
-                            m0_message_ids = chunk.metadata.get('message_ids', []) if chunk.metadata else []
+                            m0_raw_ids = chunk.metadata.get('message_ids', []) if chunk.metadata else []
 
                             await cur.execute(f"""
                                 INSERT INTO {self.table_name}
                                 (chunk_id, content, conversation_id, chunking_strategy, token_count,
-                                 chunk_quality_score, m0_message_ids, embedding, needs_embedding)
+                                 chunk_quality_score, m0_raw_ids, embedding, needs_embedding)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE)
                                 ON CONFLICT (chunk_id) DO UPDATE SET
                                     content = EXCLUDED.content,
@@ -1109,7 +1096,7 @@ class PgaiStore(ChunkStoreInterface):
                                     chunking_strategy = EXCLUDED.chunking_strategy,
                                     token_count = EXCLUDED.token_count,
                                     chunk_quality_score = EXCLUDED.chunk_quality_score,
-                                    m0_message_ids = EXCLUDED.m0_message_ids,
+                                    m0_raw_ids = EXCLUDED.m0_raw_ids,
                                     embedding = EXCLUDED.embedding,
                                     needs_embedding = FALSE
                             """, (
@@ -1119,20 +1106,19 @@ class PgaiStore(ChunkStoreInterface):
                                 chunking_strategy,
                                 token_count,
                                 chunk_quality_score,
-                                m0_message_ids,
+                                m0_raw_ids,
                                 embedding
                             ))
                         else:
                             await cur.execute(f"""
                                 INSERT INTO {self.table_name}
-                                (id, content, metadata, session_id, user_id, message_role, round_id, embedding, needs_embedding)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+                                (id, content, metadata, session_id, user_id, round_id, embedding, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE)
                                 ON CONFLICT (id) DO UPDATE SET
                                     content = EXCLUDED.content,
                                     metadata = EXCLUDED.metadata,
                                     session_id = EXCLUDED.session_id,
                                     user_id = EXCLUDED.user_id,
-                                    message_role = EXCLUDED.message_role,
                                     round_id = EXCLUDED.round_id,
                                     embedding = EXCLUDED.embedding,
                                     needs_embedding = FALSE,
@@ -1143,7 +1129,6 @@ class PgaiStore(ChunkStoreInterface):
                                 metadata_json,
                                 session_id,
                                 user_id,
-                                message_role,
                                 round_id,
                                 embedding
                             ))
@@ -1393,20 +1378,19 @@ class PgaiStore(ChunkStoreInterface):
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 metadata_json = self._prepare_metadata(chunk.metadata)
-                # Extract session_id, user_id, message_role, round_id from metadata
+                # Extract session_id, user_id, round_id from metadata
                 session_id = chunk.metadata.get('session_id') if chunk.metadata else None
                 user_id = chunk.metadata.get('user_id') if chunk.metadata else None
-                message_role = chunk.metadata.get('message_role') if chunk.metadata else None
                 round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
                 id_column = self._get_id_column()
                 await cur.execute(f"""
                     UPDATE {self.table_name}
                     SET content = %s, metadata = %s, session_id = %s, user_id = %s,
-                        message_role = %s, round_id = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
+                        round_id = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE {id_column} = %s
                 """, (chunk.content, metadata_json, session_id, user_id,
-                      message_role, round_id, embedding, chunk_id))
+                      round_id, embedding, chunk_id))
 
                 await conn.commit()
                 return cur.rowcount > 0
@@ -1436,20 +1420,19 @@ class PgaiStore(ChunkStoreInterface):
             async with conn.cursor() as cur:
                 for chunk_id, chunk, embedding in zip(chunk_ids, chunks, embeddings):
                     metadata_json = self._prepare_metadata(chunk.metadata)
-                    # Extract session_id, user_id, message_role, round_id from metadata
+                    # Extract session_id, user_id, round_id from metadata
                     session_id = chunk.metadata.get('session_id') if chunk.metadata else None
                     user_id = chunk.metadata.get('user_id') if chunk.metadata else None
-                    message_role = chunk.metadata.get('message_role') if chunk.metadata else None
                     round_id = chunk.metadata.get('round_id') if chunk.metadata else None
 
                     id_column = self._get_id_column()
                     await cur.execute(f"""
                         UPDATE {self.table_name}
                         SET content = %s, metadata = %s, session_id = %s, user_id = %s,
-                            message_role = %s, round_id = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
+                            round_id = %s, embedding = %s, updated_at = CURRENT_TIMESTAMP
                         WHERE {id_column} = %s
                     """, (chunk.content, metadata_json, session_id, user_id,
-                          message_role, round_id, embedding, chunk_id))
+                          round_id, embedding, chunk_id))
 
                     results.append(cur.rowcount > 0)
 
