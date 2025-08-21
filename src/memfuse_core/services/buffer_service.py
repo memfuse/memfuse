@@ -37,18 +37,19 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         config: Optional[Dict[str, Any]] = None,
     ):
         """Initialize the Buffer Service.
-        
+
         Args:
             memory_service: MemoryService instance to delegate operations to
-            user: User ID (required for user-level singleton pattern)
+            user: User name (string, required for user-level singleton pattern)
             config: Configuration dictionary with Buffer settings
         """
         self.memory_service = memory_service
-        self.user = user
+        self.user = user  # User name (string)
         self.config = config or {}
-        
-        # Get the actual user_id (UUID) from memory_service
-        self.user_id = getattr(memory_service, '_user_id', user) if memory_service else user
+
+        # user_id should always be UUID, never a user name
+        # We'll get it dynamically from memory_service when needed
+        self.user_id = None  # Will be set dynamically via _get_actual_user_id()
 
         # Check if buffer is enabled (use global config, not just buffer section)
         # Environment variable can override config file setting
@@ -137,10 +138,16 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             """Handle retrieval from memory service."""
             try:
                 # Direct call to MemoryService for storage retrieval
+                # Get the actual user_id dynamically to ensure it's available
+                actual_user_id = self._get_actual_user_id()
+                if not actual_user_id and self.user:
+                    # If we still don't have user_id, pass the user name and let SimplifiedMemoryService handle it
+                    actual_user_id = self.user
+
                 result = await self.memory_service.query(
                     query=query,
                     top_k=max_results,
-                    user_id=self.user_id,  # Pass user_id for filtering
+                    user_id=actual_user_id,  # Pass user_id for filtering
                     include_messages=True,
                     include_knowledge=True,
                     include_chunks=True
@@ -432,7 +439,10 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         Returns:
             Message batch list with service-level metadata added
         """
-        if not self.user_id and not session_id:
+        # Get the correct user_id dynamically
+        actual_user_id = self._get_actual_user_id()
+
+        if not actual_user_id and not session_id:
             return message_batch_list
 
         # Only add user_id and session_id at service level
@@ -443,14 +453,55 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                         message['metadata'] = {}
 
                     # Add user_id if available and not present
-                    if self.user_id and 'user_id' not in message['metadata']:
-                        message['metadata']['user_id'] = self.user_id
+                    if actual_user_id and 'user_id' not in message['metadata']:
+                        message['metadata']['user_id'] = actual_user_id
 
                     # Add session_id if provided and not present
                     if session_id and 'session_id' not in message['metadata']:
                         message['metadata']['session_id'] = session_id
 
         return message_batch_list
+
+    def _get_actual_user_id(self) -> Optional[str]:
+        """Get the actual user_id (UUID) from memory_service.
+
+        This method ensures we always return a proper UUID, never a user name.
+
+        Returns:
+            The correct user_id (UUID) if available, None otherwise
+        """
+        if (self.memory_service and
+            hasattr(self.memory_service, '_user_id') and
+            self.memory_service._user_id):
+            # Use the UUID from memory_service (this is always correct)
+            user_id = str(self.memory_service._user_id)
+            # Cache it for future use
+            if self.user_id != user_id:
+                self.user_id = user_id
+                logger.debug(f"BufferService: Cached user_id from memory_service: {user_id}")
+            return user_id
+        else:
+            # Fallback: try to get user_id by looking up the user name
+            if self.user and self.memory_service:
+                try:
+                    # Try to get user_id by calling memory_service's user lookup
+                    if hasattr(self.memory_service, '_initialize_user_id'):
+                        # Force initialization if not done yet
+                        import asyncio
+                        if not hasattr(self.memory_service, '_user_id') or not self.memory_service._user_id:
+                            logger.debug(f"BufferService: Forcing user_id initialization for user: {self.user}")
+                            # This is a sync method, but we need to handle it carefully
+                            # We'll return None and let the caller handle the async initialization
+                            return None
+                        else:
+                            user_id = str(self.memory_service._user_id)
+                            self.user_id = user_id
+                            return user_id
+                except Exception as e:
+                    logger.warning(f"BufferService: Failed to get user_id for user {self.user}: {e}")
+
+            # No valid user_id available
+            return None
 
     def _update_service_stats(self, result: Dict[str, Any]) -> None:
         """Update service-level statistics.
@@ -622,12 +673,18 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 # Bypass mode: Direct MemoryService query
                 logger.info(f"BufferService: Bypass mode - querying MemoryService directly")
 
+                # Get the actual user_id dynamically to ensure it's available
+                actual_user_id = self._get_actual_user_id()
+                if not actual_user_id and self.user:
+                    # If we still don't have user_id, pass the user name and let SimplifiedMemoryService handle it
+                    actual_user_id = self.user
+
                 result = await self.memory_service.query(
                     query=query,
                     top_k=top_k,
                     store_type=store_type,
                     session_id=session_id,
-                    user_id=self.user_id,  # Pass user_id for filtering
+                    user_id=actual_user_id,  # Pass user_id for filtering
                     include_messages=include_messages,
                     include_knowledge=include_knowledge,
                     include_chunks=include_chunks

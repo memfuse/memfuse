@@ -93,17 +93,20 @@ class SimplifiedDatabaseManager:
             with self.conn.cursor() as cur:
                 cur.execute("""
                     SELECT table_name FROM information_schema.tables
-                    WHERE table_schema = 'public' AND table_name IN ('m0_raw', 'm1_episodic')
+                    WHERE table_schema = 'public' AND table_name IN ('users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic')
                 """)
                 existing_tables = [row[0] for row in cur.fetchall()]
 
-                if 'm0_raw' not in existing_tables:
-                    logger.error("❌ m0_raw table not found. Please run database initialization first.")
-                    raise Exception("Required tables not found")
+                # Create missing basic tables
+                missing_tables = []
+                required_tables = ['users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic']
+                for table in required_tables:
+                    if table not in existing_tables:
+                        missing_tables.append(table)
 
-                if 'm1_episodic' not in existing_tables:
-                    logger.error("❌ m1_episodic table not found. Please run database initialization first.")
-                    raise Exception("Required tables not found")
+                if missing_tables:
+                    logger.warning(f"⚠️ Missing tables: {missing_tables}. Creating them now...")
+                    await self._create_missing_tables(missing_tables)
 
                 # Verify required functions exist
                 await self._verify_functions()
@@ -112,6 +115,85 @@ class SimplifiedDatabaseManager:
 
         except Exception as e:
             logger.error(f"❌ Schema initialization failed: {e}")
+            raise
+
+    async def _create_missing_tables(self, missing_tables: List[str]) -> None:
+        """Create missing database tables."""
+        try:
+            with self.conn.cursor() as cur:
+                # Create users table
+                if 'users' in missing_tables:
+                    cur.execute('''
+                    CREATE TABLE IF NOT EXISTS users (
+                        id TEXT PRIMARY KEY,
+                        name TEXT UNIQUE NOT NULL,
+                        description TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP
+                    )
+                    ''')
+                    logger.info("✅ Created users table")
+
+                # Create sessions table
+                if 'sessions' in missing_tables:
+                    cur.execute('''
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        agent_id TEXT NOT NULL DEFAULT 'default-agent',
+                        name TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                    )
+                    ''')
+                    logger.info("✅ Created sessions table")
+
+                # Create rounds table
+                if 'rounds' in missing_tables:
+                    cur.execute('''
+                    CREATE TABLE IF NOT EXISTS rounds (
+                        id TEXT PRIMARY KEY,
+                        session_id TEXT,
+                        created_at TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
+                    )
+                    ''')
+                    logger.info("✅ Created rounds table")
+
+                # Create messages table
+                if 'messages' in missing_tables:
+                    cur.execute('''
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id TEXT PRIMARY KEY,
+                        round_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        FOREIGN KEY (round_id) REFERENCES rounds (id) ON DELETE CASCADE
+                    )
+                    ''')
+                    logger.info("✅ Created messages table")
+
+                # Create M0 and M1 tables using SchemaManager
+                if 'm0_raw' in missing_tables or 'm1_episodic' in missing_tables:
+                    from memfuse_core.models.schema.manager import SchemaManager
+                    schema_manager = SchemaManager()
+
+                    if 'm0_raw' in missing_tables:
+                        m0_schema = schema_manager.get_schema('m0_raw')
+                        cur.execute(m0_schema.generate_create_table_sql())
+                        logger.info("✅ Created m0_raw table")
+
+                    if 'm1_episodic' in missing_tables:
+                        m1_schema = schema_manager.get_schema('m1_episodic')
+                        cur.execute(m1_schema.generate_create_table_sql())
+                        logger.info("✅ Created m1_episodic table")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to create missing tables: {e}")
             raise
 
     async def _verify_functions(self) -> None:
@@ -163,81 +245,277 @@ class SimplifiedDatabaseManager:
                 self.conn = None
 
 
-class SimplifiedChunkProcessor:
-    """Simplified chunking processor based on MVP implementation."""
-    
-    def __init__(self, chunk_token_limit: int = 200):
-        self.chunk_token_limit = chunk_token_limit
+class TokenBasedChunker:
+    """
+    Intelligent token-based chunker that optimizes for retrieval quality.
+
+    Key features:
+    - Target chunk size: 500-800 tokens
+    - User boundary awareness
+    - Metadata preservation
+    - Conversation context preservation
+    """
+
+    def __init__(self,
+                 target_tokens: int = 700,
+                 min_tokens: int = 500,
+                 max_tokens: int = 800,
+                 strict_user_boundaries: bool = True):
+        """
+        Initialize the token-based chunker with strict user boundary enforcement.
+
+        Args:
+            target_tokens: Target token count per chunk
+            min_tokens: Minimum tokens before creating a chunk
+            max_tokens: Maximum tokens allowed in a chunk
+            strict_user_boundaries: If True, NEVER mix different users in same chunk (security)
+        """
+        self.target_tokens = target_tokens
+        self.min_tokens = min_tokens
+        self.max_tokens = max_tokens
+        self.strict_user_boundaries = strict_user_boundaries
+        from ..utils.token_counter import get_token_counter
+        self.token_counter = get_token_counter()
+
+        logger.info(f"TokenBasedChunker initialized: target={target_tokens}, "
+                   f"range=[{min_tokens}, {max_tokens}], strict_user_boundaries={strict_user_boundaries}")
 
     def create_chunks(self, messages: List[Dict[str, Any]], session_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Create M1 chunks using token-based strategy."""
+        """
+        Create optimally-sized chunks from messages with strict user boundary enforcement.
+
+        Strategy:
+        1. Group messages by user_id first (strict security boundary)
+        2. Within each user group, optimize for token count (500-800 tokens)
+        3. Never mix different users in the same chunk
+
+        Args:
+            messages: List of message dictionaries
+            session_id: Session ID for the messages
+            user_id: Default user ID if not in message metadata
+
+        Returns:
+            List of chunk dictionaries with embedded metadata
+        """
+        if not messages:
+            return []
+
+        # Convert messages to metadata format expected by original TokenBasedChunker
+        metadata_list = []
+        for message in messages:
+            meta = {
+                'message_id': message.get('id', str(uuid.uuid4())),
+                'user_id': user_id,
+                'session_id': session_id,
+                'conversation_id': session_id  # For compatibility
+            }
+            # Extract user_id from message metadata if available
+            if 'metadata' in message and isinstance(message['metadata'], dict):
+                meta['user_id'] = message['metadata'].get('user_id', user_id)
+            metadata_list.append(meta)
+
+        # Step 1: Group messages by user_id for strict security
+        user_groups = self._group_messages_by_user(messages, metadata_list)
+
+        all_chunks = []
+
+        # Step 2: Process each user group separately
+        for group_user_id, (user_messages, user_metadata) in user_groups.items():
+            user_chunks = self._create_chunks_for_user(user_messages, user_metadata, group_user_id)
+            all_chunks.extend(user_chunks)
+
+        logger.info(f"TokenBasedChunker: Created {len(all_chunks)} chunks from {len(messages)} messages "
+                   f"across {len(user_groups)} users")
+        return all_chunks
+
+    def _group_messages_by_user(self, messages: List[Dict[str, Any]],
+                               metadata_list: List[Dict[str, Any]]) -> Dict[str, tuple]:
+        """
+        Group messages by user_id for strict security boundaries.
+
+        Args:
+            messages: List of message dictionaries
+            metadata_list: List of metadata for each message
+
+        Returns:
+            Dictionary mapping user_id to (messages, metadata) tuple
+        """
+        user_groups = {}
+
+        for message, meta in zip(messages, metadata_list):
+            user_id = meta.get('user_id', 'unknown_user')
+
+            if user_id not in user_groups:
+                user_groups[user_id] = ([], [])
+
+            user_groups[user_id][0].append(message)
+            user_groups[user_id][1].append(meta)
+
+        return user_groups
+
+    def _create_chunks_for_user(self, messages: List[Dict[str, Any]],
+                               metadata_list: List[Dict[str, Any]],
+                               user_id: str) -> List[Dict[str, Any]]:
+        """
+        Create optimally-sized chunks for a single user's messages.
+
+        Args:
+            messages: List of message dictionaries for this user
+            metadata_list: List of metadata for each message
+            user_id: User ID for these messages
+
+        Returns:
+            List of chunk dictionaries for this user
+        """
         chunks = []
         current_chunk_messages = []
-        current_token_count = 0
+        current_chunk_metadata = []
+        current_tokens = 0
 
-        for message in messages:
-            # Estimate token count (rough approximation: 1 token ≈ 4 characters)
+        for message, meta in zip(messages, metadata_list):
             content = message.get('content', '')
-            token_count = max(1, len(content) // 4)
+            message_tokens = self.token_counter.count_tokens(content)
 
-            # Check if adding this message would exceed token limit
-            if current_token_count + token_count > self.chunk_token_limit and current_chunk_messages:
-                # Create chunk from accumulated messages
-                chunk = self._create_chunk_from_messages(current_chunk_messages, session_id, user_id)
+            # Check if adding this message would exceed max tokens
+            if current_tokens + message_tokens > self.max_tokens and current_chunk_messages:
+                # Create chunk from current messages
+                chunk = self._create_chunk_from_messages(
+                    current_chunk_messages, current_chunk_metadata, current_tokens, user_id
+                )
                 chunks.append(chunk)
 
                 # Start new chunk
                 current_chunk_messages = [message]
-                current_token_count = token_count
+                current_chunk_metadata = [meta]
+                current_tokens = message_tokens
             else:
-                # Add message to current chunk
+                # Add to current chunk
                 current_chunk_messages.append(message)
-                current_token_count += token_count
+                current_chunk_metadata.append(meta)
+                current_tokens += message_tokens
 
         # Handle remaining messages
         if current_chunk_messages:
-            chunk = self._create_chunk_from_messages(current_chunk_messages, session_id, user_id)
+            chunk = self._create_chunk_from_messages(
+                current_chunk_messages, current_chunk_metadata, current_tokens, user_id
+            )
             chunks.append(chunk)
 
-        logger.info(f"✅ Created {len(chunks)} M1 chunks from {len(messages)} messages")
+        logger.debug(f"TokenBasedChunker: Created {len(chunks)} chunks for user {user_id}")
         return chunks
-    
-    def _create_chunk_from_messages(self, messages: List[Dict[str, Any]], session_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
-        """Create a single M1 chunk from a list of M0 messages."""
+
+    def _create_chunk_from_messages(self, messages: List[Dict[str, Any]],
+                                   metadata_list: List[Dict[str, Any]],
+                                   token_count: int, user_id: str = None) -> Dict[str, Any]:
+        """
+        Create a chunk dictionary from messages and metadata.
+
+        Args:
+            messages: List of messages in this chunk
+            metadata_list: List of metadata for each message
+            token_count: Total token count for this chunk
+            user_id: User ID for this chunk
+
+        Returns:
+            Chunk dictionary ready for database insertion
+        """
         # Combine message contents
-        combined_content = " ".join([msg.get('content', '') for msg in messages])
+        combined_content = self._format_chunk_content(messages)
 
-        # Calculate total token count
-        total_tokens = sum([max(1, len(msg.get('content', '')) // 4) for msg in messages])
+        # Extract user_ids from Buffer data first, fallback to conversion only if needed
+        import uuid
 
-        # Use session_id for proper user filtering
-        session_id = session_id if session_id else str(uuid.uuid4())
+        user_ids = []
 
-        # Generate valid UUIDs for message_ids
-        message_ids = []
-        for msg in messages:
-            msg_id = msg.get('id', str(uuid.uuid4()))
+        # Priority 1: Extract user_ids from Buffer metadata (these are already correct UUIDs)
+        for meta in metadata_list:
+            buffer_user_id = meta.get('user_id')
+            if buffer_user_id:
+                try:
+                    # Buffer should provide proper UUIDs from users table
+                    uuid.UUID(buffer_user_id)
+                    user_ids.append(buffer_user_id)
+                    logger.debug(f"Using user_id from Buffer metadata: {buffer_user_id}")
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid user_id format in Buffer metadata: {buffer_user_id}")
+
+        # Priority 2: Use provided user_id parameter if no Buffer data found
+        if not user_ids and user_id:
             try:
-                # Validate UUID format
-                uuid.UUID(msg_id)
-                message_ids.append(msg_id)
-            except ValueError:
-                # If not a valid UUID, generate a new one
-                message_ids.append(str(uuid.uuid4()))
+                # Check if it's already a valid UUID
+                uuid.UUID(user_id)
+                user_ids = [user_id]
+                logger.debug(f"Using provided user_id (UUID): {user_id}")
+            except (ValueError, TypeError):
+                # Only convert short names when Buffer is disabled
+                if isinstance(user_id, str) and len(user_id) < 36:
+                    # This should only happen when Buffer is disabled
+                    user_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id))
+                    user_ids = [user_uuid]
+                    logger.debug(f"Converted short user_id to UUID (Buffer disabled): {user_id} -> {user_uuid}")
+                else:
+                    logger.warning(f"Invalid user_id format: {user_id}")
+                    user_ids = [str(uuid.uuid4())]
 
-        chunk = {
+        # Remove duplicates while preserving order
+        user_ids = list(dict.fromkeys(user_ids))
+
+        # Collect all message roles
+        roles = [msg.get('role', 'unknown') for msg in messages]
+
+        # Get session info (unified from conversation_id)
+        session_ids = list(set(
+            meta.get('session_id', meta.get('conversation_id')) for meta in metadata_list
+            if meta.get('session_id') or meta.get('conversation_id')
+        ))
+
+        # Create comprehensive metadata
+        chunk_metadata = {
+            'user_ids': user_ids,
+            'session_ids': session_ids,
+            'source_message_roles': roles,
+            'source_message_count': len(messages),
+            'chunking_method': 'token_based_user_safe',
+            'token_target': self.target_tokens,
+            'actual_tokens': token_count,
+            'multi_user': False,  # Always False with strict boundaries
+            'strict_user_boundary': True  # Security flag
+        }
+
+        return {
             'chunk_id': str(uuid.uuid4()),
             'content': combined_content,
             'chunking_strategy': 'token_based',
-            'token_count': total_tokens,
-            'user_id': user_id if user_id else str(uuid.uuid4()),
-            'session_id': session_id,
-            'm0_raw_ids': message_ids,
-            'created_at': datetime.now(),
-            'metadata': {}  # Default empty metadata
+            'token_count': token_count,
+            'user_id': user_ids[0] if user_ids else str(uuid.uuid4()),  # Use first user_id
+            'session_id': session_ids[0] if session_ids else None,  # Unified to session_id
+            'metadata': chunk_metadata,  # Use correct field name
+            'm0_raw_ids': [
+                meta.get('message_id') for meta in metadata_list
+                if meta.get('message_id')
+            ]
         }
 
-        return chunk
+    def _format_chunk_content(self, messages: List[Dict[str, Any]]) -> str:
+        """
+        Format messages into a coherent chunk content.
+
+        Args:
+            messages: List of messages to format
+
+        Returns:
+            Formatted chunk content string
+        """
+        formatted_parts = []
+
+        for msg in messages:
+            role = msg.get('role', 'unknown').upper()
+            content = msg.get('content', '').strip()
+
+            if content:
+                formatted_parts.append(f"[{role}]: {content}")
+
+        return "\n\n".join(formatted_parts)
 
 
 class SimplifiedEmbeddingGenerator:
@@ -314,8 +592,11 @@ class SimplifiedMemoryService(MessageInterface):
 
         # Components
         self.db_manager = SimplifiedDatabaseManager(self.db_config)
-        self.chunk_processor = SimplifiedChunkProcessor(
-            chunk_token_limit=self.config.get('chunk_token_limit', 200)
+        self.chunk_processor = TokenBasedChunker(
+            target_tokens=self.config.get('chunk_token_limit', 700),
+            min_tokens=self.config.get('min_chunk_tokens', 500),
+            max_tokens=self.config.get('max_chunk_tokens', 800),
+            strict_user_boundaries=True
         )
         self.embedding_generator = SimplifiedEmbeddingGenerator(
             model_name=self.config.get('embedding_model', 'sentence-transformers/all-MiniLM-L6-v2')
@@ -385,6 +666,10 @@ class SimplifiedMemoryService(MessageInterface):
         await self.db_manager.connect()
         await self.db_manager.initialize_schema()
 
+        # 🔧 CRITICAL FIX: Initialize _user_id from users table
+        # This ensures we have the correct UUID for the user
+        await self._initialize_user_id()
+
         # Initialize embedding generator
         await self.embedding_generator.initialize()
 
@@ -394,6 +679,43 @@ class SimplifiedMemoryService(MessageInterface):
         self._initialized = True
         logger.info("SimplifiedMemoryService: Initialization complete")
         return self
+
+    async def _initialize_user_id(self):
+        """Initialize _user_id from users table to ensure ID consistency."""
+        try:
+            # Use the context manager to get database connection
+            with sync_connection_pool.get_connection() as conn:
+                cur = conn.cursor()
+
+                # First, try to find existing user
+                cur.execute("SELECT id FROM users WHERE name = %s", (self.user,))
+                result = cur.fetchone()
+
+                if result:
+                    self._user_id = result[0]
+                    logger.info(f"✅ Found existing user '{self.user}' with ID: {self._user_id}")
+                else:
+                    # Create new user if not exists
+                    import uuid
+                    new_user_id = str(uuid.uuid4())
+                    cur.execute(
+                        "INSERT INTO users (id, name, created_at) VALUES (%s, %s, NOW()) ON CONFLICT (name) DO NOTHING RETURNING id",
+                        (new_user_id, self.user)
+                    )
+                    conn.commit()
+
+                    # Get the actual ID (in case of race condition)
+                    cur.execute("SELECT id FROM users WHERE name = %s", (self.user,))
+                    result = cur.fetchone()
+                    self._user_id = result[0] if result else new_user_id
+                    logger.info(f"✅ Created new user '{self.user}' with ID: {self._user_id}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize user_id for '{self.user}': {e}")
+            # Fallback to generating a UUID (should not happen in normal operation)
+            import uuid
+            self._user_id = str(uuid.uuid4())
+            logger.warning(f"⚠️ Using fallback user_id: {self._user_id}")
     
     async def add_batch(self, message_batch_list: MessageBatchList, **kwargs) -> Dict[str, Any]:
         """Add a batch of message lists with simplified M0/M1 processing."""
@@ -423,8 +745,54 @@ class SimplifiedMemoryService(MessageInterface):
             logger.info(f"✅ Stored {len(all_messages)} messages to messages/rounds tables")
 
             # Step 3: Store M0 messages with session_id, user_id, and round_id
-            # Generate a user_id for this batch (could be extracted from messages or kwargs in the future)
-            user_id = kwargs.get('user_id', str(uuid.uuid4()))
+            # Priority 1: Extract user_id from Buffer data (message metadata)
+            user_id = None
+
+            for message in all_messages:
+                metadata = message.get('metadata', {})
+                if 'user_id' in metadata:
+                    buffer_user_id = metadata['user_id']
+                    try:
+                        # Validate it's a proper UUID from Buffer
+                        uuid.UUID(buffer_user_id)
+                        user_id = buffer_user_id
+                        logger.debug(f"Using valid UUID user_id from Buffer: {user_id}")
+                        break
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid user_id in Buffer metadata: {buffer_user_id}")
+
+            # Priority 2: Use provided user_id from kwargs
+            if not user_id:
+                kwargs_user_id = kwargs.get('user_id')
+                if kwargs_user_id:
+                    try:
+                        uuid.UUID(kwargs_user_id)
+                        user_id = kwargs_user_id
+                        logger.debug(f"Using user_id from kwargs: {user_id}")
+                    except (ValueError, TypeError):
+                        # Convert short user name to UUID (Buffer disabled case)
+                        if isinstance(kwargs_user_id, str) and len(kwargs_user_id) < 36:
+                            user_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, kwargs_user_id))
+                            logger.debug(f"Converted kwargs user_id to UUID: {kwargs_user_id} -> {user_id}")
+
+            # Priority 3: Use service user_id (from users table lookup)
+            if not user_id and hasattr(self, '_user_id') and self._user_id:
+                user_id = str(self._user_id)
+                logger.debug(f"Using service _user_id: {user_id}")
+
+            # Priority 4: Generate user_id only as last resort
+            if not user_id:
+                user_id = str(uuid.uuid4())
+                logger.warning(f"Generated new user_id (last resort - Buffer disabled and no user data): {user_id}")
+
+            # 🔧 CRITICAL FIX: Always use the correct user_id from _user_id if available
+            # This ensures ID consistency between Buffer and Memory layers
+            if hasattr(self, '_user_id') and self._user_id:
+                correct_user_id = str(self._user_id)
+                if user_id != correct_user_id:
+                    logger.warning(f"FIXING ID MISMATCH: Changing user_id from {user_id} to {correct_user_id}")
+                    user_id = correct_user_id
+
             message_ids = await self._store_m0_messages(all_messages, session_id, user_id, round_id)
             logger.info(f"✅ Stored {len(message_ids)} M0 messages")
 
@@ -448,9 +816,11 @@ class SimplifiedMemoryService(MessageInterface):
         """Store M0 messages to database with session_id."""
         message_ids = []
 
-        # Generate user_id if not provided
+        # user_id should already be provided from Buffer data or parent method
+        # Only generate as absolute fallback (should rarely happen)
         if user_id is None:
             user_id = str(uuid.uuid4())
+            logger.warning("Generated fallback user_id - this should rarely happen if Buffer is working correctly")
 
         try:
             with self.db_manager.conn.cursor() as cur:
@@ -517,30 +887,50 @@ class SimplifiedMemoryService(MessageInterface):
         return message_ids
 
     async def _prepare_session_and_round(self, message_batch_list: MessageBatchList, provided_session_id: Optional[str] = None) -> tuple[str, str]:
-        """Prepare session and round IDs from message batch list."""
+        """Prepare session and round IDs from message batch list, prioritizing Buffer data."""
         import uuid
 
-        # Use provided session_id first (from API parameter)
+        # Priority 1: Use provided session_id (from API parameter)
         session_id = provided_session_id
+        round_id = None
 
-        # If no provided session_id, extract from first message if available
+        # Priority 2: Extract session_id and round_id from Buffer data (message metadata)
         if not session_id:
             for message_list in message_batch_list:
                 for message in message_list:
                     metadata = message.get('metadata', {})
-                    if 'session_id' in metadata:
+
+                    # Try to get session_id from Buffer metadata
+                    if not session_id and 'session_id' in metadata:
                         session_id = metadata['session_id']
+
+                    # Try to get round_id from Buffer metadata
+                    if not round_id and 'round_id' in metadata:
+                        round_id = metadata['round_id']
+
+                    # Also check for legacy conversation_id as session_id fallback
+                    if not session_id and 'conversation_id' in metadata:
+                        session_id = metadata['conversation_id']
+
+                    # Break if we found both
+                    if session_id and round_id:
                         break
 
-                if session_id:
+                if session_id and round_id:
                     break
 
-        # Generate session_id if still not found
+        # Priority 3: Generate IDs only if Buffer is disabled or no data found
         if not session_id:
             session_id = str(uuid.uuid4())
+            logger.debug("Generated new session_id (Buffer disabled or no Buffer data)")
+        else:
+            logger.debug(f"Using session_id from Buffer: {session_id}")
 
-        # Generate round_id
-        round_id = str(uuid.uuid4())
+        if not round_id:
+            round_id = str(uuid.uuid4())
+            logger.debug("Generated new round_id (Buffer disabled or no Buffer data)")
+        else:
+            logger.debug(f"Using round_id from Buffer: {round_id}")
 
         return session_id, round_id
 
@@ -676,33 +1066,70 @@ class SimplifiedMemoryService(MessageInterface):
 
             # Apply user filtering if user_id is provided
             if user_id:
-                # Use user-filtered search
+                # Use user-filtered search - NO similarity threshold, use top_k only
+                logger.debug(f"SimplifiedMemoryService: Querying with user_id filter: {user_id}")
+                with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # Check if user_id is a UUID (direct user_id) or a name (needs lookup)
+                    try:
+                        import uuid
+                        uuid.UUID(user_id)
+                        # It's a UUID, query directly by user_id
+                        cur.execute("""
+                            SELECT
+                                c.chunk_id,
+                                c.content,
+                                (1.0 - (c.embedding <=> %s::vector) / 2.0) as similarity_score,
+                                (c.embedding <=> %s::vector) as distance,
+                                array_length(c.m0_raw_ids, 1) as m0_message_count,
+                                c.chunking_strategy,
+                                c.user_id,
+                                c.created_at
+                            FROM m1_episodic c
+                            WHERE c.user_id = %s
+                            ORDER BY c.embedding <=> %s::vector ASC
+                            LIMIT %s
+                        """, (query_embedding.tolist(), query_embedding.tolist(), user_id,
+                              query_embedding.tolist(), top_k))
+                    except ValueError:
+                        # It's a name, query by joining with users table
+                        cur.execute("""
+                            SELECT
+                                c.chunk_id,
+                                c.content,
+                                (1.0 - (c.embedding <=> %s::vector) / 2.0) as similarity_score,
+                                (c.embedding <=> %s::vector) as distance,
+                                array_length(c.m0_raw_ids, 1) as m0_message_count,
+                                c.chunking_strategy,
+                                c.user_id,
+                                c.created_at
+                            FROM m1_episodic c
+                            JOIN sessions s ON c.session_id::text = s.id
+                            JOIN users u ON s.user_id = u.id
+                            WHERE u.name = %s
+                            ORDER BY c.embedding <=> %s::vector ASC
+                            LIMIT %s
+                        """, (query_embedding.tolist(), query_embedding.tolist(), user_id,
+                              query_embedding.tolist(), top_k))
+                    rows = cur.fetchall()
+            else:
+                # No user filtering (fallback) - NO similarity threshold
+                logger.warning("SimplifiedMemoryService: No user_id provided, querying all data (potential security issue)")
                 with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute("""
                         SELECT
-                            c.chunk_id,
-                            c.content,
-                            normalize_cosine_similarity(c.embedding <=> %s::vector) as similarity_score,
-                            (c.embedding <=> %s::vector) as distance,
-                            array_length(c.m0_raw_ids, 1) as m0_message_count,
-                            c.chunking_strategy,
-                            c.created_at
-                        FROM m1_episodic c
-                        JOIN sessions s ON c.session_id::text = s.id
-                        JOIN users u ON s.user_id = u.id
-                        WHERE u.name = %s
-                          AND normalize_cosine_similarity(c.embedding <=> %s::vector) >= %s
-                        ORDER BY c.embedding <=> %s::vector ASC
+                            chunk_id,
+                            content,
+                            (1.0 - (embedding <=> %s::vector) / 2.0) as similarity_score,
+                            (embedding <=> %s::vector) as distance,
+                            array_length(m0_raw_ids, 1) as m0_message_count,
+                            chunking_strategy,
+                            user_id,
+                            created_at
+                        FROM m1_episodic
+                        ORDER BY embedding <=> %s::vector ASC
                         LIMIT %s
-                    """, (query_embedding.tolist(), query_embedding.tolist(), user_id,
-                          query_embedding.tolist(), similarity_threshold, query_embedding.tolist(), top_k))
-                    rows = cur.fetchall()
-            else:
-                # No filtering, use original search function
-                with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("""
-                        SELECT * FROM search_similar_chunks(%s::vector, %s, %s)
-                    """, (query_embedding.tolist(), similarity_threshold, top_k))
+                    """, (query_embedding.tolist(), query_embedding.tolist(),
+                          query_embedding.tolist(), top_k))
                     rows = cur.fetchall()
 
             results = []

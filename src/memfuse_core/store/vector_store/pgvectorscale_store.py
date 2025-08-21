@@ -587,33 +587,60 @@ class PgVectorScaleStore(VectorStore):
             # Generate query embedding
             query_embedding = await self.encoder.encode_text(query_text)
 
-            # Perform similarity search using the custom function
-            similarity_threshold = kwargs.get('similarity_threshold', 0.1)
+            # Extract user_id from kwargs for filtering
+            user_id = kwargs.get('user_id')
 
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Direct query on m1_episodic with normalized similarity scores
-                cur.execute("""
-                    SELECT
-                        chunk_id,
-                        content,
-                        (1.0 - (embedding <=> %s::vector) / 2.0) as similarity_score,
-                        (embedding <=> %s::vector) as distance,
-                        chunking_strategy,
-                        token_count,
-                        m0_raw_ids,
-                        session_id,
-                        embedding_model,
-                        chunk_quality_score,
-                        created_at
-                    FROM m1_episodic
-                    WHERE (1.0 - (embedding <=> %s::vector) / 2.0) >= %s
-                    ORDER BY embedding <=> %s::vector ASC
-                    LIMIT %s
-                """, (
-                    query_embedding.tolist(), query_embedding.tolist(),
-                    query_embedding.tolist(), similarity_threshold,
-                    query_embedding.tolist(), top_k
-                ))
+                if user_id:
+                    # Query with user filtering - NO similarity threshold, use top_k only
+                    logger.debug(f"PgVectorScaleStore: Querying with user_id filter: {user_id}")
+                    # Use cosine similarity directly: 1 - cosine_distance
+                    cur.execute("""
+                        SELECT
+                            chunk_id,
+                            content,
+                            (1.0 - (embedding <=> %s::vector)) as similarity_score,
+                            (embedding <=> %s::vector) as distance,
+                            chunking_strategy,
+                            token_count,
+                            m0_raw_ids,
+                            session_id,
+                            user_id,
+                            embedding_model,
+                            chunk_quality_score,
+                            created_at
+                        FROM m1_episodic
+                        WHERE user_id = %s
+                        ORDER BY embedding <=> %s::vector ASC
+                        LIMIT %s
+                    """, (
+                        query_embedding.tolist(), query_embedding.tolist(),
+                        user_id, query_embedding.tolist(), top_k
+                    ))
+                else:
+                    # Query without user filtering (fallback) - NO similarity threshold
+                    logger.warning("PgVectorScaleStore: No user_id provided, querying all data (potential security issue)")
+                    cur.execute("""
+                        SELECT
+                            chunk_id,
+                            content,
+                            (1.0 - (embedding <=> %s::vector)) as similarity_score,
+                            (embedding <=> %s::vector) as distance,
+                            chunking_strategy,
+                            token_count,
+                            m0_raw_ids,
+                            session_id,
+                            user_id,
+                            embedding_model,
+                            chunk_quality_score,
+                            created_at
+                        FROM m1_episodic
+                        ORDER BY embedding <=> %s::vector ASC
+                        LIMIT %s
+                    """, (
+                        query_embedding.tolist(), query_embedding.tolist(),
+                        query_embedding.tolist(), top_k
+                    ))
 
                 rows = cur.fetchall()
 
@@ -829,28 +856,89 @@ class PgVectorScaleStore(VectorStore):
             return None
 
     async def query_by_embedding_chunks(self, embedding: np.ndarray, top_k: int = 5, query: Optional[Any] = None) -> List[ChunkData]:
-        """Query the store by embedding and return chunks."""
+        """Query the store by embedding with user filtering and no hard-coded thresholds."""
         if not self.conn:
             return []
 
         try:
+            # Extract user_id from query metadata for filtering
+            user_id = None
+            if query and hasattr(query, 'metadata') and query.metadata:
+                user_id = query.metadata.get("user_id")
+
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
-                    SELECT * FROM search_similar_chunks(%s::vector, %s, %s)
-                """, (embedding.tolist(), 0.1, top_k))
+                if user_id:
+                    # Query with user filtering - NO similarity threshold, use top_k only
+                    logger.debug(f"PgVectorScaleStore: query_by_embedding_chunks with user_id filter: {user_id}")
+                    cur.execute("""
+                        SELECT
+                            chunk_id,
+                            content,
+                            (1.0 - (embedding <=> %s::vector)) as similarity_score,
+                            (embedding <=> %s::vector) as distance,
+                            chunking_strategy,
+                            token_count,
+                            m0_raw_ids,
+                            session_id,
+                            user_id,
+                            embedding_model,
+                            chunk_quality_score,
+                            created_at
+                        FROM m1_episodic
+                        WHERE user_id = %s
+                        ORDER BY embedding <=> %s::vector ASC
+                        LIMIT %s
+                    """, (
+                        embedding.tolist(), embedding.tolist(),
+                        user_id, embedding.tolist(), top_k
+                    ))
+                else:
+                    # Query without user filtering (fallback) - NO similarity threshold
+                    logger.warning("PgVectorScaleStore: query_by_embedding_chunks without user_id (potential security issue)")
+                    cur.execute("""
+                        SELECT
+                            chunk_id,
+                            content,
+                            (1.0 - (embedding <=> %s::vector)) as similarity_score,
+                            (embedding <=> %s::vector) as distance,
+                            chunking_strategy,
+                            token_count,
+                            m0_raw_ids,
+                            session_id,
+                            user_id,
+                            embedding_model,
+                            chunk_quality_score,
+                            created_at
+                        FROM m1_episodic
+                        ORDER BY embedding <=> %s::vector ASC
+                        LIMIT %s
+                    """, (
+                        embedding.tolist(), embedding.tolist(),
+                        embedding.tolist(), top_k
+                    ))
 
                 rows = cur.fetchall()
 
                 results = []
                 for row in rows:
+                    # Double-check user_id filter (additional security layer)
+                    if user_id and row.get('user_id') != user_id:
+                        logger.debug(f"PgVectorScaleStore: Filtering out result with user_id={row.get('user_id')}, expected {user_id}")
+                        continue
+
                     metadata = {
                         'chunk_id': row['chunk_id'],
-                        'similarity_score': row['similarity_score'],
-                        'distance': row['distance'],
-                        'm0_message_count': row['m0_message_count'],
+                        'similarity_score': float(row['similarity_score']),
+                        'distance': float(row['distance']),
                         'chunking_strategy': row['chunking_strategy'],
+                        'token_count': row['token_count'],
+                        'm0_raw_ids': row['m0_raw_ids'],
+                        'session_id': row['session_id'],
+                        'user_id': row['user_id'],
+                        'embedding_model': row['embedding_model'],
+                        'chunk_quality_score': row['chunk_quality_score'],
                         'created_at': row['created_at'],
-                        'source': 'pgvectorscale_m1'
+                        'source': 'pgvectorscale_m1_episodic'
                     }
 
                     chunk = ChunkData(
@@ -860,6 +948,7 @@ class PgVectorScaleStore(VectorStore):
                     )
                     results.append(chunk)
 
+                logger.debug(f"PgVectorScaleStore: query_by_embedding_chunks returned {len(results)} results for user_id={user_id}")
                 return results
 
         except Exception as e:

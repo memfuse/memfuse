@@ -54,6 +54,7 @@ class M0Processor:
                 'role': message['role'],
                 'user_id': user_id,
                 'session_id': session_id,
+                'conversation_id': session_id,  # Use session_id as conversation_id for compatibility
                 'round_id': round_id,
                 'sequence_number': i + 1,
                 'token_count': token_count,

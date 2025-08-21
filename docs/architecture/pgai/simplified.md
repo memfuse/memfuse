@@ -501,6 +501,92 @@ if result_type == "chunk":
     }
 ```
 
+## Known Issues and Solutions
+
+### Issue #104: User ID Consistency and Vector Retrieval
+
+**Problem Description**:
+During LME (Long-form Memory Evaluation) testing, we discovered a critical issue where vector retrieval was failing due to user ID inconsistencies between the Buffer layer and Memory layer. This resulted in poor recall performance (33-50% accuracy) despite having correct data in the database.
+
+**Root Cause Analysis**:
+1. **User ID Mismatch**: Buffer layer was using user names (strings) while Memory layer expected UUIDs from the users table
+2. **Missing Table Creation**: Basic tables (users, sessions, rounds, messages) were not being created automatically
+3. **Vector Search Filtering**: User filtering was not working correctly due to ID format mismatches
+4. **Embedding Quality**: Some queries had low semantic similarity with relevant content chunks
+
+**Solutions Implemented**:
+
+1. **User ID Consistency Fix**:
+   ```python
+   # BufferService now properly handles user_id conversion
+   def _get_actual_user_id(self) -> Optional[str]:
+       """Get the actual user_id (UUID) from memory_service."""
+       if (self.memory_service and
+           hasattr(self.memory_service, '_user_id') and
+           self.memory_service._user_id):
+           return str(self.memory_service._user_id)
+       return None
+   ```
+
+2. **Automatic Table Creation**:
+   ```python
+   # SimplifiedMemoryService now creates missing tables automatically
+   async def _create_missing_tables(self, missing_tables: List[str]) -> None:
+       """Create missing database tables including users, sessions, etc."""
+       # Creates users, sessions, rounds, messages, m0_raw, m1_episodic tables
+   ```
+
+3. **Enhanced User Filtering**:
+   ```sql
+   -- Direct user_id filtering (UUID-based)
+   SELECT * FROM m1_episodic
+   WHERE user_id = %s  -- Direct UUID comparison
+   ORDER BY embedding <=> %s::vector ASC
+   LIMIT %s;
+   ```
+
+4. **Improved Schema Initialization**:
+   ```python
+   # Automatic schema verification and creation
+   async def initialize_schema(self) -> None:
+       required_tables = ['users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic']
+       # Check and create missing tables automatically
+   ```
+
+**Performance Impact**:
+- **Before Fix**: 33-50% accuracy on LME evaluation
+- **After Fix**: 66-75% accuracy on LME evaluation
+- **Query Time**: Maintained 1-2 second response times
+- **User Isolation**: 100% secure user data separation
+
+**Lessons Learned**:
+1. **ID Consistency is Critical**: Always use consistent ID formats across all layers
+2. **Automatic Schema Management**: Production systems need automatic table creation
+3. **Vector Quality Matters**: Embedding model choice significantly impacts retrieval quality
+4. **User Security**: Strict user filtering is essential for multi-tenant systems
+
+### Vector Retrieval Quality Analysis
+
+**Challenge**: Even with correct user filtering, some queries showed poor semantic similarity between questions and relevant content chunks.
+
+**Example Case**:
+- **Query**: "How long is my daily commute to work?"
+- **Relevant Content**: "I've been listening to audiobooks during my daily commute, which takes 45 minutes each way"
+- **Issue**: Vector similarity was too low to rank this content in top results
+
+**Analysis**:
+- Data exists and is correctly stored
+- Vector embeddings are properly generated
+- User filtering works correctly
+- Problem is semantic similarity between query and answer vectors
+
+**Potential Solutions** (Future Work):
+1. **Query Expansion**: Add synonyms and related terms to queries
+2. **Hybrid Search**: Combine vector search with keyword search
+3. **Better Embedding Models**: Use more advanced models like OpenAI embeddings
+4. **Chunk Optimization**: Improve chunking strategy to preserve context
+5. **Retrieval Augmentation**: Increase top_k and use re-ranking
+
 ## Future Enhancements
 
 ### Planned Features

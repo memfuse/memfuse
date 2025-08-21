@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS m0_raw (
     content TEXT NOT NULL,
     role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
 
-    -- Streaming context
+    -- User and session context
+    user_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     sequence_number INTEGER NOT NULL,
 
@@ -43,6 +44,9 @@ CREATE TABLE IF NOT EXISTS m0_raw (
 -- =============================================================================
 
 -- Indexes for M0 layer performance
+CREATE INDEX IF NOT EXISTS idx_m0_user_id
+    ON m0_raw (user_id);
+
 CREATE INDEX IF NOT EXISTS idx_m0_session_sequence
     ON m0_raw (session_id, sequence_number);
 

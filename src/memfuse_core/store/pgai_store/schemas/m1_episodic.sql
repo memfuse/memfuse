@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
 
     -- M0 lineage tracking
     m0_raw_ids TEXT[] NOT NULL DEFAULT '{}',
+    user_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
 
     -- Temporal tracking
@@ -58,6 +59,9 @@ CREATE INDEX IF NOT EXISTS idx_m1_embedding_hnsw
     WITH (m = 16, ef_construction = 64);
 
 -- Additional indexes for M1 layer performance
+CREATE INDEX IF NOT EXISTS idx_m1_user_id
+    ON m1_episodic (user_id);
+
 CREATE INDEX IF NOT EXISTS idx_m1_session_id
     ON m1_episodic (session_id);
 
