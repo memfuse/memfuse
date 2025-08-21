@@ -16,6 +16,9 @@ performance:
   flush_timeout: 30.0
   max_flush_queue_size: 100
   max_flush_workers: 3
+  # Force flush timeout in seconds (default: 30 minutes = 1800 seconds)
+  # When buffer has data but no new writes for this duration, force flush to database
+  force_flush_timeout: 1800
 query:
   cache_size: 100
   default_order: desc

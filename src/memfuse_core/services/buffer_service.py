@@ -1146,6 +1146,38 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         """Get FlushManager instance (via WriteBuffer)."""
         return self.write_buffer.get_flush_manager()
 
+    async def flush_all_buffers(self) -> Dict[str, Any]:
+        """Force flush all buffers to persistent storage.
+
+        This method can be used to manually trigger a flush of all buffer data
+        to the database, useful for testing or ensuring data persistence.
+
+        Returns:
+            Dictionary with flush operation status
+        """
+        try:
+            if not self.buffer_enabled:
+                logger.info("BufferService: Bypass mode - no buffers to flush")
+                return {"status": "success", "message": "No buffers to flush in bypass mode"}
+
+            if not self.write_buffer:
+                logger.warning("BufferService: WriteBuffer not initialized")
+                return {"status": "error", "message": "WriteBuffer not initialized"}
+
+            logger.info("BufferService: Initiating manual flush of all buffers")
+            result = await self.write_buffer.flush_all()
+
+            if result.get("status") == "success":
+                logger.info("BufferService: Manual flush completed successfully")
+            else:
+                logger.error(f"BufferService: Manual flush failed: {result.get('message')}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"BufferService: Error during manual flush: {e}")
+            return {"status": "error", "message": f"Manual flush failed: {str(e)}"}
+
     # Delegate other methods to memory service
     async def read(self, item_ids: List[str]) -> Dict[str, Any]:
         """Read items from memory."""

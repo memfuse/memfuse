@@ -6,6 +6,7 @@ when a new session starts.
 """
 
 import asyncio
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Callable
 from loguru import logger
@@ -59,6 +60,9 @@ class RoundBuffer:
         self.total_rounds_added = 0
         self.total_transfers = 0
         self.total_session_changes = 0
+
+        # Force flush tracking
+        self.last_write_time = time.time()
         
         logger.info(f"RoundBuffer: Initialized with max_tokens={max_tokens}, max_size={max_size}")
     
@@ -146,6 +150,9 @@ class RoundBuffer:
                 self.current_tokens = new_tokens  # Reset to just the new tokens
             else:
                 self.current_tokens += new_tokens  # Add to existing tokens
+
+            # Update last write time for force flush tracking
+            self.last_write_time = time.time()
             self.total_rounds_added += 1
 
             if transfer_triggered:

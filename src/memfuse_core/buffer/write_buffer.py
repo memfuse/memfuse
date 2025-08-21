@@ -66,7 +66,11 @@ class WriteBuffer:
             max_size=hybrid_config.get('max_size', 5),
             chunk_strategy=hybrid_config.get('chunk_strategy', 'message'),
             embedding_model=hybrid_config.get('embedding_model', 'all-MiniLM-L6-v2'),
-            flush_manager=self.flush_manager
+            flush_manager=self.flush_manager,
+            auto_flush_interval=hybrid_config.get('auto_flush_interval', 60.0),
+            enable_auto_flush=hybrid_config.get('enable_auto_flush', True),
+            force_flush_timeout=hybrid_config.get('force_flush_timeout', 1800.0),
+            write_buffer=self
         )
 
         # Set up component connections
@@ -206,7 +210,7 @@ class WriteBuffer:
 
     async def flush_all(self) -> Dict[str, Any]:
         """Force flush all buffers to persistent storage.
-        
+
         Returns:
             Dictionary with flush operation status
         """
@@ -214,14 +218,58 @@ class WriteBuffer:
             # Force transfer from RoundBuffer to HybridBuffer
             if self.round_buffer.rounds:
                 await self.round_buffer._transfer_and_clear("manual_flush")
-            
+
             # Force flush HybridBuffer to storage
             await self.hybrid_buffer.flush_to_storage()
-            
+
             return {"status": "success", "message": "All buffers flushed successfully"}
         except Exception as e:
             logger.error(f"WriteBuffer: Error during flush_all: {e}")
             return {"status": "error", "message": f"Flush failed: {str(e)}"}
+
+    def get_last_write_time(self) -> float:
+        """Get the last write time when data entered RoundBuffer.
+
+        This represents when user data actually entered the buffer system,
+        not when it was transferred between buffers or flushed to database.
+
+        Returns:
+            Last write time to RoundBuffer (timestamp)
+        """
+        return getattr(self.round_buffer, 'last_write_time', 0)
+
+    def has_pending_data(self) -> bool:
+        """Check if there's any pending data in buffers.
+
+        Returns:
+            True if there's data in RoundBuffer or HybridBuffer
+        """
+        round_buffer_data = len(getattr(self.round_buffer, 'rounds', [])) > 0
+        hybrid_buffer_data = len(getattr(self.hybrid_buffer, 'original_rounds', [])) > 0
+        return round_buffer_data or hybrid_buffer_data
+
+    async def check_force_flush_timeout(self, force_flush_timeout: float) -> bool:
+        """Check if force flush timeout has been reached.
+
+        Args:
+            force_flush_timeout: Timeout in seconds
+
+        Returns:
+            True if force flush should be triggered
+        """
+        if not self.has_pending_data():
+            return False
+
+        import time
+        current_time = time.time()
+        last_write_time = self.get_last_write_time()
+        time_since_last_write = current_time - last_write_time
+
+        if time_since_last_write >= force_flush_timeout:
+            logger.info(f"WriteBuffer: Force flush timeout reached - {time_since_last_write:.1f}s >= {force_flush_timeout}s")
+            return True
+
+        return False
     
     def get_stats(self) -> Dict[str, Any]:
         """Get comprehensive statistics for the WriteBuffer system.
@@ -288,10 +336,14 @@ class WriteBuffer:
                     else:
                         logger.info(f"WriteBuffer: {component_name} shutdown completed")
             
-            # Finally clear RoundBuffer (synchronous operation)
-            if hasattr(self.round_buffer, 'clear'):
-                await self.round_buffer.clear()
-                logger.info("WriteBuffer: RoundBuffer cleared")
+            # Finally transfer any remaining data from RoundBuffer before clearing
+            if hasattr(self.round_buffer, 'rounds') and len(self.round_buffer.rounds) > 0:
+                logger.info(f"WriteBuffer: Transferring {len(self.round_buffer.rounds)} remaining rounds from RoundBuffer before shutdown")
+                await self.round_buffer._transfer_and_clear("shutdown")
+                logger.info("WriteBuffer: RoundBuffer data transferred and cleared")
+            else:
+                # RoundBuffer is already empty, no need to clear again
+                logger.info("WriteBuffer: RoundBuffer is already empty, no action needed")
                 
             logger.info("WriteBuffer: All components shutdown successfully")
             

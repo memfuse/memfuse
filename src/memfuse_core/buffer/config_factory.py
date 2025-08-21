@@ -31,7 +31,8 @@ class ComponentConfigFactory:
             'embedding_model': 'all-MiniLM-L6-v2',
             'enable_auto_flush': True,
             'auto_flush_interval': 60.0,
-            'chunk_overlap': 0.1
+            'chunk_overlap': 0.1,
+            'force_flush_timeout': 1800.0  # 30 minutes default
         },
         'query_buffer': {
             'max_size': 15,
@@ -221,6 +222,13 @@ class ComponentConfigFactory:
                     config['max_workers'] = perf_config['max_workers']
                 if 'flush_interval' in perf_config:
                     config['flush_interval'] = perf_config['flush_interval']
+            elif component_name == 'hybrid_buffer':
+                if 'force_flush_timeout' in perf_config:
+                    config['force_flush_timeout'] = perf_config['force_flush_timeout']
+                if 'enable_auto_flush' in perf_config:
+                    config['enable_auto_flush'] = perf_config['enable_auto_flush']
+                if 'flush_interval' in perf_config:
+                    config['auto_flush_interval'] = perf_config['flush_interval']
     
     @classmethod
     def _deep_merge(cls, base: Dict[str, Any], override: Dict[str, Any]) -> None:

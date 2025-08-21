@@ -51,7 +51,9 @@ class HybridBuffer:
         embedding_model: str = "all-MiniLM-L6-v2",
         flush_manager: Optional[FlushManager] = None,
         auto_flush_interval: float = 60.0,
-        enable_auto_flush: bool = True
+        enable_auto_flush: bool = True,
+        force_flush_timeout: float = 1800.0,
+        write_buffer: Optional['WriteBuffer'] = None
     ):
         """Initialize the optimized HybridBuffer.
 
@@ -62,12 +64,16 @@ class HybridBuffer:
             flush_manager: FlushManager instance for handling flush operations
             auto_flush_interval: Interval for automatic flushing (seconds)
             enable_auto_flush: Whether to enable automatic flushing
+            force_flush_timeout: Timeout for force flush when no new data (seconds)
+            write_buffer: Reference to WriteBuffer for unified timeout checking
         """
         self.max_size = max_size
         self.chunk_strategy_name = chunk_strategy
         self.embedding_model_name = embedding_model
         self.auto_flush_interval = auto_flush_interval
         self.enable_auto_flush = enable_auto_flush
+        self.force_flush_timeout = force_flush_timeout
+        self.write_buffer = write_buffer
 
         # Dual-queue data structures
         self.chunks: List[ChunkData] = []
@@ -88,6 +94,9 @@ class HybridBuffer:
         # Auto-flush timer
         self.last_flush_time = time.time()
         self.auto_flush_task: Optional[asyncio.Task] = None
+
+        # Force flush tracking
+        self.last_write_time = time.time()
 
         # Statistics
         self.total_rounds_received = 0
@@ -207,24 +216,28 @@ class HybridBuffer:
             self.original_rounds.extend(rounds)
             self.total_rounds_received += len(rounds)
 
+            # 3. Update last write time for force flush tracking
+            self.last_write_time = time.time()
+
             logger.info(f"HybridBuffer: RoundQueue contains {len(self.original_rounds)} rounds, VectorCache contains {len(self.chunks)} chunks")
 
-            # 3. Check if flush is needed (non-blocking)
+            # 4. Check if flush is needed (non-blocking)
             await self._check_and_trigger_flush()
 
     async def _check_and_trigger_flush(self) -> None:
         """Check if flush is needed and trigger non-blocking flush."""
         should_flush = False
         flush_reason = ""
+        current_time = time.time()
 
-        # Size-based flush
+        # Size-based flush (highest priority)
         if len(self.original_rounds) >= self.max_size:
             should_flush = True
             flush_reason = f"size_limit ({len(self.original_rounds)} >= {self.max_size})"
 
-        # Time-based flush (if auto-flush is enabled)
+        # Regular time-based flush (lowest priority)
         elif self.enable_auto_flush:
-            time_since_last_flush = time.time() - self.last_flush_time
+            time_since_last_flush = current_time - self.last_flush_time
             if time_since_last_flush >= self.auto_flush_interval:
                 should_flush = True
                 flush_reason = f"time_limit ({time_since_last_flush:.1f}s >= {self.auto_flush_interval}s)"
@@ -714,17 +727,29 @@ class HybridBuffer:
             self.pending_flush_tasks.pop(task_id, None)
 
     async def _auto_flush_loop(self) -> None:
-        """Auto-flush loop for time-based flushing."""
-        logger.info(f"HybridBuffer: Auto-flush loop started with interval {self.auto_flush_interval}s")
+        """Auto-flush loop for time-based and force timeout flushing."""
+        logger.info(f"HybridBuffer: Auto-flush loop started with interval {self.auto_flush_interval}s, force timeout {self.force_flush_timeout}s")
 
         while True:
             try:
-                await asyncio.sleep(min(self.auto_flush_interval, 10.0))  # Check at least every 10s
+                # Check more frequently to catch force timeout
+                check_interval = min(self.auto_flush_interval, self.force_flush_timeout / 10, 60.0)
+                await asyncio.sleep(check_interval)
 
                 current_time = time.time()
                 time_since_last_flush = current_time - self.last_flush_time
 
-                if time_since_last_flush >= self.auto_flush_interval:
+                # Check for force timeout flush (highest priority) - use WriteBuffer's unified check
+                if self.write_buffer and await self.write_buffer.check_force_flush_timeout(self.force_flush_timeout):
+                    logger.info("HybridBuffer: Force timeout flush triggered by WriteBuffer check")
+                    # First transfer from RoundBuffer if needed
+                    if hasattr(self.write_buffer, 'round_buffer') and len(self.write_buffer.round_buffer.rounds) > 0:
+                        await self.write_buffer.round_buffer._transfer_and_clear("force_timeout")
+                    # Then flush HybridBuffer
+                    await self.flush_to_storage(priority=FlushPriority.HIGH)
+
+                # Check for regular auto-flush
+                elif time_since_last_flush >= self.auto_flush_interval:
                     if self.original_rounds:  # Only flush if there's data
                         logger.debug("HybridBuffer: Auto-flush triggered by timer")
                         await self.flush_to_storage(priority=FlushPriority.LOW)
@@ -912,6 +937,7 @@ class HybridBuffer:
             "embedding_model": self.embedding_model_name,
             "auto_flush_interval": self.auto_flush_interval,
             "enable_auto_flush": self.enable_auto_flush,
+            "force_flush_timeout": self.force_flush_timeout,
             "total_rounds_received": self.total_rounds_received,
             "total_chunks_created": self.total_chunks_created,
             "total_flushes": self.total_flushes,

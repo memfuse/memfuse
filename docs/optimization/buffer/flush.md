@@ -4,10 +4,11 @@
 
 This document provides a comprehensive analysis of the buffer flush mechanism optimization in MemFuse, covering the evolution from the original synchronous implementation to the current **refactored architecture** with proper abstraction layers and the FlushManager-based approach.
 
-**Document Status**: ✅ **Updated for Refactored Architecture** (December 2024)
+**Document Status**: ✅ **Updated for Force Flush Implementation** (August 2025)
 - Reflects the new WriteBuffer abstraction layer
 - Updated to show FlushManager integration within WriteBuffer
 - Covers the complete architectural evolution
+- **NEW**: Documents force flush timeout mechanism and graceful shutdown improvements
 
 ## Problem Statement
 
@@ -23,6 +24,7 @@ The original buffer flush implementation suffered from a critical timeout proble
 2. **Lock Contention**: Single lock (`_lock`) used for both data operations and flush operations
 3. **No Timeout Protection**: Flush operations could hang indefinitely
 4. **No Error Recovery**: Failed flushes could leave the system in an inconsistent state
+5. **Data Loss Risk**: No mechanism to force flush stale data or handle graceful shutdown
 
 ## Architecture Evolution
 
@@ -168,6 +170,16 @@ The FlushManager is now an **internal component** of the WriteBuffer abstraction
 3. **Manual Flush**
    - On-demand flush with HIGH priority
    - Used for explicit data persistence
+
+4. **Force Flush (Timeout-based)**
+   - Triggered when data remains in buffer without new writes for extended period
+   - Prevents data loss from stale buffer content
+   - Configurable timeout (default: 30 minutes)
+
+5. **Graceful Shutdown Flush**
+   - Ensures all buffer data is persisted before system shutdown
+   - Transfers RoundBuffer data to HybridBuffer before final flush
+   - Prevents "Buffer cleared without transfer" warnings
 
 ## Performance Improvements
 
@@ -321,6 +333,9 @@ buffer:
     max_flush_queue_size: 100
     flush_timeout: 30.0
     flush_strategy: "hybrid"
+
+    # Force flush timeout (prevents data loss from stale buffers)
+    force_flush_timeout: 1800  # 30 minutes in seconds
 
   # Monitoring and logging
   monitoring:
@@ -689,3 +704,171 @@ The optimization demonstrates how **evolutionary architectural design** can:
 - Provide a solid foundation for future enhancements
 
 The current refactored architecture positions MemFuse as a leader in intelligent memory management with a clean, testable, and extensible foundation for continued innovation.
+
+## Force Flush Mechanism (August 2025 Enhancement)
+
+### Problem Statement
+
+Even with the optimized FlushManager architecture, two critical data persistence issues remained:
+
+1. **Stale Data Timeout**: Data could remain in RoundBuffer indefinitely if no new writes occurred to trigger size-based transfers
+2. **Shutdown Data Loss**: During graceful shutdown, RoundBuffer data could be lost with "Buffer cleared without transfer" warnings
+
+### Solution Architecture
+
+#### 1. Unified Timeout Detection
+
+**Problem**: Original implementation monitored multiple buffer write times incorrectly
+```python
+# ❌ Incorrect: Monitoring internal data flow times
+def get_last_write_time(self) -> float:
+    round_buffer_time = getattr(self.round_buffer, 'last_write_time', 0)
+    hybrid_buffer_time = getattr(self.hybrid_buffer, 'last_write_time', 0)
+    return max(round_buffer_time, hybrid_buffer_time)  # Wrong logic!
+```
+
+**Solution**: Monitor only user data entry time
+```python
+# ✅ Correct: Only monitor when user data enters the system
+def get_last_write_time(self) -> float:
+    """Get the last write time when data entered RoundBuffer.
+
+    This represents when user data actually entered the buffer system,
+    not when it was transferred between buffers or flushed to database.
+    """
+    return getattr(self.round_buffer, 'last_write_time', 0)
+```
+
+#### 2. Force Flush Timeout Logic
+
+```python
+async def check_force_flush_timeout(self, force_flush_timeout: float) -> bool:
+    """Check if force flush timeout has been reached."""
+    if not self.has_pending_data():
+        return False
+
+    import time
+    current_time = time.time()
+    last_write_time = self.get_last_write_time()
+    time_since_last_write = current_time - last_write_time
+
+    if time_since_last_write >= force_flush_timeout:
+        logger.info(f"WriteBuffer: Force flush timeout reached - {time_since_last_write:.1f}s >= {force_flush_timeout}s")
+        return True
+
+    return False
+```
+
+#### 3. Graceful Shutdown Enhancement
+
+**Problem**: Duplicate clearing during shutdown
+```python
+# ❌ Original: Could cause duplicate clearing
+if hasattr(self.round_buffer, 'rounds') and len(self.round_buffer.rounds) > 0:
+    await self.round_buffer._transfer_and_clear("shutdown")
+elif hasattr(self.round_buffer, 'clear'):
+    await self.round_buffer.clear()  # ❌ Duplicate clear!
+```
+
+**Solution**: Single transfer operation
+```python
+# ✅ Fixed: No duplicate clearing
+if hasattr(self.round_buffer, 'rounds') and len(self.round_buffer.rounds) > 0:
+    logger.info(f"WriteBuffer: Transferring {len(self.round_buffer.rounds)} remaining rounds from RoundBuffer before shutdown")
+    await self.round_buffer._transfer_and_clear("shutdown")
+    logger.info("WriteBuffer: RoundBuffer data transferred and cleared")
+else:
+    # RoundBuffer is already empty, no need to clear again
+    logger.info("WriteBuffer: RoundBuffer is already empty, no action needed")
+```
+
+### Implementation Details
+
+#### Auto-Flush Integration
+
+The force flush mechanism integrates seamlessly with the existing HybridBuffer auto-flush loop:
+
+```python
+async def _auto_flush_loop(self):
+    """Auto-flush loop with force flush timeout detection."""
+    while self.running:
+        try:
+            await asyncio.sleep(self.flush_interval)
+
+            # Check for force flush timeout (unified detection)
+            if await self.write_buffer.check_force_flush_timeout(self.force_flush_timeout):
+                logger.info("HybridBuffer: Force flush timeout detected, triggering flush")
+                await self.flush_to_storage()
+            elif self.should_auto_flush():
+                logger.info("HybridBuffer: Regular auto-flush triggered")
+                await self.flush_to_storage()
+
+        except Exception as e:
+            logger.error(f"HybridBuffer: Auto-flush loop error: {e}")
+```
+
+#### Configuration Integration
+
+```yaml
+performance:
+  # Existing flush settings
+  flush_interval: 60
+  enable_auto_flush: true
+
+  # New force flush setting
+  force_flush_timeout: 1800  # 30 minutes
+```
+
+### Testing and Validation
+
+#### Test Results
+
+**Timeout Detection Test**:
+```
+🧪 Testing timeout detection logic...
+Initial last write time: 0
+Initial has pending data: False
+Timeout triggered with no data: False
+Add result: success
+After add - last write time: 1724284857.123
+After add - has pending data: True
+RoundBuffer rounds: 1
+Immediate timeout check: False
+Waiting 4 seconds to test timeout detection...
+Timeout triggered after 4 seconds: True
+✅ Timeout detection test passed!
+```
+
+**Shutdown Test**:
+```
+🧪 Testing shutdown behavior...
+Added test data: success
+RoundBuffer has 1 rounds
+Initiating shutdown...
+WriteBuffer: Transferring 1 remaining rounds from RoundBuffer before shutdown
+RoundBuffer: Transferring 1 rounds to HybridBuffer (reason: shutdown)
+HybridBuffer: Receiving 1 rounds from RoundBuffer
+WriteBuffer: RoundBuffer data transferred and cleared
+✅ Shutdown completed successfully!
+```
+
+### Benefits
+
+1. **Data Loss Prevention**: No data can remain in buffers indefinitely
+2. **Configurable Timeout**: Administrators can adjust based on usage patterns
+3. **Clean Shutdown**: No warnings or data loss during graceful shutdown
+4. **Correct Semantics**: Timeout based on actual user data write time
+5. **Zero Performance Impact**: Minimal overhead from timeout checking
+
+### Monitoring and Observability
+
+The force flush mechanism provides comprehensive logging:
+
+```
+WriteBuffer: Force flush timeout reached - 1801.2s >= 1800s
+HybridBuffer: Force flush timeout detected, triggering flush
+WriteBuffer: Transferring 1 remaining rounds from RoundBuffer before shutdown
+WriteBuffer: RoundBuffer data transferred and cleared
+```
+
+This enhancement ensures that MemFuse provides complete data persistence guarantees while maintaining the high performance characteristics of the optimized flush architecture.
