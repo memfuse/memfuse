@@ -61,6 +61,10 @@ from .token_counter import (
     count_tokens,
     count_message_tokens
 )
+from .version import (
+    get_project_version,
+    get_version_info
+)
 
 __all__ = [
     # From validation
@@ -113,4 +117,7 @@ __all__ = [
     "get_token_counter",
     "count_tokens",
     "count_message_tokens",
+    # From version
+    "get_project_version",
+    "get_version_info",
 ]
