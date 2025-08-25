@@ -92,28 +92,30 @@ To set up the MemFuse server locally:
     cd memfuse
     ```
 
-2.  Install dependencies and run the server using one of the following methods:
-
-    **Using Poetry (Recommended)**
+2.  Verify Docker availability and pull the required database image:
 
     ```bash
     # Ensure Docker daemon is running first
     docker --version  # Verify Docker is available
     
+    # Pull the TimescaleDB image
+    docker pull timescale/timescaledb-ha:pg17
+    ```
+
+3.  Install dependencies and run the server using one of the following methods:
+
+    **Using Poetry (Recommended)**
+
+    ```bash
     poetry install
-    # TimescaleDB database will start automatically via Docker
     poetry run python scripts/memfuse_launcher.py
     ```
 
     **Using pip**
 
     ```bash
-    # Ensure Docker daemon is running first
-    docker --version  # Verify Docker is available
-    
     pip install -e .
-    # TimescaleDB database will start automatically via Docker
-    python -m memfuse_core
+    python scripts/memfuse_launcher.py
     ```
 
 #### Installing the Client SDK
