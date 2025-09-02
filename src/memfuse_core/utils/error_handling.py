@@ -46,17 +46,23 @@ def handle_api_errors(operation_name: str) -> Callable[[Callable[..., Awaitable[
                 # Let FastAPI handle HTTP exceptions
                 raise e
             except Exception as e:
-                # Log the error
-                logger.error(f"Failed to {operation_name}: {str(e)}")
-
-                # Check if this is a database constraint error
+                # Determine error type and proper status mapping
                 error_msg = str(e).lower()
-                if 'constraint' in error_msg or 'foreign key' in error_msg:
-                    status_code = 409  # Conflict
+
+                # Duplicate/unique violations -> 400 (bad request: already exists)
+                if ('duplicate key' in error_msg or 'already exists' in error_msg or 'unique constraint' in error_msg):
+                    status_code = 400
+                    message = f"Failed to {operation_name}: resource already exists"
+                    logger.warning(f"{message}: {str(e)}")
+                # Other constraint/foreign key violations -> 409 (conflict)
+                elif ('constraint' in error_msg or 'foreign key' in error_msg):
+                    status_code = 409
                     message = f"Failed to {operation_name}: operation conflicts with existing data"
+                    logger.warning(f"{message}: {str(e)}")
                 else:
                     status_code = 500  # Internal Server Error
                     message = f"Failed to {operation_name}"
+                    logger.error(f"{message}: {str(e)}")
 
                 # Determine the return type of the function
                 type_hints = get_type_hints(func)

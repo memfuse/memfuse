@@ -120,7 +120,13 @@ class SimplifiedDatabaseManager:
     async def _create_missing_tables(self, missing_tables: List[str]) -> None:
         """Create missing database tables."""
         try:
+            # Serialize DDL with an advisory transaction lock to avoid races
+            original_autocommit = self.conn.autocommit
+            self.conn.autocommit = False
             with self.conn.cursor() as cur:
+                # Acquire transaction-scoped advisory lock
+                cur.execute("SELECT pg_advisory_xact_lock(448820728)")
+
                 # Create users table
                 if 'users' in missing_tables:
                     cur.execute('''
@@ -191,9 +197,22 @@ class SimplifiedDatabaseManager:
                         m1_schema = schema_manager.get_schema('m1_episodic')
                         cur.execute(m1_schema.generate_create_table_sql())
                         logger.info("✅ Created m1_episodic table")
+            # Commit DDL batch
+            self.conn.commit()
+            # Restore autocommit
+            self.conn.autocommit = original_autocommit
 
         except Exception as e:
             logger.error(f"❌ Failed to create missing tables: {e}")
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            # Restore autocommit on failure as well
+            try:
+                self.conn.autocommit = original_autocommit
+            except Exception:
+                pass
             raise
 
     async def _verify_functions(self) -> None:

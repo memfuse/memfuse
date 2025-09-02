@@ -47,6 +47,7 @@
 .cookiecutter.json
 .coverage
 .coverage.*
+.cursorindexingignore
 .dmypy.json
 .eggs/
 .env
@@ -69,6 +70,7 @@
 .pytype/
 .ropeproject
 .scrapy
+.specstory/**
 .spyderproject
 .spyproject
 .tox/
