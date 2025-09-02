@@ -224,12 +224,11 @@ class Database:
             logger.debug(f"Found existing agent: {name} with ID: {agent['id']}")
             return agent["id"]
 
-        # Create new agent
+        # Create new agent with race-condition handling similar to users
         import uuid
         from datetime import datetime
         agent_id = str(uuid.uuid4())
 
-        # Create the agent with the backend
         data = {
             'id': agent_id,
             'name': name,
@@ -238,9 +237,25 @@ class Database:
             'updated_at': datetime.now().isoformat()
         }
 
-        await self.backend.add('agents', data)
-        logger.info(f"Created new agent: {name} with ID: {agent_id}")
-        return agent_id
+        try:
+            await self.backend.add('agents', data)
+            logger.info(f"Created new agent: {name} with ID: {agent_id}")
+            return agent_id
+        except Exception as e:
+            # Handle uniqueness races from concurrent creators
+            error_msg = str(e).lower()
+            if 'unique' in error_msg or 'constraint' in error_msg:
+                # Another request created the agent; fetch it
+                agent = await self.get_agent_by_name(name)
+                if agent is not None:
+                    logger.warning(f"Agent {name} was created by another process, using existing ID: {agent['id']}")
+                    return agent["id"]
+                else:
+                    raise RuntimeError(
+                        f"Failed to create agent '{name}' due to uniqueness constraint, but agent not found on retry"
+                    ) from e
+            else:
+                raise RuntimeError(f"Failed to create agent '{name}': {e}") from e
     
     async def create_user(self, user_id: Optional[str] = None, name: Optional[str] = None, description: Optional[str] = None) -> str:
         """Create a new user.

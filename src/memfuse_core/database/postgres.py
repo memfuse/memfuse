@@ -86,7 +86,14 @@ class PostgresDB(DBBase):
             logger.error(f"PostgresDB: Query execution timed out after {connection_timeout}s: {query[:100]}...")
             raise
         except Exception as e:
-            logger.error(f"PostgresDB: Query execution failed: {e}")
+            msg = str(e).lower()
+            # Downgrade log level for expected constraint conflicts
+            if (
+                'duplicate key' in msg or 'already exists' in msg or 'unique constraint' in msg
+            ):
+                logger.warning(f"PostgresDB: Query resulted in constraint conflict: {e}")
+            else:
+                logger.error(f"PostgresDB: Query execution failed: {e}")
             raise
 
     async def _execute_with_simplified_connection(self, query: str, params: tuple) -> Any:
@@ -165,111 +172,140 @@ class PostgresDB(DBBase):
         await self._initialize_tables()
 
     async def _initialize_tables(self):
-        """Initialize database tables with proper schema."""
-        # Create users table
-        await self.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL,
-            description TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP
-        )
-        ''')
+        """Initialize database tables with proper schema.
 
-        # Create agents table
-        await self.execute('''
-        CREATE TABLE IF NOT EXISTS agents (
-            id TEXT PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL,
-            description TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP
-        )
-        ''')
+        Uses a single connection, single transaction, and an advisory transaction lock
+        to serialize DDL and avoid concurrent "type ... already exists" errors.
+        """
+        # Ensure connection manager is ready
+        await self._ensure_initialized()
 
-        # Create sessions table
-        await self.execute('''
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            agent_id TEXT NOT NULL,
-            name TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-            FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
-        )
-        ''')
+        pool = await self.connection_manager.get_connection_pool(self.db_url)
+        conn = await pool.getconn()
+        try:
+            # Start transaction and acquire an advisory lock for schema init
+            await conn.execute("BEGIN")
+            # Transaction-scoped advisory lock; releases automatically on COMMIT/ROLLBACK
+            await conn.execute("SELECT pg_advisory_xact_lock(448820728)")
 
-        # Create rounds table
-        await self.execute('''
-        CREATE TABLE IF NOT EXISTS rounds (
-            id TEXT PRIMARY KEY,
-            session_id TEXT,
-            created_at TIMESTAMP,
-            updated_at TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
-        )
-        ''')
+            # Base tables in dependency order
+            await conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP
+            )
+            ''')
 
-        # Create messages table
-        await self.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id TEXT PRIMARY KEY,
-            round_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP,
-            FOREIGN KEY (round_id) REFERENCES rounds (id) ON DELETE CASCADE
-        )
-        ''')
+            await conn.execute('''
+            CREATE TABLE IF NOT EXISTS agents (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP
+            )
+            ''')
 
-        # Create knowledge table
-        await self.execute('''
-        CREATE TABLE IF NOT EXISTS knowledge (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-        )
-        ''')
+            await conn.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
+            )
+            ''')
 
-        # Create API keys table
-        await self.execute('''
-        CREATE TABLE IF NOT EXISTS api_keys (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            key TEXT UNIQUE NOT NULL,
-            name TEXT,
-            permissions TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-        )
-        ''')
+            await conn.execute('''
+            CREATE TABLE IF NOT EXISTS rounds (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                created_at TIMESTAMP,
+                updated_at TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
+            )
+            ''')
 
-        # Initialize MemFuse memory layer tables using SchemaManager
-        await self._initialize_memory_layer_tables()
+            await conn.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                round_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP,
+                FOREIGN KEY (round_id) REFERENCES rounds (id) ON DELETE CASCADE
+            )
+            ''')
 
-        # Commit is handled automatically in execute method
+            await conn.execute('''
+            CREATE TABLE IF NOT EXISTS knowledge (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+            ''')
 
-    async def _initialize_memory_layer_tables(self):
-        """Initialize memory layer tables using SchemaManager."""
+            await conn.execute('''
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                key TEXT UNIQUE NOT NULL,
+                name TEXT,
+                permissions TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+            ''')
+
+            # Initialize MemFuse memory layer tables using SchemaManager within same tx
+            await self._initialize_memory_layer_tables(conn=conn)
+
+            await conn.commit()
+        except Exception as e:
+            try:
+                await conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            try:
+                await pool.putconn(conn)
+            except Exception:
+                pass
+
+    async def _initialize_memory_layer_tables(self, conn=None):
+        """Initialize memory layer tables using SchemaManager.
+
+        If a connection is provided, use it; otherwise, fall back to execute().
+        """
         from memfuse_core.models.schema.manager import SchemaManager
 
         schema_manager = SchemaManager()
 
         # Create M0 raw table
         m0_schema = schema_manager.get_schema('m0_raw')
-        await self.execute(m0_schema.generate_create_table_sql())
+        if conn is not None:
+            await conn.execute(m0_schema.generate_create_table_sql())
+        else:
+            await self.execute(m0_schema.generate_create_table_sql())
 
         # Create M1 episodic table
         m1_schema = schema_manager.get_schema('m1_episodic')
-        await self.execute(m1_schema.generate_create_table_sql())
+        if conn is not None:
+            await conn.execute(m1_schema.generate_create_table_sql())
+        else:
+            await self.execute(m1_schema.generate_create_table_sql())
 
         logger.info("PostgresDB: Memory layer tables initialized using SchemaManager")
 

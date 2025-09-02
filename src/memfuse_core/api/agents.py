@@ -65,14 +65,38 @@ async def create_agent(
     """Create a new agent."""
     db = await DatabaseService.get_instance()
 
-    # Check if agent with the same name already exists
+    # Pre-check name availability to preserve existing 400 behavior
     await ensure_agent_name_available(db, request.name)
 
-    # Create the agent
-    agent_id = await db.create_agent(
-        name=request.name,
-        description=request.description,
-    )
+    # Create the agent with concurrency-safe error handling
+    try:
+        agent_id = await db.create_agent(
+            name=request.name,
+            description=request.description,
+        )
+    except Exception as e:
+        # Concurrency-safe behavior: if unique violation occurs here due to a race
+        # after the availability check, return the existing agent as success (200).
+        msg = str(e).lower()
+        if (
+            'duplicate key' in msg or 'unique' in msg or 'already exists' in msg
+        ):
+            existing = await db.get_agent_by_name(request.name)
+            if existing:
+                return ApiResponse.success(
+                    data={"agent": existing},
+                    message="Agent already existed; returning existing record",
+                    code=200,
+                )
+            # If not found unexpectedly, fallback to 400 error
+            error_response = ApiResponse.error(
+                message=f"Agent with name '{request.name}' already exists",
+                code=400,
+                errors=[ErrorDetail(field="name", message="already exists")],
+            )
+            raise_api_error(error_response)
+        # Unknown error - let decorator handle
+        raise
 
     # Get the created agent
     agent = await db.get_agent(agent_id)
