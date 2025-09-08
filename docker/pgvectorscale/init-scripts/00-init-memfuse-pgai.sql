@@ -132,6 +132,12 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     embedding_generated_at TIMESTAMP WITH TIME ZONE,
 
+    -- M2 processing status tracking
+    m2_status VARCHAR(20) DEFAULT 'pending'
+        CHECK (m2_status IN ('pending', 'processing', 'completed', 'failed')),
+    m2_processing_started_at TIMESTAMP WITH TIME ZONE,
+    m2_processing_ended_at TIMESTAMP WITH TIME ZONE,
+
     -- Quality metrics
     embedding_model VARCHAR(100) DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
     chunk_quality_score FLOAT DEFAULT 0.0,
@@ -220,6 +226,16 @@ CREATE INDEX IF NOT EXISTS idx_m1_needs_embedding
 -- GIN index for M0 message ID arrays (lineage queries)
 CREATE INDEX IF NOT EXISTS idx_m1_m0_raw_ids_gin
     ON m1_episodic USING gin (m0_raw_ids);
+
+-- M2 processing status indexes
+CREATE INDEX IF NOT EXISTS idx_m1_m2_status
+    ON m1_episodic (m2_status);
+
+CREATE INDEX IF NOT EXISTS idx_m1_m2_processing_started_at
+    ON m1_episodic (m2_processing_started_at);
+
+CREATE INDEX IF NOT EXISTS idx_m1_m2_processing_ended_at
+    ON m1_episodic (m2_processing_ended_at);
 
 -- GIN index for metadata queries
 CREATE INDEX IF NOT EXISTS idx_m1_metadata_gin
