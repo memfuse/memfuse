@@ -12,6 +12,13 @@ from enum import Enum
 
 
 # Type definitions
+class M2Status(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class StoreBackend(str, Enum):
     """Store backend types."""
 

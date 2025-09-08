@@ -94,12 +94,17 @@ class MemoryHierarchyManager:
 
             # M2 Layer
             if layers_config.get("m2", {}).get("enabled", True):
+                logger.info(f"[M2-DEBUG] HierarchyManager: Creating M2 layer for user {self.user_id}")
                 m2_config = self._create_layer_config(layers_config.get("m2", {}))
                 self.layers[LayerType.M2] = M2SemanticLayer(
                     LayerType.M2, m2_config, self.user_id,
                     self.storage_manager
                 )
+                logger.info(f"[M2-DEBUG] HierarchyManager: Initializing M2 layer for user {self.user_id}")
                 await self.layers[LayerType.M2].initialize()
+                logger.info(f"[M2-DEBUG] HierarchyManager: M2 layer initialized for user {self.user_id}")
+            else:
+                logger.info(f"[M2-DEBUG] HierarchyManager: M2 layer disabled for user {self.user_id}")
 
             # M3 Layer (Placeholder)
             if layers_config.get("m3", {}).get("enabled", False):  # Default disabled

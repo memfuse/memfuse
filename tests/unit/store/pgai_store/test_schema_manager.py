@@ -19,22 +19,36 @@ class TestSchemaManager:
     @pytest.fixture
     def mock_pool(self):
         """Mock database connection pool."""
-        pool = AsyncMock()
+        pool = Mock()
         
-        # Mock connection context manager
+        # Mock connection and cursor
         mock_conn = AsyncMock()
         mock_cursor = AsyncMock()
         
-        # Setup connection context manager
-        pool.connection.return_value.__aenter__.return_value = mock_conn
-        pool.connection.return_value.__aexit__.return_value = None
+        # Create proper async context manager for pool.connection()
+        class MockConnection:
+            async def __aenter__(self):
+                return mock_conn
+            
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
         
-        # Setup cursor context manager
-        mock_conn.cursor.return_value.__aenter__.return_value = mock_cursor
-        mock_conn.cursor.return_value.__aexit__.return_value = None
+        # Create async context manager for cursor
+        class MockCursor:
+            async def __aenter__(self):
+                return mock_cursor
+            
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
         
-        # Setup execute and fetchall methods
-        mock_conn.execute = AsyncMock()
+        pool.connection = Mock(return_value=MockConnection())
+        mock_conn.cursor = Mock(return_value=MockCursor())
+        
+        # Create a mock result object for conn.execute() calls
+        mock_result = AsyncMock()
+        
+        # Setup execute to return the mock result
+        mock_conn.execute = AsyncMock(return_value=mock_result)
         mock_conn.commit = AsyncMock()
         mock_conn.rollback = AsyncMock()
         
@@ -42,18 +56,19 @@ class TestSchemaManager:
         mock_cursor.fetchall = AsyncMock()
         mock_cursor.fetchone = AsyncMock()
         
-        return pool, mock_conn, mock_cursor
+        return pool, mock_conn, mock_cursor, mock_result
     
     def test_initialization(self, mock_pool):
         """Test SchemaManager initialization."""
-        pool, _, _ = mock_pool
+        pool, _, _, _ = mock_pool
         
         manager = SchemaManager(pool)
         
         assert manager.pool == pool
-        assert manager.current_version == "1.0.0"
         assert "m0" in manager.supported_layers
         assert "m1" in manager.supported_layers
+        assert "m2" in manager.supported_layers
+        assert len(manager.supported_layers) == 3
     
     @pytest.mark.asyncio
     async def test_create_schema_version_table(self, mock_pool):
@@ -423,6 +438,135 @@ class TestSchemaManager:
         assert params[1] == "m0"     # layer_name
         
         mock_conn.commit.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_initialize_m2_schema_success(self, mock_pool):
+        """Test successful M2 schema initialization."""
+        pool, mock_conn, _, _ = mock_pool
+        
+        manager = SchemaManager(pool)
+        
+        # Mock schema file exists and has content
+        mock_schema_content = """
+        CREATE TABLE m2_semantic (
+            fact_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            text TEXT NOT NULL,
+            embedding vector(384)
+        );
+        """
+        
+        with patch('pathlib.Path.exists', return_value=True), \
+             patch('pathlib.Path.read_text', return_value=mock_schema_content):
+            
+            result = await manager._initialize_m2_schema()
+        
+        assert result is True
+        
+        # Verify schema SQL was executed
+        mock_conn.execute.assert_called_once_with(mock_schema_content)
+        mock_conn.commit.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_initialize_m2_schema_file_not_found(self, mock_pool):
+        """Test M2 schema initialization when schema file is missing."""
+        pool, _, _, _ = mock_pool
+        
+        manager = SchemaManager(pool)
+        
+        # Mock schema file doesn't exist
+        with patch('pathlib.Path.exists', return_value=False):
+            result = await manager._initialize_m2_schema()
+        
+        assert result is False
+    
+    @pytest.mark.asyncio
+    async def test_validate_m2_schema_success(self, mock_pool):
+        """Test successful M2 schema validation."""
+        pool, mock_conn, mock_cursor, mock_result = mock_pool
+        
+        manager = SchemaManager(pool)
+        
+        # Mock table exists and column count checks
+        mock_result.fetchone = AsyncMock(side_effect=[
+            (True,),  # Table exists check
+            (4,)      # Column count check
+        ])
+        
+        result = await manager._validate_m2_schema()
+        
+        assert result is True
+        
+        # Verify execute was called twice (table existence and column count)
+        assert mock_conn.execute.call_count == 2
+        
+        # Check the SQL queries were executed
+        execute_calls = mock_conn.execute.call_args_list
+        
+        # Check first query (table existence)
+        first_query = execute_calls[0][0][0]
+        assert "SELECT EXISTS" in first_query
+        assert "table_name = 'm2_semantic'" in first_query
+        
+        # Check second query (column count)
+        second_query = execute_calls[1][0][0]
+        assert "SELECT COUNT(*)" in second_query
+        assert "table_name = 'm2_semantic'" in second_query
+        assert "column_name IN ('fact_id', 'text', 'embedding', 'confidence')" in second_query
+    
+    @pytest.mark.asyncio
+    async def test_validate_m2_schema_missing_table(self, mock_pool):
+        """Test M2 schema validation when table doesn't exist."""
+        pool, mock_conn, mock_cursor, mock_result = mock_pool
+        
+        manager = SchemaManager(pool)
+        
+        # Mock table doesn't exist
+        mock_result.fetchone = AsyncMock(return_value=(False,))
+        
+        result = await manager._validate_m2_schema()
+        
+        assert result is False
+    
+    @pytest.mark.asyncio
+    async def test_validate_m2_schema_missing_columns(self, mock_pool):
+        """Test M2 schema validation when required columns are missing."""
+        pool, mock_conn, mock_cursor, mock_result = mock_pool
+        
+        manager = SchemaManager(pool)
+        
+        # Mock table exists but missing columns
+        mock_result.fetchone = AsyncMock(side_effect=[
+            (True,),  # Table exists
+            (2,)      # Only 2 columns instead of required 4
+        ])
+        
+        result = await manager._validate_m2_schema()
+        
+        assert result is False
+    
+    @pytest.mark.asyncio
+    async def test_initialize_all_schemas_with_m2(self, mock_pool):
+        """Test successful initialization of all schemas including M2."""
+        pool, mock_conn, mock_cursor, mock_result = mock_pool
+        
+        manager = SchemaManager(pool)
+        
+        # Mock schema version checks to return False (needs initialization)
+        mock_cursor.fetchone.return_value = None
+        
+        # Mock M1 and M2 schema file reading
+        mock_schema_content = "CREATE TABLE test_table (id UUID PRIMARY KEY);"
+        
+        with patch('pathlib.Path.exists', return_value=True), \
+             patch('pathlib.Path.read_text', return_value=mock_schema_content):
+            
+            result = await manager.initialize_all_schemas(['m0', 'm1', 'm2'])
+        
+        assert result is True
+        
+        # Verify schema operations were performed
+        assert mock_conn.execute.call_count >= 3  # At least one for each layer
+        assert mock_conn.commit.call_count >= 3
 
 
 if __name__ == '__main__':

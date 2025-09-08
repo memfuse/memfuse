@@ -22,7 +22,7 @@ class SchemaManager:
     """
     Schema manager for multi-layer PgAI system.
 
-    Handles database schema creation and validation for M0 and M1 layers
+    Handles database schema creation and validation for M0, M1, and M2 layers
     with their associated triggers, indexes, and embedding infrastructure.
     """
     
@@ -37,7 +37,7 @@ class SchemaManager:
 
         self.pool = pool
         self.schema_dir = Path(__file__).parent / "schemas"
-        self.supported_layers = ["m0", "m1"]
+        self.supported_layers = ["m0", "m1", "m2"]
         
         logger.info("SchemaManager initialized")
     
@@ -45,7 +45,7 @@ class SchemaManager:
         """Initialize schemas for all enabled memory layers.
         
         Args:
-            enabled_layers: List of layer names to initialize (e.g., ['m0', 'm1'])
+            enabled_layers: List of layer names to initialize (e.g., ['m0', 'm1', 'm2'])
             
         Returns:
             True if all schemas initialized successfully
@@ -74,7 +74,7 @@ class SchemaManager:
         """Initialize schema for a specific memory layer.
         
         Args:
-            layer: Layer name ('m0' or 'm1')
+            layer: Layer name ('m0', 'm1', or 'm2')
             
         Returns:
             True if schema initialized successfully
@@ -87,6 +87,8 @@ class SchemaManager:
                 success = await self._initialize_m0_schema()
             elif layer == "m1":
                 success = await self._initialize_m1_schema()
+            elif layer == "m2":
+                success = await self._initialize_m2_schema()
             else:
                 logger.error(f"Unknown layer: {layer}")
                 return False
@@ -188,6 +190,26 @@ class SchemaManager:
             logger.error(f"Failed to create M1 schema: {e}")
             return False
     
+    async def _initialize_m2_schema(self) -> bool:
+        """Initialize M2 semantic memory schema."""
+        try:
+            schema_file = self.schema_dir / "m2_semantic.sql"
+            if not schema_file.exists():
+                logger.error(f"M2 schema file not found: {schema_file}")
+                return False
+            
+            async with self.pool.connection() as conn:
+                schema_sql = schema_file.read_text()
+                await conn.execute(schema_sql)
+                await conn.commit()
+                
+                logger.info("M2 schema created successfully")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to create M2 schema: {e}")
+            return False
+    
     async def validate_schemas(self, enabled_layers: List[str]) -> Dict[str, bool]:
         """Validate schemas for enabled layers.
         
@@ -209,6 +231,8 @@ class SchemaManager:
                     results[layer] = await self._validate_m0_schema()
                 elif layer == "m1":
                     results[layer] = await self._validate_m1_schema()
+                elif layer == "m2":
+                    results[layer] = await self._validate_m2_schema()
                 else:
                     results[layer] = False
                     
@@ -277,4 +301,34 @@ class SchemaManager:
                 
         except Exception as e:
             logger.error(f"M1 schema validation failed: {e}")
+            return False
+    
+    async def _validate_m2_schema(self) -> bool:
+        """Validate M2 schema structure."""
+        try:
+            async with self.pool.connection() as conn:
+                # Check if table exists
+                result = await conn.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'm2_semantic'
+                    );
+                """)
+                table_exists = (await result.fetchone())[0]
+                
+                if not table_exists:
+                    return False
+                
+                # Check if key columns exist
+                result = await conn.execute("""
+                    SELECT COUNT(*) FROM information_schema.columns 
+                    WHERE table_name = 'm2_semantic'
+                    AND column_name IN ('fact_id', 'text', 'embedding', 'confidence');
+                """)
+                column_count = (await result.fetchone())[0]
+                
+                return column_count >= 4
+                
+        except Exception as e:
+            logger.error(f"M2 schema validation failed: {e}")
             return False
