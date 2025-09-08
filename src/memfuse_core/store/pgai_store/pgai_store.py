@@ -397,11 +397,11 @@ class PgaiStore(ChunkStoreInterface):
 
     async def _setup_schema(self):
         """Create the messages table schema compatible with existing MemFuse schema."""
-        logger.debug(f"Setting up schema for table: {self.table_name}")
+        logger.debug(f"[M2-DEBUG] Setting up schema for table: {self.table_name}")
 
         # First check if schema is already properly set up
         if await self._is_schema_ready():
-            logger.debug(f"Schema for {self.table_name} is already properly configured")
+            logger.info(f"[M2-DEBUG] Schema already ready for table: {self.table_name}")
             return
 
         logger.debug(f"Schema needs setup for {self.table_name}, proceeding with creation...")
@@ -418,17 +418,23 @@ class PgaiStore(ChunkStoreInterface):
                     schema_file = os.path.join(schema_dir, 'm0_raw.sql')
                 elif self.table_name == 'm1_episodic':
                     schema_file = os.path.join(schema_dir, 'm1_episodic.sql')
+                elif self.table_name == 'm2_semantic':
+                    schema_file = os.path.join(schema_dir, 'm2_semantic.sql')
+                    logger.info(f"[M2-DEBUG] *** M2 SCHEMA CREATION *** table_name={self.table_name}, schema_file={schema_file}")
                 else:
                     # Fallback for other tables - use simplified m0_raw schema
                     schema_file = os.path.join(schema_dir, 'm0_raw.sql')
 
+                logger.info(f"[M2-DEBUG] Selected schema file: {schema_file} for table: {self.table_name}")
+
                 if os.path.exists(schema_file):
                     with open(schema_file, 'r') as f:
                         schema_sql = f.read()
+                    logger.info(f"[M2-DEBUG] Executing schema SQL for {self.table_name}, SQL length: {len(schema_sql)} chars")
                     await conn.execute(schema_sql)
-                    logger.debug(f"Table {self.table_name} created using schema file")
+                    logger.info(f"[M2-DEBUG] *** SUCCESS *** Table {self.table_name} created using schema file")
                 else:
-                    logger.warning(f"Schema file not found: {schema_file}, using fallback")
+                    logger.warning(f"[M2-DEBUG] *** ERROR *** Schema file not found: {schema_file}, using fallback")
                     # Fallback to basic table creation
                     await conn.execute(f"""
                         CREATE TABLE IF NOT EXISTS {self.table_name} (

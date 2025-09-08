@@ -842,20 +842,23 @@ class M2SemanticLayer(MemoryLayer):
         self.llm_config = config.custom_config.get("llm_config", {})
         self.fact_extraction_enabled = config.custom_config.get("fact_extraction_enabled", True)
 
-        logger.info(f"M2SemanticLayer: Initialized for user {user_id}")
+        logger.info(f"[M2-DEBUG] M2SemanticLayer: Initialized for user {user_id}")
     
     async def initialize(self) -> bool:
         """Initialize the M2 layer."""
+        logger.info(f"[M2-DEBUG] M2SemanticLayer.initialize() called for user {self.user_id}")
         try:
             if self.storage_manager:
+                logger.info(f"[M2-DEBUG] M2SemanticLayer: Calling storage_manager.initialize() for user {self.user_id}")
                 await self.storage_manager.initialize()
+                logger.info(f"[M2-DEBUG] M2SemanticLayer: storage_manager.initialize() completed for user {self.user_id}")
 
             self.initialized = True
-            logger.info(f"M2SemanticLayer: Initialized successfully for user {self.user_id}")
+            logger.info(f"[M2-DEBUG] M2SemanticLayer: Initialized successfully for user {self.user_id}")
             return True
 
         except Exception as e:
-            logger.error(f"M2SemanticLayer: Initialization failed: {e}")
+            logger.error(f"[M2-DEBUG] M2SemanticLayer: Initialization failed: {e}")
             return False
     
     async def process_data(self, data: Any, metadata: Optional[Dict[str, Any]] = None) -> ProcessingResult:

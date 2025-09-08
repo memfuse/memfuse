@@ -93,13 +93,13 @@ class SimplifiedDatabaseManager:
             with self.conn.cursor() as cur:
                 cur.execute("""
                     SELECT table_name FROM information_schema.tables
-                    WHERE table_schema = 'public' AND table_name IN ('users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic')
+                    WHERE table_schema = 'public' AND table_name IN ('users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic', 'm2_semantic')
                 """)
                 existing_tables = [row[0] for row in cur.fetchall()]
 
                 # Create missing basic tables
                 missing_tables = []
-                required_tables = ['users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic']
+                required_tables = ['users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic', 'm2_semantic']
                 for table in required_tables:
                     if table not in existing_tables:
                         missing_tables.append(table)
@@ -183,8 +183,8 @@ class SimplifiedDatabaseManager:
                     ''')
                     logger.info("✅ Created messages table")
 
-                # Create M0 and M1 tables using SchemaManager
-                if 'm0_raw' in missing_tables or 'm1_episodic' in missing_tables:
+                # Create M0, M1, and M2 tables using SchemaManager and SQL files
+                if 'm0_raw' in missing_tables or 'm1_episodic' in missing_tables or 'm2_semantic' in missing_tables:
                     from memfuse_core.models.schema.manager import SchemaManager
                     schema_manager = SchemaManager()
 
@@ -197,6 +197,11 @@ class SimplifiedDatabaseManager:
                         m1_schema = schema_manager.get_schema('m1_episodic')
                         cur.execute(m1_schema.generate_create_table_sql())
                         logger.info("✅ Created m1_episodic table")
+
+                    if 'm2_semantic' in missing_tables:
+                        # Create M2 table using SQL file (SchemaManager doesn't support M2)
+                        await self._create_m2_semantic_table(cur)
+                        logger.info("✅ Created m2_semantic table")
             # Commit DDL batch
             self.conn.commit()
             # Restore autocommit
@@ -236,6 +241,31 @@ class SimplifiedDatabaseManager:
                     raise Exception(f"Required function '{func_name}' not found")
                 else:
                     logger.debug(f"✅ Function '{func_name}' found")
+
+    async def _create_m2_semantic_table(self, cur) -> None:
+        """Create M2 semantic table using SQL schema file."""
+        import os
+        from pathlib import Path
+        
+        try:
+            # Path to M2 semantic SQL schema file
+            schema_file = Path(__file__).parent.parent / "store" / "pgai_store" / "schemas" / "m2_semantic.sql"
+            
+            if not schema_file.exists():
+                logger.error(f"❌ M2 schema file not found: {schema_file}")
+                raise FileNotFoundError(f"M2 schema file not found: {schema_file}")
+            
+            # Read and execute M2 schema SQL
+            with open(schema_file, 'r') as f:
+                m2_sql = f.read()
+            
+            logger.debug(f"📝 Loading M2 schema from: {schema_file}")
+            cur.execute(m2_sql)
+            logger.debug("✅ M2 semantic table schema executed successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create M2 semantic table: {e}")
+            raise
 
     async def health_check(self) -> bool:
         """Perform database health check."""
