@@ -92,9 +92,11 @@ async def test_buffer_enabled_write():
     
     # First check buffer config
     from memfuse_core.utils.config import config_manager
-    buffer_config = config_manager.get_config().buffer
-    print(f"Buffer enabled: {buffer_config.enabled}")
-    
+    cfg = config_manager.get_config()
+    buffer_config = cfg.buffer if hasattr(cfg, "buffer") else cfg.get("buffer", {})
+    enabled = getattr(buffer_config, "enabled", buffer_config.get("enabled")) if isinstance(buffer_config, dict) or hasattr(buffer_config, "enabled") else None
+    print(f"Buffer enabled: {enabled}")
+
     test_data = {
         "user_id": "test_user_buffer",
         "session_id": "test_session_buffer", 
@@ -269,7 +271,7 @@ async def test_vector_retrieval():
                     result = await resp.json()
                     print(f"✅ Query successful: {len(result.get('results', []))} results")
                     
-                    for i, item in enumerate(result.get('results', [])[:3):
+                    for i, item in enumerate(result.get('results', [])[:3]):
                         print(f"  🎯 Result {i+1}:")
                         print(f"     Content: {item.get('content', 'N/A')[:100]}...")
                         print(f"     Score: {item.get('score', 'N/A')}")

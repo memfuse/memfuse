@@ -132,7 +132,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         if self.buffer_enabled:
             logger.info(f"BufferService: Rerank enabled: {self.use_rerank}")
     
-    def _create_retrieval_handler(self):
+    def _create_retrieval_handler(self, include_messages: bool = True, include_knowledge: bool = True, include_chunks: bool = True):
         """Create retrieval handler for QueryBuffer."""
         async def retrieval_handler(query: str, max_results: int) -> List[Any]:
             """Handle retrieval from memory service."""
@@ -148,9 +148,9 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     query=query,
                     top_k=max_results,
                     user_id=actual_user_id,  # Pass user_id for filtering
-                    include_messages=True,
-                    include_knowledge=True,
-                    include_chunks=True
+                    include_messages=include_messages,
+                    include_knowledge=include_knowledge,
+                    include_chunks=include_chunks
                 )
                 
                 if result.get("status") == "success":
@@ -694,6 +694,13 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             else:
                 # Normal mode: QueryBuffer processing
                 logger.debug(f"BufferService: Buffer mode - processing through QueryBuffer")
+
+                # Update retrieval handler with current parameters
+                self.query_buffer.retrieval_handler = self._create_retrieval_handler(
+                    include_messages=include_messages,
+                    include_knowledge=include_knowledge,
+                    include_chunks=include_chunks
+                )
 
                 # Delegate all query logic to QueryBuffer (with internal reranking)
                 results = await self.query_buffer.query(

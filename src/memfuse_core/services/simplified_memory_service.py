@@ -1100,6 +1100,8 @@ class SimplifiedMemoryService(MessageInterface):
 
         return chunk_ids
 
+
+
     async def query_similar_chunks(
         self,
         query_text: str,
@@ -1320,7 +1322,7 @@ class SimplifiedMemoryService(MessageInterface):
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         include_messages: bool = True,
-        include_knowledge: bool = True,
+
         include_chunks: bool = True,
         **kwargs
     ) -> Dict[str, Any]:
@@ -1333,7 +1335,7 @@ class SimplifiedMemoryService(MessageInterface):
             store_type: Type of store to query (ignored in current implementation)
             session_id: Session ID to filter results (optional)
             include_messages: Whether to include messages in results
-            include_knowledge: Whether to include knowledge in results
+
             include_chunks: Whether to include chunks in results
             **kwargs: Additional parameters
 
@@ -1350,16 +1352,23 @@ class SimplifiedMemoryService(MessageInterface):
             # This helps when the correct answer might not be in the top few results
             search_top_k = max(top_k * 3, 15)  # Search more broadly, then filter
 
-            # Get raw results from similarity search with user filtering
-            raw_results = await self.query_similar_chunks(
-                actual_query,
-                search_top_k,
-                user_id=user_id,
-                session_id=session_id
-            )
+            all_results = []
 
-            # Take the requested top_k from the broader search
-            results = raw_results[:top_k]
+
+
+            # Search messages/chunks if requested
+            if include_messages or include_chunks:
+                chunk_results = await self.query_similar_chunks(
+                    actual_query,
+                    search_top_k,
+                    user_id=user_id,
+                    session_id=session_id
+                )
+                all_results.extend(chunk_results)
+
+            # Sort by relevance score and take top_k
+            all_results.sort(key=lambda x: x.get('relevance_score', x.get('similarity_score', 0)), reverse=True)
+            results = all_results[:top_k]
 
             # Format response to match BufferService expectations
             response = {
@@ -1369,11 +1378,11 @@ class SimplifiedMemoryService(MessageInterface):
                     "results": results,
                     "total": len(results)
                 },
-                "message": f"Retrieved {len(results)} results from memory database (searched {len(raw_results)} candidates)",
+                "message": f"Retrieved {len(results)} results from memory database (searched {len(all_results)} candidates)",
                 "errors": None
             }
 
-            logger.info(f"SimplifiedMemoryService.query: Returning {len(results)} results for query: '{actual_query[:50]}...' (searched {search_top_k} candidates)")
+            logger.info(f"SimplifiedMemoryService.query: Returning {len(results)} results for query: '{actual_query[:50]}...' (searched {search_top_k} candidates, messages={include_messages})")
             return response
 
         except Exception as e:
