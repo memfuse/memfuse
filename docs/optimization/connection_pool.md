@@ -1,8 +1,177 @@
 # PostgreSQL Connection Pool Architecture & Optimization
 
-## Overview
+## Authoritative, Active Configuration (2025-09)
 
-This document provides a comprehensive guide to the PostgreSQL connection pool architecture and optimization in MemFuse, including the resolution of connection pool exhaustion issues, design decisions, implementation strategies, and optimization approaches for handling concurrent database operations across M0/M1/M2 memory layers.
+This section supersedes any legacy references below. It documents the actual code paths and configuration that are in effect in the current codebase.
+
+- **Active pool owner**: `GlobalConnectionManager` (`src/memfuse_core/services/global_connection_manager.py`)
+- **Who uses it**: `PgaiStore` (`src/memfuse_core/store/pgai_store/pgai_store.py`) acquires a shared pool from the manager during initialization
+- **Pool implementation**: `psycopg_pool.AsyncConnectionPool`
+- **Sizing semantics**: `min_size = pool_size`, `max_size = pool_size + max_overflow`, `timeout` is the acquisition timeout supplied to the pool
+- **Configuration priority** (highest → lowest):
+  1. Environment variables: `POSTGRES_POOL_SIZE`, `POSTGRES_MAX_OVERFLOW`, `POSTGRES_POOL_TIMEOUT`, `POSTGRES_CONNECTION_TIMEOUT`
+  2. `store.database.postgres.*`
+  3. `database.postgres.*` (default and most common)
+  4. Root `postgres.*` (fallback)
+
+Where the pool is created and sized:
+
+```python
+## 384:405:src/memfuse_core/services/global_connection_manager.py
+
+logger.info(f"GlobalConnectionManager: Creating pool config from config type={type(config)}")
+logger.info(f"GlobalConnectionManager: Raw config keys: {list(config.keys()) if isinstance(config, dict) else 'Not a dict'}")
+pool_config = ConnectionPoolConfig.from_memfuse_config(config)
+logger.info(f"GlobalConnectionManager: Pool config created: min_size={pool_config.min_size}, max_size={pool_config.max_size}, timeout={pool_config.timeout}, connection_timeout={pool_config.connection_timeout}")
+self._pool_configs[db_url] = pool_config
+
+# Create the pool
+pool = AsyncConnectionPool(
+    db_url,
+    min_size=pool_config.min_size,
+    max_size=pool_config.max_size,
+    open=False,
+    configure=self._configure_connection,
+    timeout=min(pool_config.timeout, 30.0)
+)
+```
+
+Who calls it (during store initialization):
+
+```python
+## 228:237:src/memfuse_core/store/pgai_store/pgai_store.py
+
+# Use global connection manager (Tier 1 Singleton)
+logger.debug("Getting global connection pool...")
+connection_manager = get_global_connection_manager()
+
+# Get shared connection pool with store reference for tracking
+self.pool = await connection_manager.get_connection_pool(
+    db_url=self.db_url,
+    config=self.db_config,
+    store_ref=self  # Pass self for reference tracking
+)
+```
+
+Configuration extraction and priority:
+
+```python
+## 123:194:src/memfuse_core/services/global_connection_manager.py
+
+@dataclass
+class ConnectionPoolConfig:
+    min_size: int = 2
+    max_size: int = 8
+    timeout: float = 15.0
+    recycle: int = 1800
+    connection_timeout: float = 10.0
+    keepalives_idle: int = 300
+    keepalives_interval: int = 15
+    keepalives_count: int = 3
+
+@classmethod
+def from_memfuse_config(cls, config: Dict[str, Any]) -> 'ConnectionPoolConfig':
+    # Priority: env > store.database.postgres > database.postgres > postgres > defaults
+    env_pool_size = os.environ.get("POSTGRES_POOL_SIZE")
+    env_max_overflow = os.environ.get("POSTGRES_MAX_OVERFLOW")
+    env_pool_timeout = os.environ.get("POSTGRES_POOL_TIMEOUT")
+    env_connection_timeout = os.environ.get("POSTGRES_CONNECTION_TIMEOUT")
+
+    pool_size = int(env_pool_size) if env_pool_size else postgres_config.get("pool_size", 5)
+    max_overflow = int(env_max_overflow) if env_max_overflow else postgres_config.get("max_overflow", 15)
+    max_size = pool_size + max_overflow
+    pool_timeout = float(env_pool_timeout) if env_pool_timeout else postgres_config.get("pool_timeout", 300.0)
+    connection_timeout = float(env_connection_timeout) if env_connection_timeout else postgres_config.get("connection_timeout", 60.0)
+    return cls(
+        min_size=pool_size,
+        max_size=max_size,
+        timeout=pool_timeout,
+        recycle=postgres_config.get("pool_recycle", 7200),
+        keepalives_idle=postgres_config.get("keepalives_idle", 600),
+        keepalives_interval=postgres_config.get("keepalives_interval", 30),
+        keepalives_count=postgres_config.get("keepalives_count", 3)
+    )
+```
+
+Default effective settings (repository defaults):
+
+```yaml
+## 8:23:config/database/default.yaml
+
+postgres:
+  host: ${oc.env:POSTGRES_HOST,localhost}
+  port: ${oc.env:POSTGRES_PORT,5432}
+  database: ${oc.env:POSTGRES_DB,memfuse}
+  user: ${oc.env:POSTGRES_USER,postgres}
+  password: ${oc.env:POSTGRES_PASSWORD,postgres}
+  # Increased connection pool for better concurrency
+  pool_size: 20          # Reasonable base pool for streaming
+  max_overflow: 30       # Moderate burst capacity (total 50 connections)
+  pool_timeout: 2.0      # Fast acquisition timeout
+  pool_recycle: 600      # 10-minute recycle
+  connection_timeout: 2.0
+  keepalives_idle: 60
+  keepalives_interval: 10
+  keepalives_count: 3
+```
+
+To apply config changes at runtime without a full restart, you can force pools to rebuild:
+
+```python
+## 834:844:src/memfuse_core/services/global_connection_manager.py
+
+async def reset_global_connection_pools():
+    """Reset all global connection pools and clear caches.
+    ...
+    manager = get_global_connection_manager()
+    await manager.reset_all_pools()
+```
+
+### Sizing guidance and resource impact
+
+- **Current default total cap = 50** (`20 + 30`). This is mid-range, not conservative.
+- **Increase capacity safely**:
+  - Prefer increasing `max_overflow` first to raise the cap without inflating always-on idle connections.
+  - Example caps:
+    - 100 total: keep `pool_size: 20`, set `max_overflow: 80`.
+    - 200 total: `pool_size: 30`, `max_overflow: 170` (only if DB resources allow).
+- **Memory footprint (DB backend)**: ~5–15 MB per backend connection (idle). Doubling from 50 → 100 may add ~0.5–1.0 GB.
+- **Check DB limits**:
+  - `SHOW max_connections;` and monitor `pg_stat_activity` to ensure you don’t exhaust the server limit.
+- **Semantics reminder**:
+  - `pool_size` drives minimum/steady connections (min_size). Raising it increases always-reserved connections.
+  - `max_overflow` raises the ceiling for spikes; prefer scaling this first.
+
+### How to change values
+
+- Edit `config/database/default.yaml` → `database.postgres.{pool_size,max_overflow}`.
+- Or export env vars (highest priority): `POSTGRES_POOL_SIZE`, `POSTGRES_MAX_OVERFLOW`, `POSTGRES_POOL_TIMEOUT`, `POSTGRES_CONNECTION_TIMEOUT`.
+- Then restart the service, or call `reset_global_connection_pools()` to rebuild pools with the new config.
+
+### Verification & monitoring
+
+- App-side pool stats:
+  - `GlobalConnectionManager.get_pool_statistics()` shows `min_size`, `max_size`, `active_references`, and closed state per URL.
+- DB-side:
+  - `SELECT state, count(*) FROM pg_stat_activity GROUP BY 1;`
+  - Watch wait events/locks and long-running transactions.
+
+### Upgrade and optimization roadmap
+
+- **PgBouncer in front of Postgres (transaction pooling)**
+  - Caps backend connections at the proxy; lets the app handle large spikes without inflating DB processes.
+- **Adaptive/dynamic pool sizing**
+  - Auto-tune `max_overflow` (and optionally `pool_size`) based on recent acquisition latency, rejection rate, and utilization.
+- **Workload-aware pools**
+  - Optional split pools (read-mostly vs write-heavy) or per-tenant/critical-path pools if proven beneficial.
+- **Acquisition fairness & backpressure**
+  - Tune `timeout` and add structured backoff/queuing to smooth spikes.
+- **Keepalive and network resilience**
+  - Keep current keepalive defaults; review for NAT/gateway environments (shorter idle helps).
+- **Operational safeguards**
+  - Safety checks against `max_connections` at startup; proactive warnings if configured `max_size` approaches server limits.
+
+— The following sections remain as historical and background context.
 
 ## Connection Pool Exhaustion Problem & Resolution
 
