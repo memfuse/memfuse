@@ -1,0 +1,11 @@
+# Gateway filter pipeline (inbound/outbound)
+# These entries are placeholders; real loading/registration will follow.
+
+inbound:
+  - name: noop_inbound
+    enabled: false
+
+outbound:
+  - name: noop_outbound
+    enabled: false
+

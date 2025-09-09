@@ -1,0 +1,3 @@
+-- Aggregate include for all view DDLs
+-- Use CREATE OR REPLACE VIEW ...
+

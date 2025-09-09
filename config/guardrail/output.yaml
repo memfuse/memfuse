@@ -1,0 +1,6 @@
+enabled: false
+remove_fields:
+  - metadata.level
+  - metadata.retrieval
+  - metadata.source
+

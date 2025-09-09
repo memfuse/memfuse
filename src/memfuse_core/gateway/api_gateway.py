@@ -19,11 +19,12 @@ from .processors import (
     ScopeCalculator,
     FieldRemover
 )
+from .filters import InboundFilter, OutboundFilter, NoOpInboundFilter, NoOpOutboundFilter
 
 
 class MemoryRequestParser:
     """Parser for memory service requests."""
-    
+
     def parse_request(self, request_data: Dict[str, Any]) -> RequestContext:
         """Parse request data and extract context."""
         return RequestContext(
@@ -40,7 +41,7 @@ class MemoryRequestParser:
 
 class MemoryApiGateway(GatewayInterface):
     """Main API Gateway for memory operations with routing and guardrails."""
-    
+
     def __init__(
         self,
         buffer_service: Optional[BufferService] = None,
@@ -49,7 +50,7 @@ class MemoryApiGateway(GatewayInterface):
         """Initialize the API Gateway."""
         self.buffer_service = buffer_service
         self.db_service = db_service
-        
+
         # Initialize components
         self.request_parser = MemoryRequestParser()
         self.router = MemoryMetadataRouter()
@@ -66,8 +67,12 @@ class MemoryApiGateway(GatewayInterface):
             'metadata.retrieval',
             'metadata.source'
         ]
+        # Filters registration points (inbound/outbound); empty by default
+        self.inbound_filters: list[InboundFilter] = []
+        self.outbound_filters: list[OutboundFilter] = []
+
         self.field_remover = FieldRemover(fields_to_remove=unused_fields)
-    
+
     async def process_request(
         self,
         request_data: Dict[str, Any],
@@ -79,25 +84,32 @@ class MemoryApiGateway(GatewayInterface):
             context = self.request_parser.parse_request(request_data)
             context.operation_type = operation_type
 
+            # Inbound filters (pre-routing)
+            for flt in self.inbound_filters:
+                try:
+                    request_data = flt.apply(request_data, context)
+                except Exception as e:
+                    logger.warning(f"Inbound filter {type(flt).__name__} failed: {e}")
+
             # Add gateway marker to track processing
             request_data['_gateway_entry'] = True
-            
+
             # Enrich context with database information
             context = await self._enrich_context(context)
-            
+
             logger.info(f"Processing request for user {context.user_id}, operation: {operation_type}")
-            
+
             # Step 2: Route request to appropriate service
             routing_decision = self.router.route_request(context)
             logger.info(f"Routing to {routing_decision.service_type}")
-            
+
             # Step 3: Call appropriate service
             service_response = await self._call_service(
                 routing_decision.service_type,
                 request_data,
                 routing_decision.service_params
             )
-            
+
             # Step 4: Transform response
             transformed_response = await self._transform_response(
                 service_response,
@@ -105,52 +117,59 @@ class MemoryApiGateway(GatewayInterface):
                 routing_decision,
                 request_data
             )
-            
+
+            # Outbound filters (post-transformation, pre-guardrail)
+            for flt in self.outbound_filters:
+                try:
+                    transformed_response = flt.apply(transformed_response, context)
+                except Exception as e:
+                    logger.warning(f"Outbound filter {type(flt).__name__} failed: {e}")
+
             # Step 5: Apply guardrails
             if not self.guardrail.validate_response(transformed_response, context):
                 logger.error("Response failed validation")
                 return self._create_error_response("Response validation failed")
-            
+
             # Step 6: Audit response
             self.guardrail.audit_response(transformed_response, context)
-            
+
             return transformed_response
-            
+
         except Exception as e:
             logger.error(f"Gateway processing error: {e}")
             import traceback
             logger.error(f"Gateway traceback: {traceback.format_exc()}")
             return self._create_error_response(f"Gateway error: {str(e)}")
-    
+
     async def _enrich_context(self, context: RequestContext) -> RequestContext:
         """Enrich context with database information."""
         if not self.db_service:
             return context
-        
+
         try:
             # Get user name if not provided
             if not context.user_name and context.user_id:
                 user = await self.db_service.get_user(context.user_id)
                 if user:
                     context.user_name = user.get("name")
-            
+
             # Get agent name if not provided
             if not context.agent_name and context.agent_id:
                 agent = await self.db_service.get_agent(context.agent_id)
                 if agent:
                     context.agent_name = agent.get("name")
-            
+
             # Get session name if not provided
             if not context.session_name and context.session_id:
                 session = await self.db_service.get_session(context.session_id)
                 if session:
                     context.session_name = session.get("name")
-            
+
         except Exception as e:
             logger.warning(f"Failed to enrich context: {e}")
-        
+
         return context
-    
+
     async def _call_service(
         self,
         service_type: ServiceType,
@@ -175,7 +194,7 @@ class MemoryApiGateway(GatewayInterface):
             top_k=top_k,
             **buffer_params
         )
-    
+
     async def _transform_response(
         self,
         service_response: Dict[str, Any],
@@ -186,7 +205,7 @@ class MemoryApiGateway(GatewayInterface):
         """Transform service response through the transformation pipeline."""
         if service_response.get("status") != "success":
             return service_response
-        
+
         # Apply transformation pipeline
         data = service_response.get("data", {})
 
@@ -218,7 +237,7 @@ class MemoryApiGateway(GatewayInterface):
             "errors": errors
         }
         return response
-    
+
     def _create_error_response(self, error_message: str) -> Dict[str, Any]:
         """Create a standardized error response."""
         return {
