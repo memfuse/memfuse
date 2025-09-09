@@ -223,6 +223,55 @@ Expected response (excerpt):
 }
 ```
 
+### End-to-end (Cache-hit, repeated query)
+
+This demonstrates a cache hit on the second request when rerank is enabled and the query + candidate ids are identical.
+
+Input #1:
+
+```json
+{"query": "how to deploy", "top_k": 5}
+```
+
+Input #2 (repeat the same query shortly after):
+
+```json
+{"query": "how to deploy", "top_k": 5}
+```
+
+Config (excerpt):
+
+```yaml
+buffer_plugins:
+  plugins:
+    - name: result_enricher
+      enabled: true
+      params:
+        include_rerank_cache: true
+        include_plugin_order: true
+
+gateway:
+  debug:
+    enabled: true
+    include_rerank_cache_hit: true
+```
+
+Output (second request excerpt, showing cache hit):
+
+```json
+{
+  "status": "success",
+  "data": {
+    "results": [
+      {"id": "A1", "relevance_score": 0.84, "metadata": {"observability": {"rerank_cache_hit": true}}},
+      {"id": "B2", "relevance_score": 0.79, "metadata": {"observability": {"rerank_cache_hit": true}}}
+    ],
+    "total": 2,
+    "metadata": {"observability": {"rerank_cache_hit": true}}
+  }
+}
+```
+
 ## Testing
 
 - Unit-level integration tests mock QueryBuffer.buffer_retrieval.retrieve to avoid DB
