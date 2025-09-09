@@ -93,6 +93,16 @@ guardrail:
       relevance: 0.3
       clarity: 0.2
       accuracy: 0.2
+  filter_cache:
+    enabled: true  # Enable performance caching
+    regex:
+      max_patterns: 1000  # Compiled regex pattern cache
+    content:
+      max_entries: 5000   # Content hash-based result cache
+      ttl: 1800          # 30 minutes
+    quality:
+      max_entries: 10000  # Quality score cache
+      ttl: 3600          # 1 hour
 ```
 
 Notes:

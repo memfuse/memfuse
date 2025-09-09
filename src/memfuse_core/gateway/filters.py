@@ -288,20 +288,20 @@ class ConfigSensitiveWordFilter:
         new_text = text
         hit_detected = False
 
+        # Use cached regex patterns for better performance
+        from .filter_cache import get_regex_cache
+        regex_cache = get_regex_cache()
+
         for w in self.words:
             if not w:
                 continue
-            if self.case_insensitive:
-                pattern = re.compile(re.escape(w), flags=re.IGNORECASE)
-                if pattern.search(new_text):
-                    hit_detected = True
-                    if self.action == "mask":
-                        new_text = pattern.sub(self.mask_token, new_text)
-            else:
-                if w in new_text:
-                    hit_detected = True
-                    if self.action == "mask":
-                        new_text = new_text.replace(w, self.mask_token)
+
+            # Get cached compiled pattern
+            pattern = regex_cache.get_word_pattern(w, self.case_insensitive)
+            if pattern.search(new_text):
+                hit_detected = True
+                if self.action == "mask":
+                    new_text = pattern.sub(self.mask_token, new_text)
 
         return new_text, hit_detected
 

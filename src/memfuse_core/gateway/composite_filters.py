@@ -53,14 +53,8 @@ class CompositeContentFilter:
         self.fail_fast = bool(policy_cfg.get("fail_fast", False))  # stop on first violation
         self.aggregate_violations = bool(policy_cfg.get("aggregate_violations", True))
         
-        # Compile regex patterns for performance
-        self._compiled_patterns = []
-        for pattern in self.forbidden_patterns:
-            try:
-                self._compiled_patterns.append(re.compile(pattern, re.IGNORECASE))
-            except re.error:
-                # Skip invalid patterns
-                pass
+        # Use cached regex patterns for better performance
+        self._pattern_cache_enabled = True
     
     def apply(self, response: Dict[str, Any], context: RequestContext) -> Dict[str, Any]:
         """Apply composite content validation."""
@@ -151,15 +145,26 @@ class CompositeContentFilter:
                     "action": self.semantic_action
                 }
         
-        # Check forbidden patterns
-        for pattern in self._compiled_patterns:
-            if pattern.search(content):
-                return {
-                    "type": "semantic",
-                    "subtype": "forbidden_pattern",
-                    "pattern": pattern.pattern,
-                    "action": self.semantic_action
-                }
+        # Check forbidden patterns using cached regex
+        if self._pattern_cache_enabled:
+            from .filter_cache import get_regex_cache
+            regex_cache = get_regex_cache()
+
+            for pattern_str in self.forbidden_patterns:
+                if not pattern_str:
+                    continue
+                try:
+                    pattern = regex_cache.get_pattern(pattern_str, re.IGNORECASE)
+                    if pattern.search(content):
+                        return {
+                            "type": "semantic",
+                            "subtype": "forbidden_pattern",
+                            "pattern": pattern_str,
+                            "action": self.semantic_action
+                        }
+                except Exception:
+                    # Skip invalid patterns
+                    continue
         
         return None
     
@@ -335,15 +340,44 @@ class ContentQualityFilter:
     
     def _calculate_quality_score(self, result: Dict[str, Any], context: RequestContext) -> float:
         """Calculate overall quality score for a result."""
+        content = result.get("content", "")
+        query = getattr(context, 'query', '') or ""
+
+        # Check cache first
+        from .filter_cache import get_quality_cache
+        quality_cache = get_quality_cache()
+        weights = {
+            "completeness": self.completeness_weight,
+            "relevance": self.relevance_weight,
+            "clarity": self.clarity_weight,
+            "accuracy": self.accuracy_weight
+        }
+
+        cached_result = quality_cache.get_cached_score(content, query, weights)
+        if cached_result is not None:
+            return cached_result[0]  # Return overall score
+
+        # Calculate scores
         completeness = self._score_completeness(result)
         relevance = self._score_relevance(result, context)
         clarity = self._score_clarity(result)
         accuracy = self._score_accuracy(result)
-        
-        return (completeness * self.completeness_weight +
-                relevance * self.relevance_weight +
-                clarity * self.clarity_weight +
-                accuracy * self.accuracy_weight)
+
+        overall_score = (completeness * self.completeness_weight +
+                        relevance * self.relevance_weight +
+                        clarity * self.clarity_weight +
+                        accuracy * self.accuracy_weight)
+
+        # Cache the result
+        dimension_scores = {
+            "completeness": completeness,
+            "relevance": relevance,
+            "clarity": clarity,
+            "accuracy": accuracy
+        }
+        quality_cache.cache_score(content, query, weights, overall_score, dimension_scores)
+
+        return overall_score
     
     def _score_completeness(self, result: Dict[str, Any]) -> float:
         """Score content completeness (0.0 to 1.0)."""
