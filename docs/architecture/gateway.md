@@ -196,7 +196,7 @@ API Endpoint → Gateway → Service (Buffer/Memory) → Database
 
 ## Outbound filters and guardrails (optional)
 
-Gateway supports a lightweight, config-driven outbound filtering stage to mask or annotate response content without changing service logic.
+Gateway supports a lightweight, config-driven outbound filtering stage to mask or annotate response content without changing service logic. See also: docs/architecture/outbound_filters.md for detailed examples and best practices.
 
 ### Built-in filters
 - max_length: Truncate `result.content` beyond a limit and set `metadata.length_truncated=true`.
