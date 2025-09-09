@@ -145,6 +145,12 @@ class QueryBuffer(BufferComponentInterface):
         Returns:
             List of query results sorted and optionally reranked
         """
+        # Handle None or invalid query_text
+        if query_text is None:
+            query_text = ""
+        elif not isinstance(query_text, str):
+            query_text = str(query_text)
+
         # Set defaults
         if top_k is None:
             top_k = self._max_size
@@ -152,7 +158,7 @@ class QueryBuffer(BufferComponentInterface):
             sort_by = self.default_sort_by
         if order is None:
             order = self.default_order
-        
+
         query_preview = query_text[:50] + "..." if len(query_text) > 50 else query_text
         logger.info(f"QueryBuffer: Query '{query_preview}' with sort_by={sort_by}, order={order}")
 

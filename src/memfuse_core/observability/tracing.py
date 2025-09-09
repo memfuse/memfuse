@@ -67,17 +67,13 @@ class MemFuseTracer:
         
     def initialize(self, config: Optional[Dict[str, Any]] = None) -> None:
         """Initialize the tracer with configuration."""
-        if not OPENTELEMETRY_AVAILABLE:
-            logger.warning("OpenTelemetry not available. Tracing disabled.")
-            return
-            
-        # Load configuration
+        # Load configuration first (even if OpenTelemetry is not available)
         gcm = get_global_config_manager()
         if gcm.is_initialized():
             trace_cfg = gcm.get_section("tracing") or {}
         else:
             trace_cfg = config or {}
-            
+
         self._config = TraceConfig(
             enabled=bool(trace_cfg.get("enabled", False)),
             service_name=str(trace_cfg.get("service_name", "memfuse-core")),
@@ -90,7 +86,11 @@ class MemFuseTracer:
             include_response_body=bool(trace_cfg.get("include_response_body", False)),
             max_attribute_length=int(trace_cfg.get("max_attribute_length", 1000))
         )
-        
+
+        if not OPENTELEMETRY_AVAILABLE:
+            logger.warning("OpenTelemetry not available. Tracing disabled.")
+            return
+
         if not self._config.enabled:
             logger.info("Distributed tracing is disabled")
             return
@@ -255,26 +255,51 @@ class MemFuseTracer:
             
             span.set_attribute(key, str_value)
     
-    def add_request_attributes(self, span, context: RequestContext, request_data: Optional[Dict[str, Any]] = None) -> None:
+    def add_request_attributes(self, span, context, request_data: Optional[Dict[str, Any]] = None) -> None:
         """Add MemFuse-specific request attributes to span."""
         if not span or not span.is_recording():
             return
-        
+
+        # Handle both RequestContext objects and dictionaries
+        if isinstance(context, dict):
+            # Dictionary input
+            user_id = context.get("user_id", "")
+            user_name = context.get("user_name")
+            agent_id = context.get("agent_id")
+            agent_name = context.get("agent_name")
+            session_id = context.get("session_id")
+            session_name = context.get("session_name")
+        else:
+            # RequestContext object
+            user_id = getattr(context, 'user_id', "") or ""
+            user_name = getattr(context, 'user_name', None)
+            agent_id = getattr(context, 'agent_id', None)
+            agent_name = getattr(context, 'agent_name', None)
+            session_id = getattr(context, 'session_id', None)
+            session_name = getattr(context, 'session_name', None)
+
         # Request context attributes
-        span.set_attribute("memfuse.user_id", context.user_id or "")
-        if context.user_name:
-            span.set_attribute("memfuse.user_name", context.user_name)
-        if context.agent_id:
-            span.set_attribute("memfuse.agent_id", context.agent_id)
-        if context.agent_name:
-            span.set_attribute("memfuse.agent_name", context.agent_name)
-        if context.session_id:
-            span.set_attribute("memfuse.session_id", context.session_id)
-        if context.session_name:
-            span.set_attribute("memfuse.session_name", context.session_name)
-        if context.operation_type:
-            span.set_attribute("memfuse.operation_type", str(context.operation_type))
-        
+        span.set_attribute("memfuse.user_id", user_id)
+        if user_name:
+            span.set_attribute("memfuse.user_name", user_name)
+        if agent_id:
+            span.set_attribute("memfuse.agent_id", agent_id)
+        if agent_name:
+            span.set_attribute("memfuse.agent_name", agent_name)
+        if session_id:
+            span.set_attribute("memfuse.session_id", session_id)
+        if session_name:
+            span.set_attribute("memfuse.session_name", session_name)
+
+        # Handle operation_type
+        if isinstance(context, dict):
+            operation_type = context.get("operation_type")
+        else:
+            operation_type = getattr(context, 'operation_type', None)
+
+        if operation_type:
+            span.set_attribute("memfuse.operation_type", str(operation_type))
+
         # Request data attributes (if enabled)
         if self._config.include_request_body and request_data:
             if "query" in request_data:
@@ -282,13 +307,18 @@ class MemFuseTracer:
                 if len(query) > self._config.max_attribute_length:
                     query = query[:self._config.max_attribute_length] + "..."
                 span.set_attribute("memfuse.query", query)
-            
+
             if "top_k" in request_data:
                 span.set_attribute("memfuse.top_k", int(request_data["top_k"]))
-        
+
         # Request metadata
-        if context.request_metadata:
-            for key, value in context.request_metadata.items():
+        if isinstance(context, dict):
+            request_metadata = context.get("request_metadata")
+        else:
+            request_metadata = getattr(context, 'request_metadata', None)
+
+        if request_metadata:
+            for key, value in request_metadata.items():
                 attr_key = f"memfuse.metadata.{key}"
                 str_value = str(value)
                 if len(str_value) > self._config.max_attribute_length:
@@ -334,10 +364,11 @@ def get_tracer() -> MemFuseTracer:
     return _tracer
 
 
-def initialize_tracing(config: Optional[Dict[str, Any]] = None) -> None:
+def initialize_tracing(config: Optional[Dict[str, Any]] = None) -> MemFuseTracer:
     """Initialize distributed tracing."""
     tracer = get_tracer()
     tracer.initialize(config)
+    return tracer
 
 
 def trace_operation(operation_name: str, attributes: Optional[Dict[str, Any]] = None):
