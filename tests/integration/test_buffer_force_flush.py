@@ -21,9 +21,14 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
+class SimpleConfig:
+    def __init__(self, data: Dict[str, Any]):
+        self._data = data
+    def get_raw_config(self) -> Dict[str, Any]:
+        return self._data
+
 from memfuse_core.services.buffer_service import BufferService
 from memfuse_core.services.memory_service import MemoryService
-from memfuse_core.config.global_config import GlobalConfig
 from memfuse_core.interfaces import MessageList
 
 
@@ -56,7 +61,7 @@ class TestBufferForceFlush:
                 "url": "postgresql://memfuse:memfuse@localhost:5432/memfuse_test"
             }
         }
-        return GlobalConfig(config_dict)
+        return SimpleConfig(config_dict)
 
     @pytest.fixture
     async def memory_service(self, config):
@@ -81,26 +86,26 @@ class TestBufferForceFlush:
             {"role": "user", "content": "Test message 1"},
             {"role": "assistant", "content": "Test response 1"}
         ]
-        
+
         # Add messages to buffer
         result = await buffer_service.add(test_messages, session_id="test_session")
         assert result["status"] == "success"
-        
+
         # Check that data is in buffer
         hybrid_buffer = buffer_service.get_hybrid_buffer()
         assert len(hybrid_buffer.original_rounds) > 0
-        
+
         # Wait for force flush timeout (5 seconds + buffer)
         print("Waiting for force flush timeout...")
         await asyncio.sleep(7.0)
-        
+
         # Check that buffer was flushed
         assert len(hybrid_buffer.original_rounds) == 0, "Buffer should be empty after force flush"
-        
+
         # Verify data is in database
         query_result = await buffer_service.query(
-            "Test message", 
-            session_id="test_session", 
+            "Test message",
+            session_id="test_session",
             top_k=5
         )
         assert query_result["status"] == "success"
@@ -113,26 +118,26 @@ class TestBufferForceFlush:
             {"role": "user", "content": "Manual flush test message"},
             {"role": "assistant", "content": "Manual flush test response"}
         ]
-        
+
         result = await buffer_service.add(test_messages, session_id="test_session_manual")
         assert result["status"] == "success"
-        
+
         # Verify data is in buffer
         hybrid_buffer = buffer_service.get_hybrid_buffer()
         initial_buffer_size = len(hybrid_buffer.original_rounds)
         assert initial_buffer_size > 0
-        
+
         # Manual flush
         flush_result = await buffer_service.flush_all_buffers()
         assert flush_result["status"] == "success"
-        
+
         # Verify buffer is empty
         assert len(hybrid_buffer.original_rounds) == 0
-        
+
         # Verify data is in database
         query_result = await buffer_service.query(
-            "Manual flush test", 
-            session_id="test_session_manual", 
+            "Manual flush test",
+            session_id="test_session_manual",
             top_k=5
         )
         assert query_result["status"] == "success"
@@ -145,30 +150,30 @@ class TestBufferForceFlush:
             {"role": "user", "content": "Shutdown test message"},
             {"role": "assistant", "content": "Shutdown test response"}
         ]
-        
+
         result = await buffer_service.add(test_messages, session_id="test_session_shutdown")
         assert result["status"] == "success"
-        
+
         # Verify data is in buffer
         hybrid_buffer = buffer_service.get_hybrid_buffer()
         assert len(hybrid_buffer.original_rounds) > 0
-        
+
         # Trigger shutdown (this should flush remaining data)
         await buffer_service.shutdown()
-        
+
         # Create new buffer service to check database
         new_buffer_service = BufferService(
-            buffer_service.memory_service, 
-            "test_user", 
+            buffer_service.memory_service,
+            "test_user",
             buffer_service.config
         )
         await new_buffer_service.initialize()
-        
+
         try:
             # Query database to verify data was flushed
             query_result = await new_buffer_service.query(
-                "Shutdown test", 
-                session_id="test_session_shutdown", 
+                "Shutdown test",
+                session_id="test_session_shutdown",
                 top_k=5
             )
             assert query_result["status"] == "success"
@@ -179,7 +184,7 @@ class TestBufferForceFlush:
     async def test_configuration_parameters(self, buffer_service):
         """Test that configuration parameters are properly applied."""
         hybrid_buffer = buffer_service.get_hybrid_buffer()
-        
+
         # Check that force_flush_timeout is set correctly
         assert hybrid_buffer.force_flush_timeout == 5.0
         assert hybrid_buffer.auto_flush_interval == 2.0
@@ -189,7 +194,7 @@ class TestBufferForceFlush:
         """Test that buffer statistics include force_flush_timeout."""
         hybrid_buffer = buffer_service.get_hybrid_buffer()
         stats = hybrid_buffer.get_stats()
-        
+
         assert "force_flush_timeout" in stats
         assert stats["force_flush_timeout"] == 5.0
 
@@ -202,12 +207,12 @@ class TestBufferForceFlushEndToEnd:
         # This test verifies that the configuration is properly loaded
         config_path = project_root / "config" / "buffer" / "default.yaml"
         assert config_path.exists()
-        
+
         # Read config and verify force_flush_timeout is present
         import yaml
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
-        
+
         assert "performance" in config
         assert "force_flush_timeout" in config["performance"]
         assert config["performance"]["force_flush_timeout"] == 1800  # 30 minutes

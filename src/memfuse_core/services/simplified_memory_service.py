@@ -93,13 +93,13 @@ class SimplifiedDatabaseManager:
             with self.conn.cursor() as cur:
                 cur.execute("""
                     SELECT table_name FROM information_schema.tables
-                    WHERE table_schema = 'public' AND table_name IN ('users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic')
+                    WHERE table_schema = 'public' AND table_name IN ('users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic', 'm2_semantic')
                 """)
                 existing_tables = [row[0] for row in cur.fetchall()]
 
                 # Create missing basic tables
                 missing_tables = []
-                required_tables = ['users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic']
+                required_tables = ['users', 'sessions', 'rounds', 'messages', 'm0_raw', 'm1_episodic', 'm2_semantic']
                 for table in required_tables:
                     if table not in existing_tables:
                         missing_tables.append(table)
@@ -183,8 +183,8 @@ class SimplifiedDatabaseManager:
                     ''')
                     logger.info("✅ Created messages table")
 
-                # Create M0 and M1 tables using SchemaManager
-                if 'm0_raw' in missing_tables or 'm1_episodic' in missing_tables:
+                # Create M0, M1, and M2 tables using SchemaManager and SQL files
+                if 'm0_raw' in missing_tables or 'm1_episodic' in missing_tables or 'm2_semantic' in missing_tables:
                     from memfuse_core.models.schema.manager import SchemaManager
                     schema_manager = SchemaManager()
 
@@ -197,6 +197,11 @@ class SimplifiedDatabaseManager:
                         m1_schema = schema_manager.get_schema('m1_episodic')
                         cur.execute(m1_schema.generate_create_table_sql())
                         logger.info("✅ Created m1_episodic table")
+
+                    if 'm2_semantic' in missing_tables:
+                        # Create M2 table using SQL file (SchemaManager doesn't support M2)
+                        await self._create_m2_semantic_table(cur)
+                        logger.info("✅ Created m2_semantic table")
             # Commit DDL batch
             self.conn.commit()
             # Restore autocommit
@@ -236,6 +241,31 @@ class SimplifiedDatabaseManager:
                     raise Exception(f"Required function '{func_name}' not found")
                 else:
                     logger.debug(f"✅ Function '{func_name}' found")
+
+    async def _create_m2_semantic_table(self, cur) -> None:
+        """Create M2 semantic table using SQL schema file."""
+        import os
+        from pathlib import Path
+        
+        try:
+            # Path to M2 semantic SQL schema file
+            schema_file = Path(__file__).parent.parent / "store" / "pgai_store" / "schemas" / "m2_semantic.sql"
+            
+            if not schema_file.exists():
+                logger.error(f"❌ M2 schema file not found: {schema_file}")
+                raise FileNotFoundError(f"M2 schema file not found: {schema_file}")
+            
+            # Read and execute M2 schema SQL
+            with open(schema_file, 'r') as f:
+                m2_sql = f.read()
+            
+            logger.debug(f"📝 Loading M2 schema from: {schema_file}")
+            cur.execute(m2_sql)
+            logger.debug("✅ M2 semantic table schema executed successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create M2 semantic table: {e}")
+            raise
 
     async def health_check(self) -> bool:
         """Perform database health check."""
@@ -1070,6 +1100,8 @@ class SimplifiedMemoryService(MessageInterface):
 
         return chunk_ids
 
+
+
     async def query_similar_chunks(
         self,
         query_text: str,
@@ -1290,7 +1322,7 @@ class SimplifiedMemoryService(MessageInterface):
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         include_messages: bool = True,
-        include_knowledge: bool = True,
+
         include_chunks: bool = True,
         **kwargs
     ) -> Dict[str, Any]:
@@ -1303,7 +1335,7 @@ class SimplifiedMemoryService(MessageInterface):
             store_type: Type of store to query (ignored in current implementation)
             session_id: Session ID to filter results (optional)
             include_messages: Whether to include messages in results
-            include_knowledge: Whether to include knowledge in results
+
             include_chunks: Whether to include chunks in results
             **kwargs: Additional parameters
 
@@ -1320,16 +1352,23 @@ class SimplifiedMemoryService(MessageInterface):
             # This helps when the correct answer might not be in the top few results
             search_top_k = max(top_k * 3, 15)  # Search more broadly, then filter
 
-            # Get raw results from similarity search with user filtering
-            raw_results = await self.query_similar_chunks(
-                actual_query,
-                search_top_k,
-                user_id=user_id,
-                session_id=session_id
-            )
+            all_results = []
 
-            # Take the requested top_k from the broader search
-            results = raw_results[:top_k]
+
+
+            # Search messages/chunks if requested
+            if include_messages or include_chunks:
+                chunk_results = await self.query_similar_chunks(
+                    actual_query,
+                    search_top_k,
+                    user_id=user_id,
+                    session_id=session_id
+                )
+                all_results.extend(chunk_results)
+
+            # Sort by relevance score and take top_k
+            all_results.sort(key=lambda x: x.get('relevance_score', x.get('similarity_score', 0)), reverse=True)
+            results = all_results[:top_k]
 
             # Format response to match BufferService expectations
             response = {
@@ -1339,11 +1378,11 @@ class SimplifiedMemoryService(MessageInterface):
                     "results": results,
                     "total": len(results)
                 },
-                "message": f"Retrieved {len(results)} results from memory database (searched {len(raw_results)} candidates)",
+                "message": f"Retrieved {len(results)} results from memory database (searched {len(all_results)} candidates)",
                 "errors": None
             }
 
-            logger.info(f"SimplifiedMemoryService.query: Returning {len(results)} results for query: '{actual_query[:50]}...' (searched {search_top_k} candidates)")
+            logger.info(f"SimplifiedMemoryService.query: Returning {len(results)} results for query: '{actual_query[:50]}...' (searched {search_top_k} candidates, messages={include_messages})")
             return response
 
         except Exception as e:

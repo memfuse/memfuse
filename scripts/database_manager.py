@@ -219,6 +219,125 @@ CREATE TRIGGER trigger_m1_embedding_notification
     EXECUTE FUNCTION notify_m1_embedding_needed();
 """
 
+M2_TABLE_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS m2_semantic (
+    -- Primary identification
+    fact_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+
+    -- Fact content
+    text TEXT NOT NULL,
+
+    -- Idempotency hash for duplicate detection
+    hash TEXT UNIQUE,
+
+    -- Vector embedding (384 dimensions for sentence-transformers/all-MiniLM-L6-v2)
+    embedding vector(384),
+
+    -- Confidence score
+    confidence FLOAT NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+
+    -- Status management
+    status VARCHAR(20) NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'deprecated')),
+
+    -- Source tracking (links back to M1 chunks)
+    chunk_ids UUID[] NOT NULL DEFAULT '{}',
+
+    -- User context
+    user_id UUID NOT NULL,
+
+    -- Policy versioning for extraction tracking
+    policy_version TEXT,
+
+    -- Temporal tracking
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    embedding_generated_at TIMESTAMP WITH TIME ZONE,
+
+    -- Quality metrics
+    embedding_model VARCHAR(100) DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
+
+    -- General metadata
+    metadata JSONB DEFAULT '{}'::jsonb,
+
+    -- Constraints
+    CONSTRAINT m2_semantic_chunk_lineage_not_empty
+        CHECK (array_length(chunk_ids, 1) > 0)
+);
+"""
+
+M2_INDEXES_SQL = [
+    "CREATE INDEX IF NOT EXISTS idx_m2_embedding_hnsw ON m2_semantic USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);",
+    "CREATE INDEX IF NOT EXISTS idx_m2_user_id ON m2_semantic (user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_m2_status ON m2_semantic (status);",
+    "CREATE INDEX IF NOT EXISTS idx_m2_confidence ON m2_semantic (confidence);",
+    "CREATE INDEX IF NOT EXISTS idx_m2_created_at ON m2_semantic (created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_m2_updated_at ON m2_semantic (updated_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_m2_policy_version ON m2_semantic (policy_version);",
+    "CREATE INDEX IF NOT EXISTS idx_m2_hash ON m2_semantic (hash);",
+    "CREATE INDEX IF NOT EXISTS idx_m2_chunk_ids_gin ON m2_semantic USING gin (chunk_ids);",
+    "CREATE INDEX IF NOT EXISTS idx_m2_metadata_gin ON m2_semantic USING gin (metadata);"
+]
+
+M2_UPDATE_FUNCTION_SQL = """
+CREATE OR REPLACE FUNCTION update_m2_semantic_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+M2_UPDATE_TRIGGER_SQL = """
+DROP TRIGGER IF EXISTS trigger_update_m2_semantic_updated_at ON m2_semantic;
+CREATE TRIGGER trigger_update_m2_semantic_updated_at
+    BEFORE UPDATE ON m2_semantic
+    FOR EACH ROW
+    EXECUTE FUNCTION update_m2_semantic_updated_at();
+"""
+
+M2_EMBEDDING_FUNCTION_SQL = """
+CREATE OR REPLACE FUNCTION update_m2_embedding_generated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.embedding IS NOT NULL AND OLD.embedding IS NULL THEN
+        NEW.embedding_generated_at = CURRENT_TIMESTAMP;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+M2_EMBEDDING_TRIGGER_SQL = """
+DROP TRIGGER IF EXISTS trigger_update_m2_embedding_generated_at ON m2_semantic;
+CREATE TRIGGER trigger_update_m2_embedding_generated_at
+    BEFORE UPDATE ON m2_semantic
+    FOR EACH ROW
+    EXECUTE FUNCTION update_m2_embedding_generated_at();
+"""
+
+M2_NOTIFICATION_FUNCTION_SQL = """
+CREATE OR REPLACE FUNCTION notify_m2_embedding_needed()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Notify embedding system when new facts are created without embeddings
+    IF NEW.embedding IS NULL AND NEW.text IS NOT NULL THEN
+        PERFORM pg_notify('embedding_needed', 'm2_semantic:' || NEW.fact_id::text);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+M2_EMBEDDING_NOTIFICATION_TRIGGER_SQL = """
+DROP TRIGGER IF EXISTS trigger_m2_embedding_notification ON m2_semantic;
+CREATE TRIGGER trigger_m2_embedding_notification
+    AFTER INSERT ON m2_semantic
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_m2_embedding_needed();
+"""
+
 # Note: This implements MemFuse's custom pgai-like functionality
 # We don't need TimescaleDB's pgai extension as we have our own event-driven embedding system
 
@@ -421,6 +540,20 @@ class DatabaseManager:
             if count_result:
                 status['m0_raw_count'] = int(count_result.strip())
                 print(f"m0_raw records: {status['m0_raw_count']}")
+
+        # Check m1_episodic specifically
+        if 'm1_episodic' in status['tables']:
+            count_result = self.run_sql_command("SELECT COUNT(*) FROM m1_episodic;", "tuples")
+            if count_result:
+                status['m1_episodic_count'] = int(count_result.strip())
+                print(f"m1_episodic records: {status['m1_episodic_count']}")
+
+        # Check m2_semantic specifically
+        if 'm2_semantic' in status['tables']:
+            count_result = self.run_sql_command("SELECT COUNT(*) FROM m2_semantic;", "tuples")
+            if count_result:
+                status['m2_semantic_count'] = int(count_result.strip())
+                print(f"m2_semantic records: {status['m2_semantic_count']}")
         
         # Check triggers
         trigger_result = self.run_sql_command("""
@@ -565,6 +698,15 @@ class DatabaseManager:
             self.print_status("Failed to create m1_episodic table", StatusLevel.ERROR)
             return False
 
+        # Create m2_semantic table
+        self.print_status("Creating m2_semantic table...", StatusLevel.INFO)
+        result = self.run_sql_command(M2_TABLE_SCHEMA_SQL)
+        if result is not None:
+            self.print_status("m2_semantic table created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create m2_semantic table", StatusLevel.ERROR)
+            return False
+
         # Create M0 indexes
         self.print_status("Creating M0 indexes...", StatusLevel.INFO)
         m0_index_success_count = 0
@@ -587,8 +729,19 @@ class DatabaseManager:
             else:
                 self.print_status("Failed to create M1 index", StatusLevel.WARNING)
 
-        total_indexes = len(M0_INDEXES_SQL) + len(M1_INDEXES_SQL)
-        total_success = m0_index_success_count + m1_index_success_count
+        # Create M2 indexes
+        self.print_status("Creating M2 indexes...", StatusLevel.INFO)
+        m2_index_success_count = 0
+        for index_sql in M2_INDEXES_SQL:
+            result = self.run_sql_command(index_sql)
+            if result is not None:
+                m2_index_success_count += 1
+                self.print_status("M2 index created successfully", StatusLevel.SUCCESS)
+            else:
+                self.print_status("Failed to create M2 index", StatusLevel.WARNING)
+
+        total_indexes = len(M0_INDEXES_SQL) + len(M1_INDEXES_SQL) + len(M2_INDEXES_SQL)
+        total_success = m0_index_success_count + m1_index_success_count + m2_index_success_count
 
         if total_success == 0:
             self.print_status("Failed to create any indexes", StatusLevel.ERROR)
@@ -652,6 +805,57 @@ class DatabaseManager:
         else:
             self.print_status("Failed to create M1 embedding trigger", StatusLevel.ERROR)
             return False
+
+        # Create M2 trigger system
+        self.print_status("Creating M2 trigger system...", StatusLevel.INFO)
+
+        # Create M2 update function
+        result = self.run_sql_command(M2_UPDATE_FUNCTION_SQL)
+        if result is not None:
+            self.print_status("M2 update function created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M2 update function", StatusLevel.ERROR)
+            return False
+
+        # Create M2 update trigger
+        result = self.run_sql_command(M2_UPDATE_TRIGGER_SQL)
+        if result is not None:
+            self.print_status("M2 update trigger created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M2 update trigger", StatusLevel.ERROR)
+            return False
+
+        # Create M2 embedding function
+        result = self.run_sql_command(M2_EMBEDDING_FUNCTION_SQL)
+        if result is not None:
+            self.print_status("M2 embedding function created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M2 embedding function", StatusLevel.ERROR)
+            return False
+
+        # Create M2 embedding trigger
+        result = self.run_sql_command(M2_EMBEDDING_TRIGGER_SQL)
+        if result is not None:
+            self.print_status("M2 embedding trigger created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M2 embedding trigger", StatusLevel.ERROR)
+            return False
+
+        # Create M2 notification function
+        result = self.run_sql_command(M2_NOTIFICATION_FUNCTION_SQL)
+        if result is not None:
+            self.print_status("M2 notification function created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M2 notification function", StatusLevel.ERROR)
+            return False
+
+        # Create M2 embedding notification trigger
+        result = self.run_sql_command(M2_EMBEDDING_NOTIFICATION_TRIGGER_SQL)
+        if result is not None:
+            self.print_status("M2 embedding notification trigger created successfully", StatusLevel.SUCCESS)
+        else:
+            self.print_status("Failed to create M2 embedding notification trigger", StatusLevel.ERROR)
+            return False
         
         print("\n✅ Database schema recreation completed successfully")
         return True
@@ -711,6 +915,41 @@ class DatabaseManager:
         else:
             validation_results.append(("vector extension", False))
             print("❌ Vector extension missing")
+
+        # Check m2_semantic table
+        table_result = self.run_sql_command("\\d m2_semantic")
+        if table_result and 'fact_id' in table_result and 'embedding' in table_result:
+            validation_results.append(("m2_semantic table", True))
+            print("✅ m2_semantic table exists with correct structure")
+        else:
+            validation_results.append(("m2_semantic table", False))
+            print("❌ m2_semantic table missing or incorrect")
+        
+        # Check M2 update trigger
+        m2_trigger_result = self.run_sql_command("""
+            SELECT COUNT(*) FROM information_schema.triggers
+            WHERE trigger_name = 'trigger_update_m2_semantic_updated_at';
+        """, "tuples")
+        
+        if m2_trigger_result and int(m2_trigger_result.strip()) > 0:
+            validation_results.append(("M2 update trigger", True))
+            print("✅ M2 update trigger configured")
+        else:
+            validation_results.append(("M2 update trigger", False))
+            print("❌ M2 update trigger missing")
+        
+        # Check M2 embedding notification trigger
+        m2_embedding_trigger_result = self.run_sql_command("""
+            SELECT COUNT(*) FROM information_schema.triggers
+            WHERE trigger_name = 'trigger_m2_embedding_notification';
+        """, "tuples")
+        
+        if m2_embedding_trigger_result and int(m2_embedding_trigger_result.strip()) > 0:
+            validation_results.append(("M2 embedding notification trigger", True))
+            print("✅ M2 embedding notification trigger configured")
+        else:
+            validation_results.append(("M2 embedding notification trigger", False))
+            print("❌ M2 embedding notification trigger missing")
         
         # Summary
         passed = sum(1 for _, result in validation_results if result)

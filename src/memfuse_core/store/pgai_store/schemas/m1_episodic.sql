@@ -33,6 +33,12 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     embedding_generated_at TIMESTAMP WITH TIME ZONE,
 
+    -- M2 processing status tracking
+    m2_status VARCHAR(20) DEFAULT 'pending'
+        CHECK (m2_status IN ('pending', 'processing', 'completed', 'failed')),
+    m2_processing_started_at TIMESTAMP WITH TIME ZONE,
+    m2_processing_ended_at TIMESTAMP WITH TIME ZONE,
+
     -- Quality metrics
     embedding_model VARCHAR(100) DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
     chunk_quality_score FLOAT DEFAULT 0.0,
@@ -80,6 +86,16 @@ CREATE INDEX IF NOT EXISTS idx_m1_chunk_quality_score
 -- GIN index for M0 message ID arrays (lineage queries)
 CREATE INDEX IF NOT EXISTS idx_m1_m0_raw_ids_gin
     ON m1_episodic USING gin (m0_raw_ids);
+
+-- M2 processing status indexes
+CREATE INDEX IF NOT EXISTS idx_m1_m2_status
+    ON m1_episodic (m2_status);
+
+CREATE INDEX IF NOT EXISTS idx_m1_m2_processing_started_at
+    ON m1_episodic (m2_processing_started_at);
+
+CREATE INDEX IF NOT EXISTS idx_m1_m2_processing_ended_at
+    ON m1_episodic (m2_processing_ended_at);
 
 -- =============================================================================
 -- AUTOMATIC TIMESTAMP UPDATE TRIGGER
@@ -155,3 +171,6 @@ COMMENT ON COLUMN m1_episodic.session_id IS 'Session context identifier (unified
 COMMENT ON COLUMN m1_episodic.embedding_generated_at IS 'Timestamp when embedding was generated';
 COMMENT ON COLUMN m1_episodic.embedding_model IS 'Model used for embedding generation';
 COMMENT ON COLUMN m1_episodic.chunk_quality_score IS 'Quality score for the chunk (0.0 to 1.0)';
+COMMENT ON COLUMN m1_episodic.m2_status IS 'M2 fact extraction processing status: pending, processing, completed, or failed';
+COMMENT ON COLUMN m1_episodic.m2_processing_started_at IS 'Timestamp when M2 fact extraction processing started';
+COMMENT ON COLUMN m1_episodic.m2_processing_ended_at IS 'Timestamp when M2 fact extraction processing ended';
