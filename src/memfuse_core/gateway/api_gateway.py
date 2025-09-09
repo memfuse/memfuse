@@ -294,6 +294,21 @@ class MemoryApiGateway(GatewayInterface):
                         obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
                         if isinstance(obs_top, dict):
                             obs_top["plugin_order"] = first_order
+                # Aggregate score range (min/max of scores present)
+                if dbg.get("enabled") and dbg.get("include_score_range"):
+                    scores = []
+                    for it in results:
+                        if isinstance(it, dict):
+                            s = it.get("relevance_score")
+                            if not isinstance(s, (int, float)):
+                                s = it.get("score")
+                            if isinstance(s, (int, float)):
+                                scores.append(float(s))
+                    if scores:
+                        md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                        obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                        if isinstance(obs_top, dict):
+                            obs_top["score_range"] = {"min": min(scores), "max": max(scores)}
         except Exception:
             # Best-effort: do not break pipeline on debug enrich failures
             pass

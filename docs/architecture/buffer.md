@@ -142,6 +142,61 @@ Effect (response excerpt):
 }
 ```
 
+### End-to-end example: Rerank + Multi-plugins
+
+Input (simplified):
+
+```json
+{
+  "query": "how to deploy",
+  "top_k": 5
+}
+```
+
+Config (excerpt):
+
+```yaml
+buffer_plugins:
+  plugins:
+    - name: deduplicate
+      enabled: true
+      params: { key: id }
+    - name: score_clip
+      enabled: true
+      params: { min: 0.0, max: 0.9 }
+    - name: result_enricher
+      enabled: true
+      params: { include_rerank_cache: true, include_plugin_order: true }
+    - name: field_keep_or_remove
+      enabled: true
+      params:
+        keep_fields: []
+        remove_fields: ["metadata.source"]
+
+gateway:
+  debug:
+    enabled: true
+    include_rerank_cache_hit: true
+    include_plugin_order: true
+    include_score_range: true
+```
+
+Expected response (excerpt):
+
+```json
+{
+  "status": "success",
+  "data": {
+    "results": [
+      {"id": "...", "score": 0.82, "metadata": {"observability": {"stage": "after_merge", "query_len": 12, "rerank_cache_hit": false, "plugin_order": ["DeduplicatePlugin", "ScoreClipPlugin", "ResultEnricherPlugin", "FieldKeepOrRemovePlugin"]}}},
+      {"id": "...", "score": 0.75, "metadata": {"observability": {"stage": "after_merge", "query_len": 12, "rerank_cache_hit": false, "plugin_order": ["DeduplicatePlugin", "ScoreClipPlugin", "ResultEnricherPlugin", "FieldKeepOrRemovePlugin"]}}}
+    ],
+    "total": 2,
+    "metadata": {"observability": {"rerank_cache_hit": false, "plugin_order": ["DeduplicatePlugin", "ScoreClipPlugin", "ResultEnricherPlugin", "FieldKeepOrRemovePlugin"], "score_range": {"min": 0.75, "max": 0.82}}}
+  }
+}
+```
+
 ## Testing
 
 - Unit-level integration tests mock QueryBuffer.buffer_retrieval.retrieve to avoid DB
