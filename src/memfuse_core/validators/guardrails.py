@@ -332,8 +332,20 @@ class MemoryGuardrail(ResponseGuardrail):
                 else:
                     rec(cur.get(key), idx + 1)
             elif isinstance(cur, list):
-                if key == "*":
+                # list index, wildcard, or conditional wildcard like *{k=B}
+                if key == "*" or (key.startswith("*{") and key.endswith("}")):
+                    cond_key = None
+                    cond_val = None
+                    if key != "*":
+                        inner = key[2:-1]
+                        if "=" in inner:
+                            cond_key, cond_val = inner.split("=", 1)
+                            cond_key = cond_key.strip()
+                            cond_val = cond_val.strip().strip("'\"")
                     for item in cur:
+                        if cond_key is not None:
+                            if not isinstance(item, dict) or str(item.get(cond_key)) != cond_val:
+                                continue
                         rec(item, idx + 1)
                 else:
                     try:

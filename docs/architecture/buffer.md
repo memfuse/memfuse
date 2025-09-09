@@ -69,6 +69,23 @@ plugins:
       remove_fields: ["metadata.source", "metadata.observability.query_len"]
 ```
 
+## Timeout and fallback (storage retrieval)
+
+You can configure a minimal timeout for storage retrieval and let QueryBuffer gracefully fall back when storage is slow/unavailable. When a timeout or exception occurs, QueryBuffer continues without storage results (and on session queries, returns Hybrid-only data if available).
+
+Configuration example:
+
+```yaml
+buffer:
+  retrieval_timeout_seconds: 0.2  # seconds
+```
+
+Behavior:
+- Mixed path (buffer + storage): storage call wrapped by asyncio.wait_for; timeout → continue with buffer results only
+- Session path: storage part times out → return Hybrid results only (still sorted/limited)
+- No exception propagated; logs contain a warning
+
+
 ### Common plugin combinations
 
 - Dedup + Enrich + Remove
