@@ -10,6 +10,8 @@ from loguru import logger
 
 from ..interfaces import BufferComponentInterface
 from ..rag.retrieve.buffer import BufferRetrieval
+from ..utils.global_config_manager import get_global_config_manager
+from .plugins import build_plugins_from_config, BufferPlugin
 
 
 class QueryBuffer(BufferComponentInterface):
@@ -80,6 +82,15 @@ class QueryBuffer(BufferComponentInterface):
         )
 
         logger.info(f"QueryBuffer: Initialized with max_size={max_size}, default_sort={default_sort_by}, rerank_enabled={rerank_handler is not None}")
+
+        # Load buffer plugins from config if available
+        self._plugins: List[BufferPlugin] = []
+        gcm = get_global_config_manager()
+        if gcm.is_initialized():
+            bp_cfg = gcm.get_section("buffer_plugins")
+            self._plugins = build_plugins_from_config(bp_cfg)
+            if self._plugins:
+                logger.info(f"QueryBuffer: Loaded {len(self._plugins)} buffer plugins")
 
     def set_hybrid_buffer(self, hybrid_buffer):
         """Set the HybridBuffer instance for queries.
@@ -184,6 +195,21 @@ class QueryBuffer(BufferComponentInterface):
         3. Otherwise, query storage to supplement
         4. Apply smart result merging
         """
+        # Plugin context
+        plugin_ctx = {
+            "query_text": query_text,
+            "top_k": top_k,
+            "sort_by": sort_by,
+            "order": order,
+        }
+        # Run before_retrieve hooks
+        for p in self._plugins:
+            try:
+                if hasattr(p, "before_retrieve"):
+                    p.before_retrieve(plugin_ctx)
+            except Exception:
+                pass
+
         # Step 1: Query Buffer first (fastest path)
         buffer_results = await self.buffer_retrieval.retrieve(
             query=query_text,
@@ -193,6 +219,14 @@ class QueryBuffer(BufferComponentInterface):
             hybrid_buffer=hybrid_buffer or self.hybrid_buffer,
             round_buffer=self.round_buffer
         )
+
+        # Run after_retrieve hooks
+        for p in self._plugins:
+            try:
+                if hasattr(p, "after_retrieve"):
+                    buffer_results = p.after_retrieve(buffer_results, plugin_ctx) or buffer_results
+            except Exception:
+                pass
 
         logger.info(f"QueryBuffer: Got {len(buffer_results)} results from buffers")
 
@@ -211,6 +245,14 @@ class QueryBuffer(BufferComponentInterface):
             final_results = await self._process_hybrid_results(
                 buffer_results, query_text, top_k, sort_by, order, use_rerank
             )
+
+        # Run after_merge hooks
+        for p in self._plugins:
+            try:
+                if hasattr(p, "after_merge"):
+                    final_results = p.after_merge(final_results, plugin_ctx) or final_results
+            except Exception:
+                pass
 
         return final_results
 

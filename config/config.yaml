@@ -19,6 +19,7 @@ defaults:
   - storage: default
   - gateway: pipeline
   - guardrail: default
+  - buffer_plugins: pipeline
   - _self_
 
 # All detailed configurations are loaded from subdirectories

@@ -1,0 +1,14 @@
+# Buffer plugins pipeline configuration
+# Define lightweight plugins that hook into QueryBuffer lifecycle.
+
+plugins:
+  - name: rag_annotator
+    enabled: false
+    params:
+      source: buffer
+  - name: score_clip
+    enabled: false
+    params:
+      min: 0.0
+      max: 1.0
+
