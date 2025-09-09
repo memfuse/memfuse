@@ -194,6 +194,43 @@ API Endpoint → Gateway → Service (Buffer/Memory) → Database
 
 ## Future Extensibility
 
+## Outbound filters and guardrails (optional)
+
+Gateway supports a lightweight, config-driven outbound filtering stage to mask or annotate response content without changing service logic.
+
+### Built-in filters
+- max_length: Truncate `result.content` beyond a limit and set `metadata.length_truncated=true`.
+- sensitive_word / sensitive_words: Mask configured words in `result.content` and set `metadata.sensitive_hit=true`.
+
+### Configuration example
+
+```yaml
+gateway:
+  pipeline:
+    inbound: []
+    outbound:
+      - name: max_length
+        enabled: true
+      - name: sensitive_word
+        enabled: true
+
+guardrail:
+  length:
+    enabled: true
+    max_content_length: 120
+    suffix: "..."
+  sensitive:
+    enabled: true
+    words: ["forbidden", "secret"]
+    mask_token: "[SENSITIVE]"
+    case_insensitive: true
+```
+
+Notes:
+- Filters are ordered; max_length runs before sensitive_word in this example.
+- Both filters are no-ops unless corresponding `guardrail.*.enabled` is true.
+- Additional filter behaviors may be added incrementally (e.g., metadata recursion, different actions).
+
 The Gateway architecture is designed to easily accommodate future requirements:
 
 1. **New Metadata Fields**: Add new processors to the pipeline

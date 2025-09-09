@@ -107,6 +107,23 @@ Behavior:
 - Session path: storage part times out → return Hybrid results only (still sorted/limited)
 - No exception propagated; logs contain a warning
 
+### Optional retry (transient errors)
+
+For transient failures you can enable a minimal retry with fixed backoff. Timeouts apply per-attempt.
+
+```yaml
+buffer:
+  retrieval_retry:
+    enabled: true
+    max_attempts: 3        # total attempts
+    backoff_ms: 5          # sleep between attempts
+```
+
+Notes:
+
+- Retry only triggers on exceptions (including timeouts); success returns immediately.
+- Safe default is disabled (no retries).
+
 ### Common plugin combinations
 
 - Dedup + Enrich + Remove
