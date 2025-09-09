@@ -124,55 +124,55 @@ class MemoryApiGateway(GatewayInterface):
                 tracer.add_request_attributes(span, context, request_data)
 
                 # Inbound filters (pre-routing)
-            for flt in self.inbound_filters:
-                try:
-                    request_data = flt.apply(request_data, context)
-                except Exception as e:
-                    logger.warning(f"Inbound filter {type(flt).__name__} failed: {e}")
+                for flt in self.inbound_filters:
+                    try:
+                        request_data = flt.apply(request_data, context)
+                    except Exception as e:
+                        logger.warning(f"Inbound filter {type(flt).__name__} failed: {e}")
 
-            # Add gateway marker to track processing
-            request_data['_gateway_entry'] = True
+                # Add gateway marker to track processing
+                request_data['_gateway_entry'] = True
 
-            # Minimal request validation via Guardrail (after inbound normalization)
-            if hasattr(self.guardrail, "validate_request"):
-                if not self.guardrail.validate_request(request_data, context):
-                    return self._create_error_response("Request validation failed")
+                # Minimal request validation via Guardrail (after inbound normalization)
+                if hasattr(self.guardrail, "validate_request"):
+                    if not self.guardrail.validate_request(request_data, context):
+                        return self._create_error_response("Request validation failed")
 
-            # Enrich context with database information
-            context = await self._enrich_context(context)
+                # Enrich context with database information
+                context = await self._enrich_context(context)
 
-            logger.info(f"Processing request for user {context.user_id}, operation: {operation_type}")
+                logger.info(f"Processing request for user {context.user_id}, operation: {operation_type}")
 
-            # Step 2: Route request to appropriate service
-            routing_decision = self.router.route_request(context)
-            logger.info(f"Routing to {routing_decision.service_type}")
+                # Step 2: Route request to appropriate service
+                routing_decision = self.router.route_request(context)
+                logger.info(f"Routing to {routing_decision.service_type}")
 
-            # Step 3: Call appropriate service
-            service_response = await self._call_service(
-                routing_decision.service_type,
-                request_data,
-                routing_decision.service_params
-            )
+                # Step 3: Call appropriate service
+                service_response = await self._call_service(
+                    routing_decision.service_type,
+                    request_data,
+                    routing_decision.service_params
+                )
 
-            # Step 4: Transform response
-            transformed_response = await self._transform_response(
-                service_response,
-                context,
-                routing_decision,
-                request_data
-            )
+                # Step 4: Transform response
+                transformed_response = await self._transform_response(
+                    service_response,
+                    context,
+                    routing_decision,
+                    request_data
+                )
 
-            # Outbound filters (post-transformation, pre-guardrail)
-            for flt in self.outbound_filters:
-                try:
-                    transformed_response = flt.apply(transformed_response, context)
-                except Exception as e:
-                    logger.warning(f"Outbound filter {type(flt).__name__} failed: {e}")
+                # Outbound filters (post-transformation, pre-guardrail)
+                for flt in self.outbound_filters:
+                    try:
+                        transformed_response = flt.apply(transformed_response, context)
+                    except Exception as e:
+                        logger.warning(f"Outbound filter {type(flt).__name__} failed: {e}")
 
-            # Step 5: Apply guardrails
-            if not self.guardrail.validate_response(transformed_response, context):
-                logger.error("Response failed validation")
-                return self._create_error_response("Response validation failed")
+                # Step 5: Apply guardrails
+                if not self.guardrail.validate_response(transformed_response, context):
+                    logger.error("Response failed validation")
+                    return self._create_error_response("Response validation failed")
 
                 # Step 6: Audit response
                 self.guardrail.audit_response(transformed_response, context)

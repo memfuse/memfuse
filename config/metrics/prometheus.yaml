@@ -1,0 +1,261 @@
+# =============================================================================
+# MEMFUSE PROMETHEUS METRICS CONFIGURATION
+# =============================================================================
+
+metrics:
+  # Enable/disable metrics collection
+  enabled: false  # Disabled by default, enable for production monitoring
+  
+  # Metrics export configuration
+  export:
+    endpoint: "/metrics"          # Metrics endpoint path
+    port: 8001                   # Metrics server port (separate from main API)
+    host: "0.0.0.0"             # Bind address
+    enable_auth: false           # Enable authentication for metrics endpoint
+    auth_token: ""               # Bearer token for metrics access
+  
+  # Metric collection settings
+  collection:
+    # Request/response metrics
+    requests:
+      enabled: true
+      track_user_id: true        # Include user_id in labels (privacy consideration)
+      track_session_id: false    # Include session_id in labels
+      track_operation: true      # Track operation types
+      track_status: true         # Track success/failure status
+    
+    # Memory layer metrics
+    memory:
+      enabled: true
+      track_layer_operations: true
+      track_record_counts: true
+      track_user_isolation: true
+      update_interval: 60        # Update interval in seconds
+    
+    # Gateway filter metrics
+    filters:
+      enabled: true
+      track_execution_time: true
+      track_violations: true
+      track_cache_performance: true
+      detailed_filter_stats: false  # Detailed per-filter metrics
+    
+    # RAG system metrics
+    rag:
+      enabled: true
+      track_retrieval_time: true
+      track_result_counts: true
+      track_store_performance: true
+      track_embedding_operations: false
+    
+    # Cache metrics
+    cache:
+      enabled: true
+      track_hit_rates: true
+      track_size_metrics: true
+      track_eviction_stats: false
+    
+    # Error tracking
+    errors:
+      enabled: true
+      track_error_types: true
+      track_component_errors: true
+      track_severity_levels: true
+    
+    # System resource metrics
+    system:
+      enabled: true
+      track_active_sessions: true
+      track_buffer_sizes: true
+      track_memory_usage: false    # OS-level memory tracking
+      track_cpu_usage: false       # OS-level CPU tracking
+    
+    # Semantic validation metrics
+    semantic:
+      enabled: false  # Advanced feature
+      track_validation_operations: true
+      track_similarity_scores: true
+      track_violation_types: true
+
+  # Metric retention and aggregation
+  retention:
+    # Histogram bucket configuration
+    request_duration_buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+    filter_duration_buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5]
+    rag_retrieval_buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0]
+    result_count_buckets: [1, 5, 10, 25, 50, 100, 250, 500]
+    similarity_score_buckets: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    
+    # Metric cleanup
+    cleanup_interval: 3600       # Cleanup old metrics every hour
+    max_label_combinations: 10000 # Prevent label explosion
+  
+  # Label configuration
+  labels:
+    # Global labels added to all metrics
+    global:
+      service: "memfuse"
+      version: "1.0.0"
+      environment: "production"
+    
+    # Dynamic labels (computed at runtime)
+    dynamic:
+      instance_id: true          # Add unique instance identifier
+      deployment_id: false       # Add deployment identifier
+      region: false              # Add geographic region
+    
+    # Privacy settings
+    privacy:
+      hash_user_ids: true        # Hash user IDs for privacy
+      exclude_sensitive_labels: true
+      max_label_length: 100      # Truncate long labels
+
+  # Performance settings
+  performance:
+    # Metric collection performance
+    async_collection: true       # Collect metrics asynchronously
+    batch_updates: true          # Batch metric updates
+    batch_size: 100             # Metrics per batch
+    batch_interval: 1.0         # Batch interval in seconds
+    
+    # Memory management
+    max_memory_mb: 100          # Maximum memory for metrics
+    gc_interval: 300            # Garbage collection interval
+    
+    # Error handling
+    fail_silently: true         # Don't crash on metric errors
+    log_errors: true            # Log metric collection errors
+    error_sample_rate: 0.1      # Sample rate for error logging
+
+# =============================================================================
+# ALERTING RULES
+# =============================================================================
+
+alerting:
+  enabled: false  # Disabled by default
+  
+  # Alert thresholds
+  thresholds:
+    error_rate: 0.05            # Alert if error rate > 5%
+    response_time_p95: 2.0      # Alert if 95th percentile > 2s
+    cache_hit_rate: 0.8         # Alert if cache hit rate < 80%
+    memory_usage: 0.9           # Alert if memory usage > 90%
+    filter_violation_rate: 0.1  # Alert if filter violations > 10%
+  
+  # Alert destinations
+  destinations:
+    webhook: ""                 # Webhook URL for alerts
+    email: []                   # Email addresses for alerts
+    slack: ""                   # Slack webhook URL
+
+# =============================================================================
+# DASHBOARD CONFIGURATION
+# =============================================================================
+
+dashboard:
+  enabled: false
+  
+  # Grafana integration
+  grafana:
+    enabled: false
+    url: "http://localhost:3000"
+    api_key: ""
+    dashboard_uid: "memfuse-main"
+  
+  # Custom dashboard panels
+  panels:
+    - name: "Request Rate"
+      type: "graph"
+      query: "rate(memfuse_requests_total[5m])"
+      
+    - name: "Response Time"
+      type: "graph"
+      query: "histogram_quantile(0.95, memfuse_request_duration_seconds)"
+      
+    - name: "Error Rate"
+      type: "singlestat"
+      query: "rate(memfuse_errors_total[5m])"
+      
+    - name: "Cache Hit Rate"
+      type: "singlestat"
+      query: "memfuse_cache_hit_rate"
+      
+    - name: "Active Sessions"
+      type: "singlestat"
+      query: "memfuse_active_sessions"
+
+# =============================================================================
+# ENVIRONMENT-SPECIFIC OVERRIDES
+# =============================================================================
+
+# Development environment
+development:
+  metrics:
+    enabled: true
+    export:
+      port: 8001
+      enable_auth: false
+    collection:
+      requests:
+        track_user_id: false     # Don't track user IDs in dev
+      system:
+        track_memory_usage: true # Enable detailed tracking in dev
+        track_cpu_usage: true
+    performance:
+      fail_silently: false      # Crash on errors in dev for debugging
+      log_errors: true
+    labels:
+      global:
+        environment: "development"
+
+# Testing environment
+testing:
+  metrics:
+    enabled: true
+    export:
+      port: 8002
+    collection:
+      requests:
+        track_user_id: false
+        track_session_id: false
+      memory:
+        update_interval: 10      # More frequent updates in tests
+    performance:
+      async_collection: false   # Synchronous for predictable tests
+      batch_updates: false
+    labels:
+      global:
+        environment: "testing"
+
+# Production environment
+production:
+  metrics:
+    enabled: true
+    export:
+      port: 8001
+      enable_auth: true
+      auth_token: "${METRICS_AUTH_TOKEN}"
+    collection:
+      requests:
+        track_user_id: true
+      filters:
+        detailed_filter_stats: true
+      semantic:
+        enabled: true
+    alerting:
+      enabled: true
+      destinations:
+        webhook: "${ALERT_WEBHOOK_URL}"
+        email: ["ops@company.com"]
+    dashboard:
+      enabled: true
+      grafana:
+        enabled: true
+        url: "${GRAFANA_URL}"
+        api_key: "${GRAFANA_API_KEY}"
+    labels:
+      global:
+        environment: "production"
+      privacy:
+        hash_user_ids: true
+        exclude_sensitive_labels: true

@@ -1,0 +1,186 @@
+# =============================================================================
+# MEMFUSE SEMANTIC VALIDATION CONFIGURATION
+# =============================================================================
+
+semantic_validation:
+  # Enable/disable semantic validation
+  enabled: false  # Advanced feature, disabled by default
+  
+  # Embedding model configuration
+  model:
+    name: "all-MiniLM-L6-v2"
+    cache_embeddings: true
+    max_cache_size: 10000
+    cache_ttl: 3600  # 1 hour
+  
+  # Similarity detection thresholds
+  similarity_threshold: 0.85    # Threshold for duplicate content detection
+  relevance_threshold: 0.3      # Minimum contextual relevance score
+  coherence_threshold: 0.4      # Minimum content coherence score
+  conflict_threshold: 0.1       # Threshold for semantic conflict detection
+  
+  # Validation modes
+  modes:
+    similarity_check: true      # Check for similar/duplicate content
+    relevance_check: true       # Check contextual relevance
+    coherence_check: true       # Check internal coherence
+    conflict_detection: true    # Detect semantic conflicts
+    topic_alignment: false      # Check alignment with expected topics
+  
+  # Reference patterns for similarity comparison
+  reference_patterns:
+    - "This is a test message"
+    - "Hello world example"
+    - "Sample placeholder content"
+    - "Lorem ipsum dolor sit amet"
+    - "Default template response"
+  
+  # Topic categories for relevance scoring
+  topic_categories:
+    technical:
+      keywords: ["code", "programming", "software", "algorithm", "database"]
+      weight: 1.0
+    business:
+      keywords: ["revenue", "profit", "market", "customer", "strategy"]
+      weight: 1.0
+    academic:
+      keywords: ["research", "study", "analysis", "theory", "methodology"]
+      weight: 1.0
+    general:
+      keywords: ["information", "help", "question", "answer", "explain"]
+      weight: 0.8
+  
+  # Semantic conflict detection
+  conflict_detection:
+    enabled: true
+    opposing_keyword_pairs:
+      - ["yes", "no"]
+      - ["true", "false"]
+      - ["correct", "incorrect"]
+      - ["right", "wrong"]
+      - ["good", "bad"]
+      - ["positive", "negative"]
+      - ["increase", "decrease"]
+      - ["more", "less"]
+      - ["higher", "lower"]
+      - ["accept", "reject"]
+      - ["approve", "deny"]
+      - ["enable", "disable"]
+      - ["start", "stop"]
+      - ["begin", "end"]
+      - ["create", "delete"]
+    
+    # Advanced conflict patterns (regex-based)
+    conflict_patterns:
+      - pattern: "not\\s+(true|correct|right)"
+        opposite: "(true|correct|right)"
+      - pattern: "never\\s+(works|happens|occurs)"
+        opposite: "(always|often|frequently)\\s+(works|happens|occurs)"
+  
+  # Performance settings
+  performance:
+    max_content_length: 10000   # Maximum content length to analyze
+    max_segments: 50            # Maximum number of segments to analyze
+    timeout_seconds: 5.0        # Timeout for semantic analysis
+    batch_size: 10              # Batch size for embedding generation
+    
+  # Caching configuration
+  cache:
+    enabled: true
+    embedding_cache_size: 5000
+    result_cache_size: 1000
+    cache_ttl: 1800  # 30 minutes
+  
+  # Actions for violations
+  actions:
+    similarity_violation: "flag"     # flag, drop, rewrite
+    relevance_violation: "flag"      # flag, drop, enhance
+    coherence_violation: "flag"      # flag, drop, restructure
+    conflict_violation: "flag"       # flag, drop, resolve
+  
+  # Confidence thresholds for actions
+  confidence_thresholds:
+    high_confidence: 0.9    # Take action immediately
+    medium_confidence: 0.7  # Flag for review
+    low_confidence: 0.5     # Log but don't act
+
+# =============================================================================
+# ADVANCED FEATURES
+# =============================================================================
+
+advanced:
+  # Multi-language support
+  multilingual:
+    enabled: false
+    supported_languages: ["en", "es", "fr", "de", "zh"]
+    translation_service: "none"  # none, google, azure, aws
+  
+  # Custom embedding models
+  custom_models:
+    enabled: false
+    models: []
+    # Example:
+    # - name: "custom-bert"
+    #   path: "/path/to/model"
+    #   dimension: 768
+  
+  # Machine learning enhancements
+  ml_enhancements:
+    enabled: false
+    toxicity_model: "default"
+    sentiment_analysis: false
+    emotion_detection: false
+    intent_classification: false
+  
+  # Integration with external services
+  external_services:
+    enabled: false
+    openai_moderation: false
+    perspective_api: false
+    custom_apis: []
+
+# =============================================================================
+# ENVIRONMENT-SPECIFIC OVERRIDES
+# =============================================================================
+
+# Development environment
+development:
+  semantic_validation:
+    enabled: true
+    similarity_threshold: 0.7  # More sensitive in dev
+    performance:
+      timeout_seconds: 10.0    # Longer timeout for debugging
+    actions:
+      similarity_violation: "flag"
+      relevance_violation: "flag"
+      coherence_violation: "flag"
+      conflict_violation: "flag"
+
+# Testing environment
+testing:
+  semantic_validation:
+    enabled: true
+    reference_patterns:
+      - "test content"
+      - "sample data"
+    performance:
+      timeout_seconds: 2.0     # Faster timeout for tests
+      max_content_length: 1000 # Smaller content for tests
+    cache:
+      enabled: false           # Disable caching in tests
+
+# Production environment
+production:
+  semantic_validation:
+    enabled: true
+    similarity_threshold: 0.9  # Less sensitive in production
+    performance:
+      timeout_seconds: 3.0     # Strict timeout in production
+    actions:
+      similarity_violation: "drop"    # More aggressive in production
+      conflict_violation: "drop"
+    advanced:
+      ml_enhancements:
+        enabled: true
+        toxicity_model: "production"
+        sentiment_analysis: true

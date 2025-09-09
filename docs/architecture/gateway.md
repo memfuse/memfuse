@@ -4,6 +4,16 @@
 
 This document summarizes the implementation of the new Gateway/Processor architecture for MemFuse API schema updates. The implementation addresses the requirements to update interface schemas and response formats while providing a scalable, extensible architecture.
 
+## Recent Updates (2025-09-09)
+
+### Advanced Features Completed
+
+1. **Bidirectional Filter Pipeline**: Complete inbound and outbound filter system with configuration-driven loading
+2. **Semantic Validation**: Advanced embedding-based content validation with similarity analysis and conflict detection
+3. **Performance Caching**: Comprehensive caching system for filter operations, regex patterns, and content validation
+4. **Prometheus Metrics**: Full observability with detailed metrics for monitoring filter performance and system health
+5. **Enhanced Configuration**: Complete configuration system with environment-specific overrides and guardrail integration
+
 ## Requirements Addressed
 
 ### Request Schema Updates
@@ -194,13 +204,109 @@ API Endpoint → Gateway → Service (Buffer/Memory) → Database
 
 ## Future Extensibility
 
-## Outbound filters and guardrails (optional)
+## Bidirectional Filter Pipeline
 
-Gateway supports a lightweight, config-driven outbound filtering stage to mask or annotate response content without changing service logic. See also: docs/architecture/outbound_filters.md for detailed examples and best practices.
+Gateway supports a comprehensive, config-driven bidirectional filtering system that processes both incoming requests (inbound filters) and outgoing responses (outbound filters). This provides flexible content processing without changing core service logic.
 
-### Built-in filters
-- max_length: Truncate `result.content` beyond a limit and set `metadata.length_truncated=true`.
-- sensitive_word / sensitive_words: Mask configured words in `result.content` and set `metadata.sensitive_hit=true`.
+### Filter Execution Flow
+
+```text
+Client Request → Inbound Filters → Service Processing → Outbound Filters → Guardrail Validation → Client Response
+```
+
+### Inbound Filters (Request Processing)
+
+Applied to incoming requests before service processing:
+
+- **Request Validator**: Validates request structure and required fields
+- **Rate Limiter**: Enforces request rate limits per user/session
+- **Input Sanitizer**: Cleans and normalizes input content
+- **Content Filter**: Detects and handles sensitive content in requests
+
+### Outbound Filters (Response Processing)
+
+Applied to responses after service processing but before guardrail validation:
+
+- **Field Remover**: Removes internal/debug fields from responses
+- **Max Length**: Truncates content beyond configured limits
+- **Sensitive Word**: Masks or removes sensitive content
+- **Composite Content**: Advanced multi-dimensional content validation
+- **Metadata Enricher**: Adds processing metadata to responses
+
+### Advanced Features
+
+#### Semantic Validation
+- **Similarity Detection**: Identifies duplicate or highly similar content
+- **Relevance Scoring**: Validates contextual relevance of responses
+- **Coherence Analysis**: Checks internal consistency of content
+- **Conflict Detection**: Identifies contradictory statements
+
+#### Performance Caching
+- **Regex Pattern Cache**: Caches compiled regular expressions
+- **Content Hash Cache**: Caches validation results for identical content
+- **Quality Score Cache**: Caches expensive quality assessments
+
+#### Observability
+- **Prometheus Metrics**: Comprehensive metrics for filter performance
+- **Distributed Tracing**: OpenTelemetry integration for request tracking
+- **Debug Information**: Optional detailed timing and execution stats
+
+### Configuration
+
+Filters are configured via `config/gateway/pipeline.yaml`:
+
+```yaml
+gateway:
+  inbound_filters:
+    - name: "request_validator"
+      enabled: true
+      params:
+        max_query_length: 10000
+        required_fields: ["query"]
+
+    - name: "rate_limiter"
+      enabled: true
+      params:
+        requests_per_minute: 100
+        per_user: true
+
+  outbound_filters:
+    - name: "sensitive_word"
+      enabled: true
+      params:
+        words: ["password", "secret", "token"]
+        action: "mask"
+        mask_token: "[REDACTED]"
+
+    - name: "max_length"
+      enabled: true
+      params:
+        max_content_length: 5000
+        action: "truncate"
+```
+
+### Environment-Specific Configuration
+
+Different environments can have different filter configurations:
+
+```yaml
+# Development - more permissive
+development:
+  gateway:
+    inbound_filters:
+      - name: "rate_limiter"
+        enabled: false  # No rate limiting in dev
+
+# Production - more restrictive
+production:
+  gateway:
+    outbound_filters:
+      - name: "sensitive_word"
+        params:
+          action: "drop"  # More aggressive in production
+```
+
+See also: `docs/architecture/outbound_filters.md` for detailed examples and best practices.
 
 ### Configuration example
 

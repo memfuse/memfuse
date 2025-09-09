@@ -1,15 +1,179 @@
-# Guardrail defaults (minimal)
-enabled: false
-thresholds:
-  toxicity: 0.9
-pii:
-  enabled: false
-output:
-  enabled: false
-  remove_fields:
-    - metadata.level
-    - metadata.retrieval
-    - metadata.source
-quota:
-  enabled: false
+# =============================================================================
+# MEMFUSE GUARDRAIL DEFAULT CONFIGURATION
+# =============================================================================
+
+# Main guardrail system configuration
+guardrail:
+  # Enable/disable the entire guardrail system
+  enabled: true
+
+  # Global thresholds for various checks
+  thresholds:
+    toxicity: 0.9        # Toxicity detection threshold (0-1)
+    pii_confidence: 0.8  # PII detection confidence threshold
+    quality_score: 0.3   # Minimum content quality score
+    similarity: 0.95     # Duplicate content similarity threshold
+
+  # Content validation settings
+  validation:
+    max_content_length: 50000    # Maximum content length in characters
+    max_query_length: 10000      # Maximum query length in characters
+    max_metadata_depth: 10       # Maximum nested metadata depth
+    required_fields: ["content"] # Required fields in requests
+
+  # Rate limiting and quota management
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 100
+    burst_size: 20
+    per_user: true
+    per_session: false
+
+  # PII (Personally Identifiable Information) detection
+  pii:
+    enabled: true
+    detection_types:
+      - email
+      - phone
+      - ssn
+      - credit_card
+      - ip_address
+    action: "mask"  # mask, flag, drop
+    mask_token: "[PII_REDACTED]"
+
+  # Toxicity and content safety
+  toxicity:
+    enabled: true
+    check_input: true
+    check_output: true
+    action: "flag"  # flag, drop, rewrite
+    categories:
+      - hate_speech
+      - harassment
+      - violence
+      - self_harm
+      - sexual_content
+
+  # Output filtering and field management
+  output:
+    enabled: true
+    remove_fields:
+      - metadata.internal_score
+      - metadata.debug_info
+      - metadata.retrieval_time
+      - metadata.processing_details
+    keep_essential: true
+    add_safety_metadata: true
+
+  # Content quality assessment
+  quality:
+    enabled: false  # Advanced feature, disabled by default
+    min_score: 0.3
+    dimensions:
+      completeness: 0.3
+      relevance: 0.3
+      clarity: 0.2
+      accuracy: 0.2
+    action: "flag"  # flag, drop, enhance
+
+  # Quota and usage limits
+  quota:
+    enabled: true
+    daily_limit: 10000      # Daily request limit per user
+    monthly_limit: 300000   # Monthly request limit per user
+    storage_limit_mb: 1000  # Storage limit per user in MB
+    action: "throttle"      # throttle, block, warn
+
+  # Sensitive word filtering (global list)
+  sensitive_words:
+    enabled: true
+    words:
+      - "password"
+      - "secret"
+      - "token"
+      - "api_key"
+      - "private_key"
+      - "access_token"
+      - "refresh_token"
+      - "session_id"
+      - "auth_token"
+    case_insensitive: true
+    action: "mask"  # mask, flag, drop
+    mask_token: "[SENSITIVE]"
+
+  # Advanced content filtering
+  advanced_filtering:
+    enabled: false  # Enterprise feature
+    ml_models:
+      toxicity_model: "default"
+      pii_model: "default"
+      quality_model: "default"
+    custom_rules: []
+    whitelist_patterns: []
+    blacklist_patterns: []
+
+# =============================================================================
+# AUDIT AND LOGGING
+# =============================================================================
+
+audit:
+  enabled: true
+  log_violations: true
+  log_filtered_content: false  # Security risk if enabled
+  retention_days: 90
+  include_metadata: true
+
+# =============================================================================
+# PERFORMANCE SETTINGS
+# =============================================================================
+
+performance:
+  cache_enabled: true
+  cache_ttl: 3600  # 1 hour
+  max_concurrent_checks: 10
+  timeout_seconds: 5.0
+
+# =============================================================================
+# ENVIRONMENT-SPECIFIC OVERRIDES
+# =============================================================================
+
+# Development environment
+development:
+  guardrail:
+    enabled: true
+    thresholds:
+      toxicity: 0.5  # More sensitive in dev
+    pii:
+      enabled: false  # Disable PII detection in dev
+    toxicity:
+      enabled: false  # Disable toxicity check in dev
+    quota:
+      enabled: false  # No quota limits in dev
+    audit:
+      log_violations: true
+      log_filtered_content: true  # OK in dev environment
+
+# Testing environment
+testing:
+  guardrail:
+    enabled: true
+    rate_limiting:
+      enabled: false  # No rate limiting in tests
+    quota:
+      enabled: false  # No quota limits in tests
+    performance:
+      timeout_seconds: 1.0  # Faster timeout for tests
+
+# Production environment
+production:
+  guardrail:
+    enabled: true
+    thresholds:
+      toxicity: 0.95  # Less sensitive in production
+    advanced_filtering:
+      enabled: true  # Enable advanced features in production
+    audit:
+      log_filtered_content: false  # Never log filtered content in production
+    performance:
+      max_concurrent_checks: 20  # Higher concurrency in production
 

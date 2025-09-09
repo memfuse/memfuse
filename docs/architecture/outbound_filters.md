@@ -2,6 +2,15 @@
 
 This page documents outbound filters that run after response transformation and before final guardrail validation. They are intended for masking, truncation, or light annotations without modifying core service logic.
 
+## Recent Updates (2025-09-09)
+
+### Advanced Features Added
+
+1. **Semantic Validation**: Advanced semantic content validation using embedding-based similarity analysis
+2. **Performance Caching**: Comprehensive caching system for filter operations and content validation
+3. **Prometheus Metrics**: Full metrics integration for monitoring filter performance and violations
+4. **Enhanced Configuration**: Complete configuration system with environment-specific overrides
+
 ## Execution order
 
 Outbound filters execute in the configured order after the Gateway transforms the response and before Guardrail.validate_response/audit.

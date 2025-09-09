@@ -1,6 +1,167 @@
-# Gateway filter pipeline (inbound/outbound)
-# These entries are placeholders; real loading/registration will follow.
+# =============================================================================
+# MEMFUSE GATEWAY PIPELINE CONFIGURATION
+# =============================================================================
 
+# Gateway pipeline configuration for inbound and outbound filters
+# This file defines the filter chain that processes requests and responses
+# through the MemFuse Gateway layer.
+
+gateway:
+  # Enable/disable the entire gateway pipeline
+  enabled: true
+
+  # Request processing timeout (seconds)
+  request_timeout: 30.0
+
+  # Maximum request size (bytes)
+  max_request_size: 10485760  # 10MB
+
+  # Inbound filters (applied to incoming requests)
+  inbound_filters:
+    # Request validation and preprocessing
+    - name: "request_validator"
+      enabled: true
+      params:
+        max_query_length: 10000
+        required_fields: ["query"]
+        validate_user_context: true
+
+    # Rate limiting (applied before processing)
+    - name: "rate_limiter"
+      enabled: true
+      params:
+        requests_per_minute: 100
+        burst_size: 20
+        per_user: true
+
+    # Input sanitization
+    - name: "input_sanitizer"
+      enabled: true
+      params:
+        strip_html: true
+        normalize_whitespace: true
+        max_line_length: 1000
+
+    # Content filtering (sensitive content detection)
+    - name: "content_filter"
+      enabled: true
+      params:
+        check_pii: true
+        check_profanity: false
+        check_malicious_patterns: true
+
+  # Outbound filters (applied to responses before returning)
+  outbound_filters:
+    # Response field management
+    - name: "field_remover"
+      enabled: true
+      params:
+        remove_fields: ["internal_score", "debug_info"]
+        keep_metadata: true
+
+    # Content length limiting
+    - name: "max_length"
+      enabled: true
+      params:
+        max_content_length: 5000
+        action: "truncate"  # truncate, drop, flag
+        add_truncation_marker: true
+
+    # Sensitive word filtering
+    - name: "sensitive_word"
+      enabled: true
+      params:
+        words: ["password", "secret", "token", "api_key"]
+        case_insensitive: true
+        action: "mask"  # mask, flag, drop
+        mask_token: "[REDACTED]"
+        recurse_metadata: false
+
+    # Enhanced sensitive word filtering
+    - name: "config_sensitive_word"
+      enabled: false  # Disabled by default, enable for advanced filtering
+      params:
+        words: []  # Will be loaded from guardrail config
+        case_insensitive: true
+        action: "mask"  # mask, flag, drop
+        mask_token: "[FILTERED]"
+        recurse_metadata: false
+
+    # Composite content filtering (advanced)
+    - name: "composite_content"
+      enabled: false  # Advanced feature, disabled by default
+      params:
+        strategy: "lenient"  # lenient, strict, custom
+        fail_fast: false
+        length_validation:
+          enabled: true
+          min_length: 10
+          max_length: 10000
+          action: "flag"
+        semantic_validation:
+          enabled: false
+          required_keywords: []
+          forbidden_patterns: []
+        structural_validation:
+          enabled: false
+          required_fields: []
+          max_metadata_depth: 5
+
+    # Content quality filtering
+    - name: "content_quality"
+      enabled: false  # Advanced feature, disabled by default
+      params:
+        enabled: true
+        min_quality_score: 0.3
+        action: "flag"  # flag, drop
+        weights:
+          completeness: 0.3
+          relevance: 0.3
+          clarity: 0.2
+          accuracy: 0.2
+
+    # Response metadata enrichment
+    - name: "metadata_enricher"
+      enabled: true
+      params:
+        add_timestamp: true
+        add_processing_time: false
+        add_source_info: true
+        add_quality_metrics: false
+
+# =============================================================================
+# FILTER PERFORMANCE CACHING
+# =============================================================================
+
+filter_cache:
+  enabled: true
+
+  # Regex pattern cache for sensitive word filtering
+  regex:
+    max_patterns: 1000
+    ttl: 3600  # 1 hour
+
+  # Content hash-based result cache
+  content:
+    max_entries: 5000
+    ttl: 1800  # 30 minutes
+
+  # Quality score cache
+  quality:
+    max_entries: 10000
+    ttl: 3600  # 1 hour
+
+# =============================================================================
+# DEBUG AND OBSERVABILITY
+# =============================================================================
+
+debug:
+  enabled: false
+  include_durations: false  # Add timing information to responses
+  include_filter_stats: false  # Add filter execution statistics
+  log_filtered_content: false  # Log content that was filtered (security risk)
+
+# Legacy format support (for backward compatibility)
 inbound:
   - name: noop_inbound
     enabled: false
