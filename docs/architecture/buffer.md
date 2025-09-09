@@ -102,7 +102,14 @@ Configuration example:
 
 ```yaml
 buffer:
-  retrieval_timeout_seconds: 0.2  # seconds
+  retrieval_timeout_seconds: 0.2  # seconds (global default)
+  retrieval_per_store:
+    VectorStore:
+      timeout_seconds: 1.0  # longer timeout for vector operations
+    KeywordStore:
+      timeout_seconds: 0.1  # faster timeout for keyword search
+      retry:
+        enabled: false      # disable retry for keyword (fast fail)
 ```
 
 Behavior:
@@ -110,6 +117,7 @@ Behavior:
 - Mixed path (buffer + storage): storage call wrapped by asyncio.wait_for; timeout → continue with buffer results only
 - Session path: storage part times out → return Hybrid results only (still sorted/limited)
 - No exception propagated; logs contain a warning
+- Per-store overrides: Use `retrieval_per_store.<ClassName>.timeout_seconds` to override global timeout for specific store classes
 
 ### Optional retry (transient errors)
 

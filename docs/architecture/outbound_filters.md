@@ -6,7 +6,7 @@ This page documents outbound filters that run after response transformation and 
 
 Outbound filters execute in the configured order after the Gateway transforms the response and before Guardrail.validate_response/audit.
 
-```
+```text
 services → gateway transform → outbound filters → guardrail.validate_response → client
 ```
 
@@ -121,9 +121,56 @@ Output (excerpt):
 }
 ```
 
+### Example C: Combined filters (order matters)
+
+Input results (excerpt):
+
+```json
+{
+  "data": {
+    "results": [
+      {"id": "1", "content": "This contains forbidden information that exceeds the limit"}
+    ]
+  }
+}
+```
+
+Config (max_length runs first, then sensitive_word):
+
+```yaml
+gateway:
+  pipeline:
+    outbound:
+      - name: max_length
+        enabled: true
+      - name: sensitive_word
+        enabled: true
+
+guardrail:
+  length: { enabled: true, max_content_length: 25, suffix: "..." }
+  sensitive: { enabled: true, words: ["forbidden"], mask_token: "[MASKED]" }
+```
+
+Output (excerpt):
+
+```json
+{
+  "data": {
+    "results": [
+      {
+        "id": "1",
+        "content": "This contains [MASKED]...",
+        "metadata": {"length_truncated": true, "sensitive_hit": true}
+      }
+    ]
+  }
+}
+```
+
+Note: The content was first truncated to "This contains forbidden..." then masked to "This contains [MASKED]...".
+
 ## Best practices
 
 - Keep outbound filters lightweight; avoid heavy parsing of large payloads.
 - Prefer explicit configuration flags and safe defaults (disabled by default).
 - Add new filters as separate classes and register them in `gateway.filters` to keep responsibilities isolated.
-

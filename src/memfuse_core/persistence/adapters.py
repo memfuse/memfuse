@@ -19,6 +19,7 @@ class RetrievalAdapter:
 
     def __init__(self, store: StorePort, timeout_seconds: Optional[float] = None) -> None:
         self.store = store
+        self.store_class_name = store.__class__.__name__
         # If not provided, try read from global config (buffer.retrieval_timeout_seconds)
         self.timeout_seconds = timeout_seconds
         # Retry config (buffer.retrieval_retry)
@@ -29,16 +30,30 @@ class RetrievalAdapter:
             gcm = get_global_config_manager()
             if gcm.is_initialized():
                 buf_cfg = gcm.get_section("buffer") or {}
-                # timeout
+                # timeout (global default, then per-store override)
                 if self.timeout_seconds is None:
                     rts = buf_cfg.get("retrieval_timeout_seconds")
                     if rts is not None:
                         self.timeout_seconds = float(rts)
-                # retries
+                # per-store timeout override
+                per_store_cfg = buf_cfg.get("retrieval_per_store", {}) or {}
+                store_cfg = per_store_cfg.get(self.store_class_name, {}) or {}
+                if "timeout_seconds" in store_cfg:
+                    self.timeout_seconds = float(store_cfg["timeout_seconds"])
+                # retries (global default, then per-store override)
                 rr = buf_cfg.get("retrieval_retry", {}) or {}
                 self.retry_enabled = bool(rr.get("enabled", False))
                 self.retry_attempts = int(rr.get("max_attempts", 1))
                 self.retry_backoff_ms = int(rr.get("backoff_ms", 0))
+                # per-store retry override
+                if "retry" in store_cfg:
+                    store_retry = store_cfg["retry"] or {}
+                    if "enabled" in store_retry:
+                        self.retry_enabled = bool(store_retry["enabled"])
+                    if "max_attempts" in store_retry:
+                        self.retry_attempts = int(store_retry["max_attempts"])
+                    if "backoff_ms" in store_retry:
+                        self.retry_backoff_ms = int(store_retry["backoff_ms"])
         except Exception:
             # Use safe defaults
             if self.timeout_seconds is None:
