@@ -409,6 +409,14 @@ def build_filters_from_config(cfg: Dict[str, Any] | None) -> Tuple[List[InboundF
         "sensitive_words": ConfigSensitiveWordFilter,
     }
 
+    # Import composite filters dynamically to avoid circular imports
+    try:
+        from .composite_filters import CompositeContentFilter, ContentQualityFilter
+        outbound_registry["composite_content"] = CompositeContentFilter
+        outbound_registry["content_quality"] = ContentQualityFilter
+    except ImportError:
+        pass
+
     # Inbound
     for item in pipeline.get("inbound", []) or []:
         if not isinstance(item, dict):

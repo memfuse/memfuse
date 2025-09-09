@@ -23,6 +23,18 @@ See execution_order.md for the full end-to-end picture.
   - Action modes: `mask` (replace with token), `flag` (mark only), `drop` (remove result).
   - Optional recursive metadata processing with `recurse_metadata: true`.
   - Sets `metadata.sensitive_hit = true` when any sensitive content is detected.
+- composite_content
+  - Advanced multi-dimensional validation combining length, semantic, and structural checks.
+  - Configurable strategies: `lenient` (flag only), `strict` (drop on any violation), `custom` (per-violation actions).
+  - Length validation with min/max constraints and configurable actions.
+  - Semantic validation with required keywords and forbidden patterns (regex support).
+  - Structural validation for required fields and metadata depth limits.
+  - Sets `metadata.composite_violations[]` with detailed violation information.
+- content_quality
+  - Content quality assessment with multi-dimensional scoring (0.0-1.0).
+  - Dimensions: completeness, relevance, clarity, accuracy with configurable weights.
+  - Actions: `flag` (mark low quality), `drop` (remove), `annotate` (prefix score).
+  - Sets `metadata.quality_score` and optionally `metadata.low_quality = true`.
 
 ## Configuration
 
@@ -37,6 +49,10 @@ gateway:
         enabled: true
       - name: sensitive_word   # alias: sensitive_words
         enabled: true
+      - name: composite_content
+        enabled: false  # optional advanced validation
+      - name: content_quality
+        enabled: false  # optional quality scoring
 
 guardrail:
   length:
@@ -50,6 +66,33 @@ guardrail:
     case_insensitive: true
     recurse_metadata: false  # default: only process content
     action: "mask"           # default: mask | flag | drop
+  composite:
+    enabled: false
+    strategy: lenient  # lenient|strict|custom
+    length:
+      min_length: 10
+      max_length: 1000
+      action: flag  # flag|truncate|drop
+    semantic:
+      required_keywords: []  # e.g., ["important", "data"]
+      forbidden_patterns: []  # regex patterns, e.g., ["forbidden", "bad.*word"]
+      action: flag
+    structural:
+      required_fields: []  # e.g., ["content", "score"]
+      max_metadata_depth: 5
+      action: flag
+    policy:
+      fail_fast: false  # stop on first violation
+      aggregate_violations: true
+  quality:
+    enabled: false
+    min_score: 0.6  # threshold for quality actions
+    action: flag  # flag|drop|annotate
+    weights:
+      completeness: 0.3
+      relevance: 0.3
+      clarity: 0.2
+      accuracy: 0.2
 ```
 
 Notes:
