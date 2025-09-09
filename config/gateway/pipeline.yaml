@@ -8,4 +8,6 @@ inbound:
 outbound:
   - name: noop_outbound
     enabled: false
+  - name: output_remove  # uses guardrail.output config
+    enabled: false
 

@@ -10,6 +10,7 @@ from ..interfaces.gateway_interface import (
     ResponseGuardrail,
     ResponseAuditor
 )
+from ..utils.global_config_manager import get_global_config_manager
 
 
 class MemoryValidator(SchemaValidator):
@@ -259,37 +260,87 @@ class MemoryGuardrail(ResponseGuardrail):
     """Main guardrail implementation for memory responses."""
 
     def __init__(self):
-        """Initialize the guardrail."""
+        """Initialize the guardrail and load config-driven settings."""
         self.validator = MemoryValidator()
         self.auditor = MemoryResponseAuditor()
-    
+        # Config-driven toggles
+        self._output_cfg: Dict[str, Any] = {}
+        self._pii_cfg: Dict[str, Any] = {}
+        self._toxicity_cfg: Dict[str, Any] = {}
+        self._quota_cfg: Dict[str, Any] = {}
+        try:
+            gcm = get_global_config_manager()
+            if gcm.is_initialized():
+                guardrail_cfg = gcm.get_section("guardrail") or {}
+                # Normalize shapes from either guardrail/default.yaml or split files
+                self._output_cfg = guardrail_cfg.get("output", guardrail_cfg.get("output_filter", {})) or {}
+                self._pii_cfg = guardrail_cfg.get("pii", {}) or {}
+                self._toxicity_cfg = guardrail_cfg.get("toxicity", guardrail_cfg.get("thresholds", {})) or {}
+                self._quota_cfg = guardrail_cfg.get("quota", {}) or {}
+        except Exception:
+            # Best-effort: keep defaults if config not available
+            pass
+
     def validate_response(self, response: Dict[str, Any], context: RequestContext) -> bool:
         """Validate response format and content."""
         schema = self.validator.get_expected_schema(context)
         errors = self.validator.validate_schema(response, schema)
-        
+
         if errors:
             logger.error(f"Response validation failed: {errors}")
             return False
-        
+
         logger.info("Response validation passed")
         return True
-    
+
+    def _remove_path(self, obj: Dict[str, Any], dotted: str) -> None:
+        parts = dotted.split('.') if dotted else []
+        if not parts:
+            return
+        cur = obj
+        for p in parts[:-1]:
+            if isinstance(cur, dict) and p in cur:
+                cur = cur[p]
+            else:
+                return
+        last = parts[-1]
+        if isinstance(cur, dict) and last in cur:
+            try:
+                del cur[last]
+            except Exception:
+                pass
+
+    def _apply_output_filters(self, response: Dict[str, Any]) -> None:
+        enabled = bool(self._output_cfg.get("enabled", False))
+        fields = list(self._output_cfg.get("remove_fields", []) or [])
+        if not enabled or not fields:
+            return
+        try:
+            results = response.get("data", {}).get("results", [])
+            for r in results:
+                for f in fields:
+                    self._remove_path(r, f)
+        except Exception as e:
+            logger.warning(f"Output filter application failed: {e}")
+
     def audit_response(self, response: Dict[str, Any], context: RequestContext) -> None:
-        """Audit response for compliance and logging."""
+        """Audit response for compliance and logging, then apply config-driven output filters."""
         # Audit metadata completeness
         metadata_issues = self.auditor.audit_metadata_completeness(response)
         if metadata_issues:
             logger.warning(f"Metadata completeness issues: {metadata_issues}")
-        
+
         # Audit field compliance
         field_issues = self.auditor.audit_field_compliance(response)
         if field_issues:
             logger.warning(f"Field compliance issues: {field_issues}")
-        
+
+        # Apply output field removal as a last step prior to logging metrics
+        self._apply_output_filters(response)
+
         # Log metrics
         self.auditor.log_response_metrics(response, context)
-        
+
         logger.info("Response audit completed")
 
 
