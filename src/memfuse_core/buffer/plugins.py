@@ -99,6 +99,81 @@ class DeduplicatePlugin:
         return unique
 
 
+class ResultEnricherPlugin:
+    """Add lightweight observability fields into result metadata.
+
+    Params:
+      stage: optional stage label (default: 'after_merge')
+      include_query_len: bool, whether to include query length in metadata
+    """
+
+    def __init__(self, **params: Any) -> None:
+        self.stage = params.get("stage", "after_merge")
+        self.include_query_len = bool(params.get("include_query_len", True))
+
+    def after_merge(self, results: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+        q = ctx.get("query_text", "") or ""
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            md = r.setdefault("metadata", {})
+            obs = md.setdefault("observability", {})
+            if isinstance(obs, dict):
+                obs.setdefault("stage", self.stage)
+                if self.include_query_len:
+                    obs.setdefault("query_len", len(q))
+        return results
+
+
+class FieldKeepOrRemovePlugin:
+    """Keep or remove configured dotted fields on each result dict.
+
+    Params:
+      keep_fields: list[str] (if provided, keep only these fields)
+      remove_fields: list[str] (fields to remove)
+    """
+
+    def __init__(self, **params: Any) -> None:
+        self.keep_fields = list(params.get("keep_fields", []) or [])
+        self.remove_fields = list(params.get("remove_fields", []) or [])
+
+    def _get_root_keys(self, dotted: str) -> str:
+        return dotted.split(".")[0] if dotted else ""
+
+    def _remove_path(self, obj: Dict[str, Any], dotted: str) -> None:
+        parts = dotted.split('.') if dotted else []
+        if not parts:
+            return
+        cur = obj
+        for p in parts[:-1]:
+            if isinstance(cur, dict) and p in cur:
+                cur = cur[p]
+            else:
+                return
+        last = parts[-1]
+        if isinstance(cur, dict) and last in cur:
+            try:
+                del cur[last]
+            except Exception:
+                pass
+
+    def after_merge(self, results: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+        processed: List[Dict[str, Any]] = []
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            item = r
+            if self.keep_fields:
+                # Keep only specified root fields
+                keep_roots = {self._get_root_keys(f) for f in self.keep_fields}
+                item = {k: v for k, v in r.items() if k in keep_roots}
+            # Apply removals (dotted)
+            for f in self.remove_fields:
+                self._remove_path(item, f)
+            processed.append(item)
+        return processed
+
+
 def build_plugins_from_config(cfg: Dict[str, Any] | None) -> List[BufferPlugin]:
     """Instantiate plugins from buffer_plugins config.
 
@@ -118,6 +193,8 @@ def build_plugins_from_config(cfg: Dict[str, Any] | None) -> List[BufferPlugin]:
         "score_clip": ScoreClipPlugin,
         "session_annotator": SessionAnnotatorPlugin,
         "deduplicate": DeduplicatePlugin,
+        "result_enricher": ResultEnricherPlugin,
+        "field_keep_or_remove": FieldKeepOrRemovePlugin,
     }
 
     created: List[BufferPlugin] = []
