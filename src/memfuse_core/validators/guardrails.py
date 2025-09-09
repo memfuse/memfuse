@@ -293,22 +293,59 @@ class MemoryGuardrail(ResponseGuardrail):
         logger.info("Response validation passed")
         return True
 
+    def validate_request(self, request: Dict[str, Any], context: RequestContext) -> bool:
+        """Minimal request validation to catch obvious issues early.
+
+        Checks:
+        - query present and is string
+        - top_k is coercible to int
+        """
+        try:
+            q = request.get("query", "")
+            if not isinstance(q, str):
+                return False
+            tk = request.get("top_k", 5)
+            _ = int(tk)
+            return True
+        except Exception:
+            return False
+
     def _remove_path(self, obj: Dict[str, Any], dotted: str) -> None:
         parts = dotted.split('.') if dotted else []
         if not parts:
             return
-        cur = obj
-        for p in parts[:-1]:
-            if isinstance(cur, dict) and p in cur:
-                cur = cur[p]
+
+        def rec(cur: Any, idx: int) -> None:
+            if idx >= len(parts) or cur is None:
+                return
+            key = parts[idx]
+            is_last = (idx == len(parts) - 1)
+
+            if isinstance(cur, dict):
+                if key not in cur:
+                    return
+                if is_last:
+                    try:
+                        del cur[key]
+                    except Exception:
+                        pass
+                else:
+                    rec(cur.get(key), idx + 1)
+            elif isinstance(cur, list):
+                if key == "*":
+                    for item in cur:
+                        rec(item, idx + 1)
+                else:
+                    try:
+                        i = int(key)
+                    except Exception:
+                        return
+                    if 0 <= i < len(cur):
+                        rec(cur[i], idx + 1)
             else:
                 return
-        last = parts[-1]
-        if isinstance(cur, dict) and last in cur:
-            try:
-                del cur[last]
-            except Exception:
-                pass
+
+        rec(obj, 0)
 
     def _apply_output_filters(self, response: Dict[str, Any]) -> None:
         enabled = bool(self._output_cfg.get("enabled", False))

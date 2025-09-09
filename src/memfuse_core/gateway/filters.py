@@ -84,18 +84,40 @@ class ConfigOutputRemovalFilter:
         parts = dotted.split('.') if dotted else []
         if not parts:
             return
-        cur = obj
-        for p in parts[:-1]:
-            if isinstance(cur, dict) and p in cur:
-                cur = cur[p]
+
+        def rec(cur: Any, idx: int) -> None:
+            if idx >= len(parts) or cur is None:
+                return
+            key = parts[idx]
+            is_last = (idx == len(parts) - 1)
+
+            if isinstance(cur, dict):
+                if key not in cur:
+                    return
+                if is_last:
+                    try:
+                        del cur[key]
+                    except Exception:
+                        pass
+                else:
+                    rec(cur.get(key), idx + 1)
+            elif isinstance(cur, list):
+                # list index or wildcard
+                if key == "*":
+                    for item in cur:
+                        rec(item, idx + 1)
+                else:
+                    try:
+                        i = int(key)
+                    except Exception:
+                        # unsupported selector; skip
+                        return
+                    if 0 <= i < len(cur):
+                        rec(cur[i], idx + 1)
             else:
                 return
-        last = parts[-1]
-        if isinstance(cur, dict) and last in cur:
-            try:
-                del cur[last]
-            except Exception:
-                pass
+
+        rec(obj, 0)
 
     def apply(self, response: Dict[str, Any], context: RequestContext) -> Dict[str, Any]:
         if not self.enabled or not self.fields:

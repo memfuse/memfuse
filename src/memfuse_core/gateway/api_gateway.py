@@ -116,6 +116,11 @@ class MemoryApiGateway(GatewayInterface):
             # Add gateway marker to track processing
             request_data['_gateway_entry'] = True
 
+            # Minimal request validation via Guardrail (after inbound normalization)
+            if hasattr(self.guardrail, "validate_request"):
+                if not self.guardrail.validate_request(request_data, context):
+                    return self._create_error_response("Request validation failed")
+
             # Enrich context with database information
             context = await self._enrich_context(context)
 
