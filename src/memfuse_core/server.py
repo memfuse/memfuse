@@ -33,6 +33,7 @@ from .utils.path_manager import PathManager
 from .utils.config import config_manager
 from .utils.global_config_manager import get_global_config_manager
 from .services.global_model_manager import get_global_model_manager
+from .observability.tracing import initialize_tracing
 
 # Import services
 from .services import (
@@ -140,6 +141,10 @@ async def initialize_global_singletons(cfg: DictConfig) -> None:
     # Log model performance statistics
     model_stats = global_model_manager.get_performance_stats()
     logger.info(f"Global models initialized: {model_stats['total_models']} models loaded in {model_stats['initialization_time_seconds']:.3f}s")
+
+    # Initialize distributed tracing
+    initialize_tracing()
+    logger.info("Distributed tracing initialized")
 
 
 def run_server(cfg: DictConfig):

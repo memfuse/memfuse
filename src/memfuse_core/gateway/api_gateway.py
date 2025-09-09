@@ -25,6 +25,7 @@ from .filters import (
     build_filters_from_config,
 )
 from ..utils.global_config_manager import get_global_config_manager
+from ..observability.tracing import get_tracer
 
 
 class MemoryRequestParser:
@@ -102,12 +103,27 @@ class MemoryApiGateway(GatewayInterface):
         import time
         overall_start = time.perf_counter()
 
-        try:
-            # Step 1: Parse request and create context
-            context = self.request_parser.parse_request(request_data)
-            context.operation_type = operation_type
+        # Initialize distributed tracing
+        tracer = get_tracer()
 
-            # Inbound filters (pre-routing)
+        async with tracer.trace_async_operation(
+            "gateway.process_request",
+            attributes={
+                "operation_type": str(operation_type),
+                "has_query": "query" in request_data,
+                "top_k": request_data.get("top_k", 5)
+            }
+        ) as span:
+            try:
+                # Step 1: Parse request and create context
+                context = self.request_parser.parse_request(request_data)
+                context.operation_type = operation_type
+                context.query = request_data.get("query", "")  # Add query to context for tracing
+
+                # Add request attributes to span
+                tracer.add_request_attributes(span, context, request_data)
+
+                # Inbound filters (pre-routing)
             for flt in self.inbound_filters:
                 try:
                     request_data = flt.apply(request_data, context)
@@ -158,32 +174,46 @@ class MemoryApiGateway(GatewayInterface):
                 logger.error("Response failed validation")
                 return self._create_error_response("Response validation failed")
 
-            # Step 6: Audit response
-            self.guardrail.audit_response(transformed_response, context)
+                # Step 6: Audit response
+                self.guardrail.audit_response(transformed_response, context)
 
-            # Optional: Add overall timing to debug metadata
-            overall_duration = time.perf_counter() - overall_start
-            try:
-                gcm = get_global_config_manager()
-                if gcm.is_initialized():
-                    gw_cfg = gcm.get_section("gateway") or {}
-                    dbg = gw_cfg.get("debug") or {}
-                    if dbg.get("enabled") and dbg.get("include_durations"):
-                        data = transformed_response.get("data", {})
-                        md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
-                        obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
-                        if isinstance(obs_top, dict) and "durations" in obs_top:
-                            obs_top["durations"]["overall"] = round(overall_duration * 1000, 3)
-            except Exception:
-                pass
+                # Optional: Add overall timing to debug metadata
+                overall_duration = time.perf_counter() - overall_start
+                try:
+                    gcm = get_global_config_manager()
+                    if gcm.is_initialized():
+                        gw_cfg = gcm.get_section("gateway") or {}
+                        dbg = gw_cfg.get("debug") or {}
+                        if dbg.get("enabled") and dbg.get("include_durations"):
+                            data = transformed_response.get("data", {})
+                            md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                            obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                            if isinstance(obs_top, dict) and "durations" in obs_top:
+                                obs_top["durations"]["overall"] = round(overall_duration * 1000, 3)
+                except Exception:
+                    pass
 
-            return transformed_response
+                # Add response attributes to tracing span
+                tracer.add_response_attributes(span, transformed_response)
 
-        except Exception as e:
-            logger.error(f"Gateway processing error: {e}")
-            import traceback
-            logger.error(f"Gateway traceback: {traceback.format_exc()}")
-            return self._create_error_response(f"Gateway error: {str(e)}")
+                # Add trace ID to response metadata for correlation
+                trace_id = tracer.get_current_trace_id()
+                if trace_id:
+                    data = transformed_response.get("data", {})
+                    if isinstance(data, dict):
+                        md_top = data.setdefault("metadata", {})
+                        if isinstance(md_top, dict):
+                            obs_top = md_top.setdefault("observability", {})
+                            if isinstance(obs_top, dict):
+                                obs_top["trace_id"] = trace_id
+
+                return transformed_response
+
+            except Exception as e:
+                logger.error(f"Gateway processing error: {e}")
+                import traceback
+                logger.error(f"Gateway traceback: {traceback.format_exc()}")
+                return self._create_error_response(f"Gateway error: {str(e)}")
 
     async def _enrich_context(self, context: RequestContext) -> RequestContext:
         """Enrich context with database information."""
@@ -221,23 +251,32 @@ class MemoryApiGateway(GatewayInterface):
         service_params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Call the appropriate service based on routing decision."""
-        query = request_data.get("query", "")
-        top_k = request_data.get("top_k", 5)
+        tracer = get_tracer()
 
-        # All service types now just use BufferService with basic parameters
-        if not self.buffer_service:
-            raise ValueError("Buffer service not available")
+        async with tracer.trace_async_operation(
+            "gateway.call_service",
+            attributes={
+                "service_type": str(service_type),
+                "has_session_id": bool(service_params.get("session_id"))
+            }
+        ):
+            query = request_data.get("query", "")
+            top_k = request_data.get("top_k", 5)
 
-        # Only pass session_id if available, let BufferService use its defaults for everything else
-        buffer_params = {}
-        if service_params.get("session_id"):
-            buffer_params["session_id"] = service_params["session_id"]
+            # All service types now just use BufferService with basic parameters
+            if not self.buffer_service:
+                raise ValueError("Buffer service not available")
 
-        return await self.buffer_service.query(
-            query=query,
-            top_k=top_k,
-            **buffer_params
-        )
+            # Only pass session_id if available, let BufferService use its defaults for everything else
+            buffer_params = {}
+            if service_params.get("session_id"):
+                buffer_params["session_id"] = service_params["session_id"]
+
+            return await self.buffer_service.query(
+                query=query,
+                top_k=top_k,
+                **buffer_params
+            )
 
     async def _transform_response(
         self,

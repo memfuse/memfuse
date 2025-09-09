@@ -1,0 +1,57 @@
+# =============================================================================
+# MEMFUSE DISTRIBUTED TRACING CONFIGURATION
+# =============================================================================
+
+tracing:
+  # Enable/disable distributed tracing
+  enabled: false
+  
+  # Service identification
+  service_name: "memfuse-core"
+  service_version: "1.0.0"
+  
+  # Exporter configuration
+  exporter_type: "console"  # console, jaeger, otlp
+  
+  # Jaeger exporter settings (when exporter_type: jaeger)
+  jaeger_endpoint: null  # e.g., "localhost:14268"
+  
+  # OTLP exporter settings (when exporter_type: otlp)
+  otlp_endpoint: null  # e.g., "http://localhost:4317"
+  
+  # Sampling configuration
+  sample_rate: 1.0  # 1.0 = 100% sampling, 0.1 = 10% sampling
+  
+  # Content inclusion settings
+  include_request_body: false   # Include request query/data in spans
+  include_response_body: false  # Include response data in spans
+  
+  # Attribute limits
+  max_attribute_length: 1000  # Truncate attribute values longer than this
+
+# =============================================================================
+# ENVIRONMENT-SPECIFIC OVERRIDES
+# =============================================================================
+
+# Development environment
+development:
+  tracing:
+    enabled: true
+    exporter_type: "console"
+    include_request_body: true
+    sample_rate: 1.0
+
+# Production environment  
+production:
+  tracing:
+    enabled: true
+    exporter_type: "otlp"
+    otlp_endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}"
+    sample_rate: 0.1  # 10% sampling in production
+    include_request_body: false
+    include_response_body: false
+
+# Testing environment
+testing:
+  tracing:
+    enabled: false  # Disable tracing in tests by default

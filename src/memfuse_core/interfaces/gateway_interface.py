@@ -37,6 +37,7 @@ class RequestContext:
     session_name: Optional[str] = None
     operation_type: Optional[OperationType] = None
     request_metadata: Optional[Dict[str, Any]] = None
+    query: Optional[str] = None  # Add query for tracing context
     query: Optional[str] = None  # Add query field for composite filters
 
 

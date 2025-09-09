@@ -103,6 +103,14 @@ guardrail:
     quality:
       max_entries: 10000  # Quality score cache
       ttl: 3600          # 1 hour
+
+# Distributed Tracing Configuration
+tracing:
+  enabled: true
+  service_name: "memfuse-gateway"
+  exporter_type: "console"  # console, jaeger, otlp
+  include_request_body: true
+  sample_rate: 1.0
 ```
 
 Notes:
