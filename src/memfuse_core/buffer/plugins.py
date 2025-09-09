@@ -126,13 +126,15 @@ class DeduplicatePlugin:
     def after_merge(self, results: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         seen = set()
         unique: List[Dict[str, Any]] = []
+        used_fallback = False
         for r in results:
             if not isinstance(r, dict):
                 continue
             k = r.get(self.key)
             if k is None:
-                # fallback to hash of content
+                # fallback to light-weight content/signature tuple
                 k = (r.get("content"), r.get("score"))
+                used_fallback = True
             if k in seen:
                 continue
             seen.add(k)
@@ -143,7 +145,12 @@ class DeduplicatePlugin:
             md = first.setdefault("metadata", {})
             obs = md.setdefault("observability", {})
             obs["dedup_removed_count"] = int(removed)
+            obs["dedup_unique_count"] = int(len(unique))
+            obs["dedup_key_source"] = f"{self.key}|fallback" if used_fallback else str(self.key)
+            # mirror to ctx for gateway aggregation
             ctx["dedup_removed_count"] = int(removed)
+            ctx["dedup_unique_count"] = int(len(unique))
+            ctx["dedup_key_source"] = f"{self.key}|fallback" if used_fallback else str(self.key)
         return unique
 
 

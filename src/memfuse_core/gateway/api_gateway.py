@@ -326,6 +326,40 @@ class MemoryApiGateway(GatewayInterface):
                         obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
                         if isinstance(obs_top, dict):
                             obs_top["dedup_removed_count"] = dedup_val
+                # Aggregate dedup unique count (first available)
+                if dbg.get("enabled") and dbg.get("include_dedup_unique_count"):
+                    uniq_val = None
+                    for it in results:
+                        if not isinstance(it, dict):
+                            continue
+                        md = it.get("metadata")
+                        obs = md.get("observability") if isinstance(md, dict) else None
+                        val = obs.get("dedup_unique_count") if isinstance(obs, dict) else None
+                        if isinstance(val, int):
+                            uniq_val = val
+                            break
+                    if uniq_val is not None:
+                        md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                        obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                        if isinstance(obs_top, dict):
+                            obs_top["dedup_unique_count"] = uniq_val
+                # Aggregate dedup key source (first available)
+                if dbg.get("enabled") and dbg.get("include_dedup_key_source"):
+                    key_src = None
+                    for it in results:
+                        if not isinstance(it, dict):
+                            continue
+                        md = it.get("metadata")
+                        obs = md.get("observability") if isinstance(md, dict) else None
+                        val = obs.get("dedup_key_source") if isinstance(obs, dict) else None
+                        if isinstance(val, str) and val:
+                            key_src = val
+                            break
+                    if key_src is not None:
+                        md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                        obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                        if isinstance(obs_top, dict):
+                            obs_top["dedup_key_source"] = key_src
                 # Aggregate score clip stats (first available)
                 if dbg.get("enabled") and dbg.get("include_score_clip_stats"):
                     clip_stats = None

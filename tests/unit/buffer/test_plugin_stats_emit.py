@@ -22,7 +22,11 @@ async def test_deduplicate_plugin_emits_removed_count_when_enabled():
     first = out[0]
     obs = first.get("metadata", {}).get("observability", {})
     assert obs.get("dedup_removed_count") == 1
+    assert obs.get("dedup_unique_count") == 2
+    assert obs.get("dedup_key_source") == "id"
     assert ctx.get("dedup_removed_count") == 1
+    assert ctx.get("dedup_unique_count") == 2
+    assert ctx.get("dedup_key_source") == "id"
 
 
 @pytest.mark.asyncio

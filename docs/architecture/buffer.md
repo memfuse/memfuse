@@ -73,6 +73,10 @@ plugins:
     params:
       key: id
       include_stats: true
+        # When include_stats: true, will emit in metadata.observability on first item:
+        # - dedup_removed_count
+        # - dedup_unique_count
+        # - dedup_key_source (e.g., 'id' or 'id|fallback' when some items lacked the key)
   - name: result_enricher
     enabled: true
     params:
@@ -203,6 +207,8 @@ gateway:
     include_score_range: true
     include_dedup_removed_count: true
     include_score_clip_stats: true
+    include_dedup_unique_count: true
+    include_dedup_key_source: true
 
 ### Cache-hit example
 
