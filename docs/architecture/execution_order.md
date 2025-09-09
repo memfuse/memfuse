@@ -1,5 +1,18 @@
 # Execution Order: Gateway × Buffer × Guardrail (Minimal E2E)
 
+```mermaid
+flowchart TD
+  A[Gateway Inbound Filters] --> B[QueryBuffer before_retrieve Plugins]
+  B --> C[BufferRetrieval.retrieve]
+  C --> D[after_retrieve Plugins]
+  D --> E[Merge/Sort/Rerank]
+  E --> F[after_merge Plugins]
+  F --> G[Gateway Outbound Filters]
+  G --> H[Guardrail validate_response]
+  H --> I[Guardrail audit_response]
+```
+
+
 This document outlines the minimal execution order and responsibilities across the main pathway.
 
 ## Main Pathway

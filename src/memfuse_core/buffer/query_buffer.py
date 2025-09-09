@@ -117,7 +117,10 @@ class QueryBuffer(BufferComponentInterface):
         sort_by: Optional[str] = None,
         order: Optional[str] = None,
         hybrid_buffer=None,
-        use_rerank: bool = True
+        use_rerank: bool = True,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ) -> List[Any]:
         """Enhanced query with internal reranking and optimization.
 
@@ -161,7 +164,7 @@ class QueryBuffer(BufferComponentInterface):
         try:
             # Use intelligent query routing for better performance
             final_results = await self._intelligent_query_routing(
-                query_text, top_k, sort_by, order, hybrid_buffer, use_rerank
+                query_text, top_k, sort_by, order, user_id, session_id, agent_id, hybrid_buffer, use_rerank
             )
 
             # Update cache
@@ -184,6 +187,9 @@ class QueryBuffer(BufferComponentInterface):
         top_k: int,
         sort_by: str,
         order: str,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         hybrid_buffer=None,
         use_rerank: bool = True
     ) -> List[Any]:
@@ -201,6 +207,9 @@ class QueryBuffer(BufferComponentInterface):
             "top_k": top_k,
             "sort_by": sort_by,
             "order": order,
+            "user_id": user_id,
+            "session_id": session_id,
+            "agent_id": agent_id,
         }
         # Run before_retrieve hooks
         for p in self._plugins:
@@ -213,8 +222,8 @@ class QueryBuffer(BufferComponentInterface):
         # Step 1: Query Buffer first (fastest path)
         buffer_results = await self.buffer_retrieval.retrieve(
             query=query_text,
-            user_id=None,
-            session_id=None,
+            user_id=user_id,
+            session_id=session_id,
             top_k=top_k * 2,  # Get more for better selection
             hybrid_buffer=hybrid_buffer or self.hybrid_buffer,
             round_buffer=self.round_buffer
