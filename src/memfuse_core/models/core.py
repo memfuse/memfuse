@@ -6,8 +6,9 @@ the MemFuse framework, including base classes for items, nodes, edges, and queri
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Literal
+from datetime import datetime
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
 
@@ -17,6 +18,11 @@ class M2Status(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class M2FactStatus(str, Enum):
+    ACTIVE = "active"
+    DEPRECATED = "deprecated"
 
 
 class StoreBackend(str, Enum):
@@ -103,6 +109,45 @@ class Message(BaseModel):
         ..., description="Message role - must be 'user', 'assistant', or 'system'"
     )
     content: str = Field(..., min_length=1, description="Message content - cannot be empty")
+
+
+class Chunk(BaseModel):
+    """M1 chunk model for structured data handling."""
+    
+    chunk_id: str = Field(..., description="UUID of the chunk")
+    content: str = Field(..., description="Text content of the chunk")
+    token_count: int = Field(..., description="Number of tokens in the chunk")
+    user_id: str = Field(..., description="UUID of the user who owns this chunk")
+    session_id: Optional[str] = Field(None, description="Session ID associated with this chunk")
+    created_at: datetime = Field(..., description="When the chunk was created")
+    updated_at: Optional[datetime] = Field(None, description="When the chunk was last updated")
+    m2_status: M2Status = Field(default=M2Status.PENDING, description="M2 processing status")
+    
+    # Additional metadata fields that might be useful for M2 processing
+    chunking_strategy: Optional[str] = Field(None, description="Strategy used to create this chunk")
+    m0_raw_ids: List[str] = Field(default_factory=list, description="Source message IDs")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional chunk metadata")
+
+
+class Fact(BaseModel):
+    """M2 semantic fact model for structured knowledge extraction."""
+    
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    fact_id: str = Field(default_factory=lambda: str(__import__('uuid').uuid4()), description="UUID of the fact")
+    text: str = Field(..., description="Text content of the semantic fact")
+    hash: Optional[str] = Field(None, description="Unique hash for idempotency and duplicate detection")
+    embedding: Optional[np.ndarray] = Field(None, description="384-dimensional embedding vector")
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0, description="Confidence score between 0.0 and 1.0")
+    status: M2FactStatus = Field(default=M2FactStatus.ACTIVE, description="Fact status (active or deprecated)")
+    chunk_ids: List[str] = Field(default_factory=list, description="List of chunk UUIDs this fact was extracted from")
+    user_id: str = Field(..., description="UUID of the user who owns this fact")
+    policy_version: str = Field(default="v1.0", description="Policy version used for fact extraction")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(), description="When the fact was created")
+    updated_at: Optional[datetime] = Field(None, description="When the fact was last updated")
+    embedding_generated_at: Optional[datetime] = Field(None, description="When the embedding was generated")
+    embedding_model: str = Field(default="sentence-transformers/all-MiniLM-L6-v2", description="Model used for embedding generation")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional fact metadata")
 
 
 class ErrorDetail(BaseModel):

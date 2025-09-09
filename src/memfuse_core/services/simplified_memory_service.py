@@ -17,7 +17,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from loguru import logger
 
 import numpy as np
@@ -27,6 +27,7 @@ from sentence_transformers import SentenceTransformer
 
 from ..interfaces import MessageInterface
 from ..interfaces.message_interface import MessageBatchList
+from ..models.core import M2Status, Chunk, Fact, M2FactStatus
 from .sync_connection_pool import sync_connection_pool
 
 
@@ -1043,8 +1044,8 @@ class SimplifiedMemoryService(MessageInterface):
                         insert_query = """
                             INSERT INTO m1_episodic
                             (chunk_id, content, chunking_strategy, token_count, embedding,
-                             m0_raw_ids, user_id, session_id, created_at, embedding_generated_at, metadata)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             m0_raw_ids, user_id, session_id, created_at, embedding_generated_at, m2_status, metadata)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (chunk_id) DO UPDATE SET
                                 content = EXCLUDED.content,
                                 chunking_strategy = EXCLUDED.chunking_strategy,
@@ -1055,6 +1056,7 @@ class SimplifiedMemoryService(MessageInterface):
                                 session_id = EXCLUDED.session_id,
                                 created_at = EXCLUDED.created_at,
                                 embedding_generated_at = EXCLUDED.embedding_generated_at,
+                                m2_status = EXCLUDED.m2_status,
                                 metadata = EXCLUDED.metadata
                             RETURNING chunk_id
                         """
@@ -1082,6 +1084,7 @@ class SimplifiedMemoryService(MessageInterface):
                                 chunk['session_id'],
                                 chunk.get('created_at', datetime.now()),  # created_at
                                 datetime.now(),  # embedding_generated_at
+                                M2Status.PENDING.value,  # m2_status
                                 metadata_json  # metadata as JSON string
                             ))
 
@@ -1206,6 +1209,759 @@ class SimplifiedMemoryService(MessageInterface):
             logger.error(f"Error in vector similarity search: {e}")
             return []
 
+    async def _get_pending_m2_chunks(self, batch_size: int = 10, user_id: Optional[str] = None) -> List[str]:
+        """
+        Fetch chunk IDs for M1 chunks with m2_status = 'pending' for M2 processing.
+        
+        Args:
+            batch_size: Maximum number of chunk IDs to return (default 10)
+            user_id: Optional user_id filter for security scoping
+            
+        Returns:
+            List of chunk ID strings ready for M2 fact extraction
+        """
+        try:
+            results = []
+            
+            with sync_connection_pool.get_connection() as conn:
+                with conn.cursor() as cur:
+                    if user_id:
+                        # User-scoped query for security
+                        cur.execute("""
+                            SELECT chunk_id
+                            FROM m1_episodic 
+                            WHERE m2_status = %s AND user_id = %s
+                            ORDER BY created_at ASC
+                            LIMIT %s
+                        """, (M2Status.PENDING.value, user_id, batch_size))
+                    else:
+                        # No user filtering (fallback - should be avoided in production)
+                        logger.warning("_get_pending_m2_chunks: No user_id provided, querying all pending chunks")
+                        cur.execute("""
+                            SELECT chunk_id
+                            FROM m1_episodic 
+                            WHERE m2_status = %s
+                            ORDER BY created_at ASC
+                            LIMIT %s
+                        """, (M2Status.PENDING.value, batch_size))
+                    
+                    rows = cur.fetchall()
+                    
+                    for row in rows:
+                        results.append(str(row[0]))
+            
+            logger.info(f"✅ Found {len(results)} pending M2 chunk IDs (batch_size={batch_size}, user_id={user_id})")
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Error fetching pending M2 chunk IDs: {e}")
+            return []
+
+    async def _get_m1_chunk(self, chunk_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a single M1 chunk by its ID from the m1_episodic table.
+        
+        Args:
+            chunk_id: The UUID of the chunk to retrieve
+            user_id: Optional user_id filter for security scoping
+            
+        Returns:
+            Chunk dictionary with all fields, or None if not found
+        """
+        try:
+            # Validate chunk_id is a valid UUID format
+            import uuid
+            try:
+                uuid.UUID(chunk_id)
+            except (ValueError, TypeError):
+                logger.error(f"❌ Invalid chunk_id format: {chunk_id}")
+                return None
+            
+            with sync_connection_pool.get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    if user_id:
+                        # User-scoped query for security
+                        cur.execute("""
+                            SELECT 
+                                chunk_id,
+                                content,
+                                user_id,
+                                session_id,
+                                token_count,
+                                created_at,
+                                m0_raw_ids,
+                                metadata,
+                                chunking_strategy,
+                                m2_status,
+                                m2_processing_started_at,
+                                m2_processing_ended_at,
+                                embedding_generated_at
+                            FROM m1_episodic 
+                            WHERE chunk_id = %s AND user_id = %s
+                        """, (chunk_id, user_id))
+                    else:
+                        # No user filtering (fallback)
+                        logger.warning("_get_m1_chunk: No user_id provided, querying without user filter")
+                        cur.execute("""
+                            SELECT 
+                                chunk_id,
+                                content,
+                                user_id,
+                                session_id,
+                                token_count,
+                                created_at,
+                                m0_raw_ids,
+                                metadata,
+                                chunking_strategy,
+                                m2_status,
+                                m2_processing_started_at,
+                                m2_processing_ended_at,
+                                embedding_generated_at
+                            FROM m1_episodic 
+                            WHERE chunk_id = %s
+                        """, (chunk_id,))
+                    
+                    row = cur.fetchone()
+                    
+                    if not row:
+                        logger.debug(f"Chunk not found: {chunk_id}")
+                        return None
+                    
+                    # Convert to dictionary format for M2 processing
+                    chunk_data = {
+                        'chunk_id': str(row['chunk_id']),
+                        'content': row['content'],
+                        'user_id': str(row['user_id']),
+                        'session_id': str(row['session_id']) if row['session_id'] else None,
+                        'token_count': row['token_count'],
+                        'created_at': row['created_at'],
+                        'm0_raw_ids': list(row['m0_raw_ids']) if row['m0_raw_ids'] else [],
+                        'chunking_strategy': row['chunking_strategy'],
+                        'metadata': json.loads(row['metadata']) if isinstance(row['metadata'], str) else (row['metadata'] or {}),
+                        'm2_status': row['m2_status'],
+                        'm2_processing_started_at': row['m2_processing_started_at'],
+                        'm2_processing_ended_at': row['m2_processing_ended_at'],
+                        'embedding_generated_at': row['embedding_generated_at']
+                    }
+                    
+                    logger.debug(f"✅ Retrieved M1 chunk: {chunk_id}")
+                    return chunk_data
+            
+        except Exception as e:
+            logger.error(f"❌ Error retrieving M1 chunk {chunk_id}: {e}")
+            return None
+
+    async def _lock_chunk_for_m2_processing(self, chunk_id: str, user_id: Optional[str] = None) -> bool:
+        """
+        Lock a chunk for M2 processing by updating its status to 'processing'.
+        
+        This method transitions a chunk from 'pending' to 'processing' status and sets
+        the m2_processing_started_at timestamp. It includes safety checks to prevent
+        race conditions and double-locking.
+        
+        Args:
+            chunk_id: The UUID of the chunk to lock for processing
+            user_id: Optional user_id filter for security scoping
+            
+        Returns:
+            True if chunk was successfully locked, False otherwise
+        """
+        try:
+            # Validate chunk_id is a valid UUID format
+            import uuid
+            try:
+                uuid.UUID(chunk_id)
+            except (ValueError, TypeError):
+                logger.error(f"❌ Invalid chunk_id format: {chunk_id}")
+                return False
+            
+            with sync_connection_pool.get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Construct UPDATE query with safety checks
+                    if user_id:
+                        # User-scoped update for security
+                        cur.execute("""
+                            UPDATE m1_episodic 
+                            SET m2_status = %s, m2_processing_started_at = NOW()
+                            WHERE chunk_id = %s AND user_id = %s AND m2_status = %s
+                        """, (M2Status.PROCESSING.value, chunk_id, user_id, M2Status.PENDING.value))
+                    else:
+                        # No user filtering (fallback - should be avoided in production)
+                        logger.warning("_lock_chunk_for_m2_processing: No user_id provided, updating without user filter")
+                        cur.execute("""
+                            UPDATE m1_episodic 
+                            SET m2_status = %s, m2_processing_started_at = NOW()
+                            WHERE chunk_id = %s AND m2_status = %s
+                        """, (M2Status.PROCESSING.value, chunk_id, M2Status.PENDING.value))
+                    
+                    # Check if any row was updated
+                    affected_rows = cur.rowcount
+                    conn.commit()
+                    
+                    if affected_rows > 0:
+                        logger.info(f"✅ Successfully locked chunk {chunk_id} for M2 processing (user_id={user_id})")
+                        return True
+                    else:
+                        logger.warning(f"⚠️ Chunk {chunk_id} could not be locked - may already be processing or not found (user_id={user_id})")
+                        return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error locking chunk {chunk_id} for M2 processing: {e}")
+            return False
+
+    async def _mark_chunk_m2_completed(self, chunk_id: str, facts: List[Dict[str, Any]], user_id: Optional[str] = None) -> bool:
+        """
+        Mark a chunk as M2 processing completed and store extracted facts.
+        
+        This method transitions a chunk from 'processing' to 'completed' status,
+        sets the m2_processing_ended_at timestamp, and stores the extracted facts
+        in the m2_semantic table with proper lineage tracking.
+        
+        Args:
+            chunk_id: The UUID of the chunk to mark as completed
+            facts: List of fact dictionaries to store in m2_semantic table
+            user_id: Optional user_id filter for security scoping
+            
+        Returns:
+            True if chunk was successfully marked as completed and facts stored, False otherwise
+        """
+        try:
+            # Validate chunk_id is a valid UUID format
+            import uuid
+            try:
+                uuid.UUID(chunk_id)
+            except (ValueError, TypeError):
+                logger.error(f"❌ Invalid chunk_id format: {chunk_id}")
+                return False
+            
+            # Validate facts structure
+            if not isinstance(facts, list):
+                logger.error(f"❌ Facts must be a list, got {type(facts)}")
+                return False
+            
+            with sync_connection_pool.get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Step 1: Update M1 chunk status to completed
+                    if user_id:
+                        # User-scoped update for security
+                        cur.execute("""
+                            UPDATE m1_episodic 
+                            SET m2_status = %s, m2_processing_ended_at = NOW()
+                            WHERE chunk_id = %s AND user_id = %s AND m2_status = %s
+                        """, (M2Status.COMPLETED.value, chunk_id, user_id, M2Status.PROCESSING.value))
+                    else:
+                        # No user filtering (fallback - should be avoided in production)
+                        logger.warning("_mark_chunk_m2_completed: No user_id provided, updating without user filter")
+                        cur.execute("""
+                            UPDATE m1_episodic 
+                            SET m2_status = %s, m2_processing_ended_at = NOW()
+                            WHERE chunk_id = %s AND m2_status = %s
+                        """, (M2Status.COMPLETED.value, chunk_id, M2Status.PROCESSING.value))
+                    
+                    # Check if chunk was updated
+                    affected_rows = cur.rowcount
+                    if affected_rows == 0:
+                        logger.warning(f"⚠️ Chunk {chunk_id} could not be marked completed - may not be processing or not found (user_id={user_id})")
+                        return False
+                    
+                    # Step 2: Store facts in m2_semantic table using new _save_m2_facts method
+                    facts_count = 0  # Initialize facts count
+                    if facts:
+                        # Ensure each fact has the chunk_id for lineage tracking
+                        facts_with_lineage = []
+                        for fact in facts:
+                            if isinstance(fact, dict):
+                                fact_copy = fact.copy()
+                                # Add chunk_id to chunk_ids list if not already present
+                                chunk_ids = fact_copy.get('chunk_ids', [])
+                                if chunk_id not in chunk_ids:
+                                    chunk_ids.append(chunk_id)
+                                fact_copy['chunk_ids'] = chunk_ids
+                                facts_with_lineage.append(fact_copy)
+                            else:
+                                facts_with_lineage.append(fact)
+                        
+                        # Use the new _save_m2_facts method
+                        save_result = await self._save_m2_facts(facts_with_lineage, user_id)
+                        
+                        if save_result['status'] != 'success':
+                            logger.error(f"❌ Failed to save M2 facts: {save_result['message']}")
+                            return False
+                        
+                        facts_count = save_result['data']['facts_saved']
+                        logger.info(f"✅ Saved {facts_count} M2 facts for chunk {chunk_id}")
+                
+                
+                # Explicit commit to ensure changes are persisted
+                conn.commit()
+                
+                logger.info(f"✅ Successfully marked chunk {chunk_id} as M2 completed and stored {facts_count} facts (user_id={user_id})")
+                return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error marking chunk {chunk_id} as M2 completed: {e}")
+            return False
+
+    async def _mark_chunk_m2_failed(self, chunk_id: str, error: str, user_id: Optional[str] = None) -> bool:
+        """
+        Mark a chunk as M2 processing failed with error information.
+        
+        This method transitions a chunk from 'processing' to 'failed' status,
+        sets the m2_processing_ended_at timestamp, and logs the error information
+        for debugging purposes.
+        
+        Args:
+            chunk_id: The UUID of the chunk to mark as failed
+            error: Error message describing why processing failed
+            user_id: Optional user_id filter for security scoping
+            
+        Returns:
+            True if chunk was successfully marked as failed, False otherwise
+        """
+        try:
+            # Validate chunk_id is a valid UUID format
+            import uuid
+            try:
+                uuid.UUID(chunk_id)
+            except (ValueError, TypeError):
+                logger.error(f"❌ Invalid chunk_id format: {chunk_id}")
+                return False
+            
+            # Validate error message
+            if not error or not error.strip():
+                logger.warning("⚠️ Empty error message provided, using default")
+                error = "Unknown M2 processing error"
+            
+            with sync_connection_pool.get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Update M1 chunk status to failed
+                    if user_id:
+                        # User-scoped update for security
+                        cur.execute("""
+                            UPDATE m1_episodic 
+                            SET m2_status = %s, m2_processing_ended_at = NOW()
+                            WHERE chunk_id = %s AND user_id = %s AND m2_status = %s
+                        """, (M2Status.FAILED.value, chunk_id, user_id, M2Status.PROCESSING.value))
+                    else:
+                        # No user filtering (fallback - should be avoided in production)
+                        logger.warning("_mark_chunk_m2_failed: No user_id provided, updating without user filter")
+                        cur.execute("""
+                            UPDATE m1_episodic 
+                            SET m2_status = %s, m2_processing_ended_at = NOW()
+                            WHERE chunk_id = %s AND m2_status = %s
+                        """, (M2Status.FAILED.value, chunk_id, M2Status.PROCESSING.value))
+                    
+                    # Check if any row was updated
+                    affected_rows = cur.rowcount
+                    conn.commit()
+                    
+                    if affected_rows > 0:
+                        logger.error(f"❌ Marked chunk {chunk_id} as M2 failed (user_id={user_id}). Error: {error}")
+                        return True
+                    else:
+                        logger.warning(f"⚠️ Chunk {chunk_id} could not be marked failed - may not be processing or not found (user_id={user_id})")
+                        return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error marking chunk {chunk_id} as M2 failed: {e}")
+            return False
+
+    async def _save_m2_facts(
+        self, 
+        facts: List[Union[Fact, Dict[str, Any]]], 
+        user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Save M2 semantic facts to the m2_semantic table.
+        
+        This method handles both Pydantic Fact objects and dictionary facts,
+        validates their structure, generates missing fields (embeddings, hashes),
+        and stores them in the database with proper idempotency handling.
+        
+        Args:
+            facts: List of Fact objects or fact dictionaries to save
+            user_id: Optional user_id for security scoping (required if not in facts)
+            
+        Returns:
+            Success/error response dictionary with operation details
+        """
+        try:
+            # Validate input
+            if not isinstance(facts, list):
+                return self._error_response("Facts must be a list", 400)
+            
+            if not facts:
+                return self._success_response(
+                    {"facts_saved": 0, "facts_skipped": 0}, 
+                    "No facts to save"
+                )
+            
+            logger.info(f"🔧 Saving {len(facts)} M2 facts to database (user_id={user_id})")
+            logger.debug(f"DEBUG: _save_m2_facts called with user_id={user_id}")
+            
+            # Process and validate facts
+            processed_facts = []
+            for i, fact in enumerate(facts):
+                logger.debug(f"DEBUG: Processing fact {i}: {type(fact)} - {str(fact)[:100]}")
+                try:
+                    processed_fact = self._process_fact(fact, user_id, i)
+                    if processed_fact:
+                        processed_facts.append(processed_fact)
+                except Exception as e:
+                    logger.warning(f"⚠️ Skipping invalid fact at index {i}: {e}")
+                    continue
+            
+            if not processed_facts:
+                return self._error_response("No valid facts to save after processing", 400)
+            
+            # Save facts to database
+            return await self._insert_facts_to_database(processed_facts, user_id)
+            
+        except Exception as e:
+            logger.error(f"❌ Error saving M2 facts: {e}")
+            return self._error_response(f"Error saving M2 facts: {str(e)}")
+    
+    def _process_fact(
+        self, 
+        fact: Union[Fact, Dict[str, Any]], 
+        default_user_id: Optional[str], 
+        index: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Process and validate a single fact, converting Pydantic objects to dictionaries
+        and generating missing fields.
+        
+        Args:
+            fact: Fact object or dictionary to process
+            default_user_id: Default user_id to use if not in fact
+            index: Index of fact in list (for error reporting)
+            
+        Returns:
+            Processed fact dictionary, or None if invalid
+        """
+        try:
+            # Convert Pydantic Fact to dictionary
+            if isinstance(fact, Fact):
+                fact_dict = {
+                    'text': fact.text,
+                    'hash': fact.hash,
+                    'embedding': fact.embedding,
+                    'confidence': fact.confidence,
+                    'status': fact.status.value if fact.status else M2FactStatus.ACTIVE.value,
+                    'chunk_ids': fact.chunk_ids,
+                    'user_id': fact.user_id,
+                    'policy_version': fact.policy_version,
+                    'metadata': fact.metadata
+                }
+            elif isinstance(fact, dict):
+                fact_dict = fact.copy()
+            else:
+                logger.error(f"❌ Invalid fact type at index {index}: {type(fact)}")
+                return None
+            
+            # Validate required fields
+            fact_text = fact_dict.get('text', '').strip()
+            if not fact_text:
+                logger.error(f"❌ Empty or missing 'text' field in fact at index {index}")
+                return None
+            
+            # Determine user_id for this fact
+            fact_user_id = fact_dict.get('user_id') or default_user_id
+            if not fact_user_id:
+                logger.error(f"❌ No user_id available for fact at index {index}")
+                return None
+            
+            # Debug logging
+            logger.debug(f"DEBUG: _process_fact index {index}: fact_dict.get('user_id')={fact_dict.get('user_id')}, default_user_id={default_user_id}, final_user_id={fact_user_id}")
+            
+            # Validate user_id format (should be UUID)
+            try:
+                uuid.UUID(fact_user_id)
+            except (ValueError, TypeError):
+                logger.error(f"❌ Invalid user_id format for fact at index {index}: {fact_user_id}")
+                return None
+            
+            # Generate hash if not provided
+            if not fact_dict.get('hash'):
+                import hashlib
+                metadata_str = json.dumps(fact_dict.get('metadata', {}), sort_keys=True)
+                hash_content = fact_text + metadata_str
+                fact_dict['hash'] = hashlib.sha256(hash_content.encode('utf-8')).hexdigest()
+            
+            # Generate embedding if not provided
+            if fact_dict.get('embedding') is None:
+                fact_dict['embedding'] = self.embedding_generator.generate_embedding(fact_text)
+            
+            # Validate and clamp confidence score
+            confidence = float(fact_dict.get('confidence', 0.8))
+            fact_dict['confidence'] = max(0.0, min(1.0, confidence))
+            
+            # Set defaults for optional fields
+            fact_dict['status'] = fact_dict.get('status', M2FactStatus.ACTIVE.value)
+            fact_dict['policy_version'] = fact_dict.get('policy_version', 'v1.0')
+            fact_dict['chunk_ids'] = fact_dict.get('chunk_ids', [])
+            fact_dict['metadata'] = fact_dict.get('metadata', {})
+            fact_dict['user_id'] = fact_user_id
+            fact_dict['text'] = fact_text
+            
+            logger.debug(f"DEBUG: Final processed fact {index}: user_id={fact_dict['user_id']}, text='{fact_dict['text'][:50]}...'")
+            logger.debug(f"✅ Processed fact at index {index}: hash={fact_dict['hash'][:8]}...")
+            return fact_dict
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing fact at index {index}: {e}")
+            return None
+    
+    async def _insert_facts_to_database(
+        self, 
+        processed_facts: List[Dict[str, Any]], 
+        user_id: Optional[str]
+    ) -> Dict[str, Any]:
+        """
+        Insert processed facts into the m2_semantic database table.
+        
+        Args:
+            processed_facts: List of validated and processed fact dictionaries
+            user_id: User ID for security scoping
+            
+        Returns:
+            Success/error response dictionary with operation details
+        """
+        facts_saved = 0
+        facts_skipped = 0
+        
+        try:
+            with sync_connection_pool.get_connection() as conn:
+                with conn.cursor() as cur:
+                    for fact in processed_facts:
+                        try:
+                            # Convert embedding to list format for PostgreSQL
+                            embedding_list = None
+                            if fact['embedding'] is not None:
+                                if hasattr(fact['embedding'], 'tolist'):
+                                    embedding_list = fact['embedding'].tolist()
+                                elif isinstance(fact['embedding'], list):
+                                    embedding_list = fact['embedding']
+                                else:
+                                    logger.warning(f"⚠️ Unknown embedding format: {type(fact['embedding'])}")
+                                    continue
+                            
+                            # Prepare chunk_ids as PostgreSQL UUID array
+                            chunk_ids = fact.get('chunk_ids', [])
+                            if chunk_ids:
+                                # Validate all chunk_ids are UUIDs
+                                valid_chunk_ids = []
+                                for chunk_id in chunk_ids:
+                                    try:
+                                        uuid.UUID(str(chunk_id))
+                                        valid_chunk_ids.append(str(chunk_id))
+                                    except (ValueError, TypeError):
+                                        logger.warning(f"⚠️ Invalid chunk_id format: {chunk_id}")
+                                chunk_ids = valid_chunk_ids
+                            
+                            # Insert fact with conflict resolution
+                            logger.debug(f"DEBUG: Inserting fact into DB: user_id={fact['user_id']}, text='{fact['text'][:50]}...'")
+                            cur.execute("""
+                                INSERT INTO m2_semantic 
+                                (text, hash, embedding, confidence, status, chunk_ids, user_id, 
+                                 policy_version, embedding_generated_at, metadata, embedding_model)
+                                VALUES (%s, %s, %s, %s, %s, %s::uuid[], %s, %s, NOW(), %s, %s)
+                                ON CONFLICT (hash) DO UPDATE SET
+                                    chunk_ids = array_append(m2_semantic.chunk_ids, %s::uuid),
+                                    updated_at = NOW(),
+                                    confidence = GREATEST(m2_semantic.confidence, %s),
+                                    status = CASE 
+                                        WHEN m2_semantic.status = 'deprecated' THEN EXCLUDED.status
+                                        ELSE m2_semantic.status 
+                                    END
+                            """, (
+                                fact['text'],
+                                fact['hash'],
+                                embedding_list,
+                                fact['confidence'],
+                                fact['status'],
+                                chunk_ids,  # PostgreSQL UUID array
+                                fact['user_id'],
+                                fact['policy_version'],
+                                json.dumps(fact['metadata']),
+                                'sentence-transformers/all-MiniLM-L6-v2',  # Default embedding model
+                                chunk_ids[0] if chunk_ids else None,  # For conflict resolution
+                                fact['confidence']  # For conflict resolution
+                            ))
+                            
+                            facts_saved += 1
+                            logger.debug(f"✅ Saved fact: {fact['hash'][:8]}...")
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Error saving individual fact: {e}")
+                            facts_skipped += 1
+                            continue
+                
+                # Commit all changes
+                conn.commit()
+                
+            success_message = f"Saved {facts_saved} M2 facts to database"
+            if facts_skipped > 0:
+                success_message += f" ({facts_skipped} skipped due to errors)"
+            
+            logger.info(f"✅ {success_message} (user_id={user_id})")
+            return self._success_response(
+                {"facts_saved": facts_saved, "facts_skipped": facts_skipped},
+                success_message
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error saving M2 facts: {e}")
+            return self._error_response(f"Error saving M2 facts: {str(e)}")
+    
+    async def _get_session_context_for_chunk(
+        self, 
+        chunk_id: str, 
+        context_chunks_before: int = 5,
+        user_id: Optional[str] = None
+    ) -> Optional[List[Chunk]]:
+        """
+        Retrieve session context chunks created before the target chunk for M2 processing.
+        
+        Args:
+            chunk_id: The target chunk ID to get context for
+            context_chunks_before: Number of chunks before the target chunk to retrieve (default 5)
+            user_id: Optional user ID for security scoping
+            
+        Returns:
+            List of Chunk models ordered chronologically (oldest first), or None if target chunk not found
+        """
+        try:
+            # Validate chunk_id is a valid UUID format
+            import uuid
+            try:
+                uuid.UUID(chunk_id)
+            except (ValueError, TypeError):
+                logger.error(f"❌ Invalid chunk_id format: {chunk_id}")
+                return None
+            
+            with sync_connection_pool.get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # First, get the target chunk to extract session_id and created_at
+                    if user_id:
+                        cur.execute("""
+                            SELECT session_id, created_at 
+                            FROM m1_episodic 
+                            WHERE chunk_id = %s AND user_id = %s
+                        """, (chunk_id, user_id))
+                    else:
+                        logger.warning("_get_session_context_for_chunk: No user_id provided, querying without user filter")
+                        cur.execute("""
+                            SELECT session_id, created_at 
+                            FROM m1_episodic 
+                            WHERE chunk_id = %s
+                        """, (chunk_id,))
+                    
+                    target_row = cur.fetchone()
+                    if not target_row:
+                        logger.debug(f"Target chunk not found: {chunk_id}")
+                        return None
+                    
+                    target_session_id = target_row['session_id']
+                    target_created_at = target_row['created_at']
+                    
+                    if not target_session_id:
+                        logger.warning(f"Target chunk {chunk_id} has no session_id, cannot retrieve context")
+                        return []
+                    
+                    # Query for context chunks in the same session created before target chunk
+                    if user_id:
+                        cur.execute("""
+                            SELECT 
+                                chunk_id, content, token_count, user_id, session_id, 
+                                created_at, updated_at, m2_status, chunking_strategy, 
+                                m0_raw_ids, metadata
+                            FROM m1_episodic 
+                            WHERE session_id = %s AND user_id = %s AND created_at < %s
+                            ORDER BY created_at DESC
+                            LIMIT %s
+                        """, (target_session_id, user_id, target_created_at, context_chunks_before))
+                    else:
+                        cur.execute("""
+                            SELECT 
+                                chunk_id, content, token_count, user_id, session_id, 
+                                created_at, updated_at, m2_status, chunking_strategy, 
+                                m0_raw_ids, metadata
+                            FROM m1_episodic 
+                            WHERE session_id = %s AND created_at < %s
+                            ORDER BY created_at DESC
+                            LIMIT %s
+                        """, (target_session_id, target_created_at, context_chunks_before))
+                    
+                    rows = cur.fetchall()
+                    
+                    # Convert to Chunk models and reverse to get chronological order (oldest first)
+                    chunks = []
+                    for row in reversed(rows):
+                        chunk = Chunk(
+                            chunk_id=str(row['chunk_id']),
+                            content=row['content'],
+                            token_count=row['token_count'],
+                            user_id=str(row['user_id']),
+                            session_id=str(row['session_id']) if row['session_id'] else None,
+                            created_at=row['created_at'],
+                            updated_at=row['updated_at'],
+                            m2_status=M2Status(row['m2_status']),
+                            chunking_strategy=row['chunking_strategy'],
+                            m0_raw_ids=list(row['m0_raw_ids']) if row['m0_raw_ids'] else [],
+                            metadata=json.loads(row['metadata']) if isinstance(row['metadata'], str) else (row['metadata'] or {})
+                        )
+                        chunks.append(chunk)
+                    
+                    logger.info(f"✅ Retrieved {len(chunks)} context chunks for chunk {chunk_id} (user_id={user_id})")
+                    return chunks
+            
+        except Exception as e:
+            logger.error(f"❌ Error retrieving session context for chunk {chunk_id}: {e}")
+            return None
+
+    def _apply_token_budget_limit(
+        self, 
+        context: List[Chunk], 
+        limit: int
+    ) -> List[Chunk]:
+        """
+        Apply token budget limit to context chunks, keeping most recent chunks that fit within budget.
+        
+        Args:
+            context: List of Chunk models ordered chronologically (oldest first)
+            limit: Maximum token budget for the context
+            
+        Returns:
+            Truncated list of Chunk models that fit within token budget (chronological order preserved)
+        """
+        if not context or limit <= 0:
+            return []
+        
+        # Calculate total tokens and truncate if needed
+        total_tokens = sum(chunk.token_count for chunk in context)
+        
+        if total_tokens <= limit:
+            logger.debug(f"✅ Context fits within token budget: {total_tokens}/{limit} tokens")
+            return context
+        
+        # Keep oldest chunks that fit within budget (starting from beginning of list)
+        truncated_context = []
+        current_tokens = 0
+        
+        # Work forwards through the list (oldest first)
+        for chunk in context:
+            if current_tokens + chunk.token_count <= limit:
+                truncated_context.append(chunk)  # Append to maintain chronological order
+                current_tokens += chunk.token_count
+            else:
+                # This chunk would exceed budget, stop here
+                break
+        
+        logger.info(f"✅ Applied token budget limit: {len(truncated_context)}/{len(context)} chunks, "
+                    f"{current_tokens}/{limit} tokens")
+        return truncated_context
+    
     def _success_response(self, data: Any, message: str) -> Dict[str, Any]:
         """Create a success response compatible with BufferService expectations."""
         return {
