@@ -222,6 +222,8 @@ class ConfigSensitiveWordFilter:
       words: list[str]
       mask_token: string (default '[SENSITIVE]')
       case_insensitive: bool (default True)
+      recurse_metadata: bool (default False) — if True, also process metadata string values
+      action: string (default 'mask') — 'mask', 'flag', or 'drop'
     """
 
     def __init__(self):
@@ -232,32 +234,106 @@ class ConfigSensitiveWordFilter:
         self.words = [w for w in (s_cfg.get("words") or []) if isinstance(w, str)]
         self.mask_token = str(s_cfg.get("mask_token", "[SENSITIVE]"))
         self.case_insensitive = bool(s_cfg.get("case_insensitive", True))
+        self.recurse_metadata = bool(s_cfg.get("recurse_metadata", False))
+        self.action = str(s_cfg.get("action", "mask")).lower()
+        if self.action not in ("mask", "flag", "drop"):
+            self.action = "mask"  # fallback to safe default
 
     def apply(self, response: Dict[str, Any], context: RequestContext) -> Dict[str, Any]:
         if not self.enabled or not self.words:
             return response
         data = response.get("data", {})
         results = data.get("results", [])
-        for r in results:
+        results_to_remove = []
+
+        for i, r in enumerate(results):
+            hit_detected = False
+
+            # Process content field
             c = r.get("content")
-            if not isinstance(c, str) or not c:
-                continue
-            new_c = c
-            for w in self.words:
-                if not w:
-                    continue
-                if self.case_insensitive:
-                    # Simple case-insensitive replace: iterate matches with re
-                    pattern = re.compile(re.escape(w), flags=re.IGNORECASE)
-                    new_c = pattern.sub(self.mask_token, new_c)
-                else:
-                    new_c = new_c.replace(w, self.mask_token)
-            if new_c != c:
-                r["content"] = new_c
+            if isinstance(c, str) and c:
+                new_c, content_hit = self._process_text(c)
+                if content_hit:
+                    hit_detected = True
+                    if self.action == "mask":
+                        r["content"] = new_c
+                    elif self.action == "drop":
+                        results_to_remove.append(i)
+                        continue
+
+            # Process metadata strings if enabled
+            if self.recurse_metadata and isinstance(r.get("metadata"), dict):
+                metadata_hit = self._process_metadata_recursive(r["metadata"])
+                if metadata_hit:
+                    hit_detected = True
+
+            # Mark hit in metadata
+            if hit_detected:
                 md = r.setdefault("metadata", {})
                 if isinstance(md, dict):
                     md["sensitive_hit"] = True
+
+        # Remove flagged results (in reverse order to maintain indices)
+        if self.action == "drop":
+            for i in reversed(results_to_remove):
+                results.pop(i)
+
         return response
+
+    def _process_text(self, text: str) -> tuple[str, bool]:
+        """Process text for sensitive words. Returns (processed_text, hit_detected)."""
+        if not text:
+            return text, False
+
+        new_text = text
+        hit_detected = False
+
+        for w in self.words:
+            if not w:
+                continue
+            if self.case_insensitive:
+                pattern = re.compile(re.escape(w), flags=re.IGNORECASE)
+                if pattern.search(new_text):
+                    hit_detected = True
+                    if self.action == "mask":
+                        new_text = pattern.sub(self.mask_token, new_text)
+            else:
+                if w in new_text:
+                    hit_detected = True
+                    if self.action == "mask":
+                        new_text = new_text.replace(w, self.mask_token)
+
+        return new_text, hit_detected
+
+    def _process_metadata_recursive(self, metadata: Dict[str, Any]) -> bool:
+        """Recursively process metadata dict for sensitive words. Returns hit_detected."""
+        hit_detected = False
+
+        for key, value in metadata.items():
+            if isinstance(value, str) and value:
+                new_value, value_hit = self._process_text(value)
+                if value_hit:
+                    hit_detected = True
+                    if self.action == "mask":
+                        metadata[key] = new_value
+            elif isinstance(value, dict):
+                nested_hit = self._process_metadata_recursive(value)
+                if nested_hit:
+                    hit_detected = True
+            elif isinstance(value, list):
+                for i, item in enumerate(value):
+                    if isinstance(item, str) and item:
+                        new_item, item_hit = self._process_text(item)
+                        if item_hit:
+                            hit_detected = True
+                            if self.action == "mask":
+                                value[i] = new_item
+                    elif isinstance(item, dict):
+                        nested_hit = self._process_metadata_recursive(item)
+                        if nested_hit:
+                            hit_detected = True
+
+        return hit_detected
 
 
 class ConfigToxicityAnnotatorFilter:

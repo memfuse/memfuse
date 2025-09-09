@@ -18,9 +18,11 @@ See execution_order.md for the full end-to-end picture.
   - Truncates `result.content` to a configured maximum length and appends a suffix (default `...`).
   - Sets `metadata.length_truncated = true` on affected items.
 - sensitive_word / sensitive_words
-  - Masks configured words in `result.content` with a token (default `[SENSITIVE]`).
+  - Processes configured words in `result.content` and optionally in metadata strings.
   - Case-insensitive by default; set `case_insensitive: false` for exact case matching.
-  - Sets `metadata.sensitive_hit = true` when any masking occurs.
+  - Action modes: `mask` (replace with token), `flag` (mark only), `drop` (remove result).
+  - Optional recursive metadata processing with `recurse_metadata: true`.
+  - Sets `metadata.sensitive_hit = true` when any sensitive content is detected.
 
 ## Configuration
 
@@ -46,6 +48,8 @@ guardrail:
     words: ["forbidden", "secret"]
     mask_token: "[SENSITIVE]"
     case_insensitive: true
+    recurse_metadata: false  # default: only process content
+    action: "mask"           # default: mask | flag | drop
 ```
 
 Notes:
@@ -168,6 +172,60 @@ Output (excerpt):
 ```
 
 Note: The content was first truncated to "This contains forbidden..." then masked to "This contains [MASKED]...".
+
+### Example D: Action modes (flag vs mask vs drop)
+
+Input results (excerpt):
+
+```json
+{
+  "data": {
+    "results": [
+      {"id": "1", "content": "Contains secret data"},
+      {"id": "2", "content": "Normal content"}
+    ]
+  }
+}
+```
+
+Config with `action: "flag"`:
+
+```yaml
+guardrail:
+  sensitive: { enabled: true, words: ["secret"], action: "flag" }
+```
+
+Output (flag mode - content unchanged, metadata marked):
+
+```json
+{
+  "data": {
+    "results": [
+      {"id": "1", "content": "Contains secret data", "metadata": {"sensitive_hit": true}},
+      {"id": "2", "content": "Normal content"}
+    ]
+  }
+}
+```
+
+Config with `action: "drop"`:
+
+```yaml
+guardrail:
+  sensitive: { enabled: true, words: ["secret"], action: "drop" }
+```
+
+Output (drop mode - sensitive results removed):
+
+```json
+{
+  "data": {
+    "results": [
+      {"id": "2", "content": "Normal content"}
+    ]
+  }
+}
+```
 
 ## Best practices
 
