@@ -42,3 +42,45 @@ This document outlines the minimal execution order and responsibilities across t
 - End-to-end unit tests wire: Gateway → QueryBuffer (with plugins) → Outbound Filters → Guardrail.
 - Persistence tests cover adapters and fallback behavior without external services.
 
+
+## Configuration examples
+
+Example: enable QueryBuffer plugins and outbound filters.
+
+```yaml
+buffer_plugins:
+  plugins:
+    - name: session_annotator
+      enabled: true
+    - name: result_enricher
+      enabled: true
+      params:
+        stage: merge
+        include_query_len: true
+    - name: field_keep_or_remove
+      enabled: true
+      params:
+        remove_fields: ["metadata.source"]
+
+gateway:
+  pipeline:
+    inbound: []
+    outbound:
+      - name: pii_redact
+        enabled: true
+      - name: toxicity_mark
+        enabled: true
+      - name: output_remove
+        enabled: true
+
+guardrail:
+  pii:
+    enabled: true
+    redact: true
+  toxicity:
+    enabled: true
+    threshold: 0.0
+  output:
+    enabled: true
+    remove_fields: ["metadata.source"]
+```
