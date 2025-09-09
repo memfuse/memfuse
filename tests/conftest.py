@@ -14,12 +14,25 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    """Create a new event loop for each test function to avoid conflicts."""
+    policy = asyncio.get_event_loop_policy()
+    loop = policy.new_event_loop()
+    asyncio.set_event_loop(loop)
     yield loop
-    loop.close()
+
+    # Clean up any remaining tasks
+    try:
+        pending = asyncio.all_tasks(loop)
+        if pending:
+            for task in pending:
+                task.cancel()
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+    except Exception:
+        pass
+    finally:
+        loop.close()
 
 
 @pytest.fixture
@@ -236,6 +249,10 @@ def pytest_collection_modifyitems(config, items):
         os.environ["SKIP_INTEGRATION"] = "true"
 
     for item in items:
+        # Add asyncio marker to async tests
+        if asyncio.iscoroutinefunction(item.function):
+            item.add_marker(pytest.mark.asyncio)
+
         # Add markers based on file path
         if "unit" in str(item.fspath):
             item.add_marker(pytest.mark.unit)
@@ -247,3 +264,43 @@ def pytest_collection_modifyitems(config, items):
         # Add chunking marker for chunk-related tests
         if "chunk" in str(item.fspath) or "chunking" in item.name:
             item.add_marker(pytest.mark.chunking)
+
+        # Add timeout markers
+        if "slow" in item.keywords:
+            item.add_marker(pytest.mark.timeout(300))  # 5 minutes for slow tests
+        elif asyncio.iscoroutinefunction(item.function):
+            item.add_marker(pytest.mark.timeout(60))   # 1 minute for async tests
+
+
+@pytest.fixture(autouse=True)
+def cleanup_global_state():
+    """Cleanup global state before and after each test."""
+    yield
+
+    # Post-test cleanup
+    try:
+        # Clear caches if available
+        from src.memfuse_core.gateway.filter_cache import (
+            get_regex_cache, get_content_cache, get_quality_cache
+        )
+        get_regex_cache().clear()
+        get_content_cache().clear()
+        get_quality_cache().clear()
+    except (ImportError, AttributeError):
+        pass
+
+
+@pytest.fixture(scope="function")
+async def async_cleanup():
+    """Provide async cleanup for tests."""
+    yield
+
+    # Cancel any remaining tasks
+    try:
+        tasks = [task for task in asyncio.all_tasks() if not task.done()]
+        if tasks:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    except Exception:
+        pass
