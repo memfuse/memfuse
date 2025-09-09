@@ -152,26 +152,28 @@ class TestSemanticValidator:
     async def test_semantic_conflict_detection(self, validator, mock_encoder):
         """Test semantic conflict detection."""
         validator.encoder = mock_encoder
-        
-        # Content with potential conflicts
-        content = "This is true.\nThis is false."
-        
-        # Mock embeddings for segments
+
+        # Content with potential conflicts using opposing keywords
+        content = "This statement is correct and true.\nThis statement is wrong and false."
+
+        # Mock embeddings for segments - very different embeddings (low similarity)
         segment_embeddings = [
-            np.array([0.1, 0.2, 0.3, 0.4]),
-            np.array([0.9, 0.8, 0.7, 0.6])  # Very different
+            np.array([1.0, 0.0, 0.0, 0.0]),  # First segment
+            np.array([0.0, 1.0, 0.0, 0.0])   # Second segment (orthogonal = similarity ~0)
         ]
-        
+
         with patch.object(validator, '_encode_text') as mock_encode:
             mock_encode.side_effect = segment_embeddings
-            
+
             violations = await validator._detect_semantic_conflicts(
                 content, segment_embeddings[0]
             )
-        
-        # Should detect potential conflict
+
+        # Should detect potential conflict (low similarity + opposing keywords)
         assert len(violations) > 0
         assert violations[0].type == "conflict"
+        assert "conflict" in violations[0].description.lower()
+        assert violations[0].severity > 0.8  # High severity due to very low similarity
     
     def test_opposing_keywords_detection(self, validator):
         """Test opposing keywords detection."""

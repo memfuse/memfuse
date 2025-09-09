@@ -30,16 +30,23 @@ class TestTracingFallback:
     def test_tracer_initialization_without_opentelemetry(self):
         """Test tracer initialization when OpenTelemetry is not available."""
         tracer = MemFuseTracer()
-        tracer.initialize({
-            "enabled": True,
-            "service_name": "test-service",
-            "exporter_type": "console"
-        })
-        
+
+        # Mock the global config manager to not be initialized
+        with patch('src.memfuse_core.observability.tracing.get_global_config_manager') as mock_gcm:
+            mock_gcm_instance = MagicMock()
+            mock_gcm_instance.is_initialized.return_value = False
+            mock_gcm.return_value = mock_gcm_instance
+
+            tracer.initialize({
+                "enabled": True,
+                "service_name": "test-service",
+                "exporter_type": "console"
+            })
+
         # When OpenTelemetry is not available, tracer should be disabled
         assert not tracer.is_enabled()
-        # Note: When OpenTelemetry is unavailable, tracer falls back to default config
-        assert tracer._config.service_name == "memfuse-core"  # Default service name
+        # Configuration should be set from the provided config
+        assert tracer._config.service_name == "test-service"
         assert tracer._config.exporter_type == "console"
     
     def test_trace_operations_without_opentelemetry(self):
@@ -210,18 +217,23 @@ class TestTracingConfiguration:
     def test_tracer_config_update(self):
         """Test updating tracer configuration."""
         tracer = MemFuseTracer()
-        
-        # Initial config
-        tracer.initialize({"enabled": False, "service_name": "initial"})
-        assert not tracer.is_enabled()
-        # Note: When OpenTelemetry is unavailable, tracer uses default config
-        assert tracer._config.service_name == "memfuse-core"  # Default service name
-        
-        # Update config
-        tracer.initialize({"enabled": True, "service_name": "updated"})
-        # Should still be disabled due to OpenTelemetry not being available
-        assert not tracer.is_enabled()
-        assert tracer._config.service_name == "updated"
+
+        # Mock the global config manager to not be initialized
+        with patch('src.memfuse_core.observability.tracing.get_global_config_manager') as mock_gcm:
+            mock_gcm_instance = MagicMock()
+            mock_gcm_instance.is_initialized.return_value = False
+            mock_gcm.return_value = mock_gcm_instance
+
+            # Initial config
+            tracer.initialize({"enabled": False, "service_name": "initial"})
+            assert not tracer.is_enabled()
+            assert tracer._config.service_name == "initial"
+
+            # Update config
+            tracer.initialize({"enabled": True, "service_name": "updated"})
+            # Should still be disabled due to OpenTelemetry not being available
+            assert not tracer.is_enabled()
+            assert tracer._config.service_name == "updated"
 
 
 class TestTracingErrorHandling:
