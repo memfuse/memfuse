@@ -309,6 +309,40 @@ class MemoryApiGateway(GatewayInterface):
                         obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
                         if isinstance(obs_top, dict):
                             obs_top["score_range"] = {"min": min(scores), "max": max(scores)}
+                # Aggregate dedup removed count (first available)
+                if dbg.get("enabled") and dbg.get("include_dedup_removed_count"):
+                    dedup_val = None
+                    for it in results:
+                        if not isinstance(it, dict):
+                            continue
+                        md = it.get("metadata")
+                        obs = md.get("observability") if isinstance(md, dict) else None
+                        val = obs.get("dedup_removed_count") if isinstance(obs, dict) else None
+                        if isinstance(val, int):
+                            dedup_val = val
+                            break
+                    if dedup_val is not None:
+                        md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                        obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                        if isinstance(obs_top, dict):
+                            obs_top["dedup_removed_count"] = dedup_val
+                # Aggregate score clip stats (first available)
+                if dbg.get("enabled") and dbg.get("include_score_clip_stats"):
+                    clip_stats = None
+                    for it in results:
+                        if not isinstance(it, dict):
+                            continue
+                        md = it.get("metadata")
+                        obs = md.get("observability") if isinstance(md, dict) else None
+                        st = obs.get("score_clip_stats") if isinstance(obs, dict) else None
+                        if isinstance(st, dict):
+                            clip_stats = st
+                            break
+                    if clip_stats is not None:
+                        md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                        obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                        if isinstance(obs_top, dict):
+                            obs_top["score_clip_stats"] = clip_stats
         except Exception:
             # Best-effort: do not break pipeline on debug enrich failures
             pass

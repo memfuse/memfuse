@@ -34,18 +34,55 @@ class RagAnnotatorPlugin:
 
 
 class ScoreClipPlugin:
-    """Clip scores into a configurable range to stabilize downstream logic."""
+    """Clip scores into a configurable range to stabilize downstream logic.
+
+    Params:
+      min: float (default 0.0)
+      max: float (default 1.0)
+      include_stats: bool (default False) — if True, write score_clip_stats to observability
+    """
 
     def __init__(self, **params: Any) -> None:
         self.min_v = float(params.get("min", 0.0))
         self.max_v = float(params.get("max", 1.0))
+        self.include_stats = bool(params.get("include_stats", False))
 
     def after_merge(self, results: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+        min_before = None
+        max_before = None
+        min_after = None
+        max_after = None
+        count_clipped = 0
         for r in results:
-            if isinstance(r, dict):
-                s = r.get("score")
-                if isinstance(s, (int, float)):
-                    r["score"] = max(self.min_v, min(self.max_v, float(s)))
+            if not isinstance(r, dict):
+                continue
+            s = r.get("score")
+            if isinstance(s, (int, float)):
+                s_float = float(s)
+                min_before = s_float if min_before is None else min(min_before, s_float)
+                max_before = s_float if max_before is None else max(max_before, s_float)
+                clipped = max(self.min_v, min(self.max_v, s_float))
+                if clipped != s_float:
+                    count_clipped += 1
+                r["score"] = clipped
+                min_after = clipped if min_after is None else min(min_after, clipped)
+                max_after = clipped if max_after is None else max(max_after, clipped)
+        if self.include_stats and results:
+            stats = {
+                "count_clipped": int(count_clipped),
+                "min_before": float(min_before) if min_before is not None else None,
+                "max_before": float(max_before) if max_before is not None else None,
+                "min_after": float(min_after) if min_after is not None else None,
+                "max_after": float(max_after) if max_after is not None else None,
+            }
+            # Attach to first result's observability to avoid duplicating across all items
+            first = results[0]
+            if isinstance(first, dict):
+                md = first.setdefault("metadata", {})
+                obs = md.setdefault("observability", {})
+                obs["score_clip_stats"] = stats
+            # Also expose in ctx for potential upstream aggregation
+            ctx["score_clip_stats"] = stats
         return results
 
 
@@ -77,10 +114,12 @@ class DeduplicatePlugin:
 
     Params:
       key: field name to use for deduplication (default: 'id')
+      include_stats: bool (default False)   if True, write dedup_removed_count to observability
     """
 
     def __init__(self, **params: Any) -> None:
         self.key = params.get("key", "id")
+        self.include_stats = bool(params.get("include_stats", False))
 
     def after_merge(self, results: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         seen = set()
@@ -96,6 +135,13 @@ class DeduplicatePlugin:
                 continue
             seen.add(k)
             unique.append(r)
+        removed = max(0, len(results) - len(unique))
+        if self.include_stats and unique:
+            first = unique[0]
+            md = first.setdefault("metadata", {})
+            obs = md.setdefault("observability", {})
+            obs["dedup_removed_count"] = int(removed)
+            ctx["dedup_removed_count"] = int(removed)
         return unique
 
 

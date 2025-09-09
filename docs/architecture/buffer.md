@@ -62,6 +62,7 @@ plugins:
     enabled: true
     params:
       max: 0.9
+      include_stats: true
   - name: session_annotator
     enabled: true
     params:
@@ -71,6 +72,7 @@ plugins:
     enabled: true
     params:
       key: id
+      include_stats: true
   - name: result_enricher
     enabled: true
     params:
@@ -179,6 +181,8 @@ gateway:
     include_rerank_cache_hit: true
     include_plugin_order: true
     include_score_range: true
+    include_dedup_removed_count: true
+    include_score_clip_stats: true
 ```
 
 Expected response (excerpt):
