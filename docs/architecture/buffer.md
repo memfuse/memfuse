@@ -76,6 +76,8 @@ plugins:
     params:
       stage: merge
       include_query_len: true
+      include_rerank_cache: true
+      include_plugin_order: true
   - name: field_keep_or_remove
     enabled: true
     params:
@@ -107,6 +109,34 @@ Behavior:
   - Effect: remove dupes, add observability metadata, then drop sensitive aux fields
 - Session annotate + Rag annotate
   - Ensure session_id/agent_id present and metadata.source tagged for downstream filters
+
+## Gateway debug aggregation (optional)
+
+To aid troubleshooting, Gateway can aggregate rerank cache hits across results and expose a top-level flag in the API response when enabled.
+
+Config:
+
+```yaml
+gateway:
+  debug:
+    enabled: true
+    include_rerank_cache_hit: true
+```
+
+Effect (response excerpt):
+
+```json
+{
+  "status": "success",
+  "data": {
+    "results": [...],
+    "total": 10,
+    "metadata": {
+      "observability": { "rerank_cache_hit": true }
+    }
+  }
+}
+```
 
 ## Testing
 

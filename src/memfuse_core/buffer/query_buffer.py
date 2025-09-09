@@ -70,6 +70,8 @@ class QueryBuffer(BufferComponentInterface):
         self.total_hybrid_results = 0
         self.total_storage_results = 0
         self.rerank_operations = 0
+        # Observability flag for rerank cache
+        self._last_rerank_cache_hit: bool = False
 
         # Buffer references
         self.hybrid_buffer = None
@@ -262,6 +264,10 @@ class QueryBuffer(BufferComponentInterface):
             final_results = await self._process_hybrid_results(
                 buffer_results, query_text, top_k, sort_by, order, use_rerank
             )
+
+        # Enrich plugin context with observability just before after_merge
+        plugin_ctx["rerank_cache_hit"] = self._last_rerank_cache_hit
+        plugin_ctx["plugin_order"] = [p.__class__.__name__ for p in self._plugins]
 
         # Run after_merge hooks
         for p in self._plugins:
@@ -644,9 +650,11 @@ class QueryBuffer(BufferComponentInterface):
 
         if cached_rerank:
             logger.debug("QueryBuffer: Rerank cache hit")
+            self._last_rerank_cache_hit = True
             return cached_rerank
 
         # 2. Execute reranking
+        self._last_rerank_cache_hit = False
         try:
             reranked = await self.rerank_handler(query_text, results)
             self.rerank_operations += 1

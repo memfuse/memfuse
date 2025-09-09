@@ -105,14 +105,20 @@ class ResultEnricherPlugin:
     Params:
       stage: optional stage label (default: 'after_merge')
       include_query_len: bool, whether to include query length in metadata
+      include_rerank_cache: bool, whether to include last rerank cache hit flag
+      include_plugin_order: bool, whether to include executed plugin order
     """
 
     def __init__(self, **params: Any) -> None:
         self.stage = params.get("stage", "after_merge")
         self.include_query_len = bool(params.get("include_query_len", True))
+        self.include_rerank_cache = bool(params.get("include_rerank_cache", False))
+        self.include_plugin_order = bool(params.get("include_plugin_order", False))
 
     def after_merge(self, results: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         q = ctx.get("query_text", "") or ""
+        rk = bool(ctx.get("rerank_cache_hit", False))
+        order = ctx.get("plugin_order")
         for r in results:
             if not isinstance(r, dict):
                 continue
@@ -122,6 +128,12 @@ class ResultEnricherPlugin:
                 obs.setdefault("stage", self.stage)
                 if self.include_query_len:
                     obs.setdefault("query_len", len(q))
+                if self.include_rerank_cache:
+                    # Always reflect latest cache status
+                    obs["rerank_cache_hit"] = rk
+                if self.include_plugin_order and isinstance(order, list):
+                    # Keep plugin order up-to-date
+                    obs["plugin_order"] = order
         return results
 
 

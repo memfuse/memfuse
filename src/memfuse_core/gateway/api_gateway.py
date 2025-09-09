@@ -249,6 +249,29 @@ class MemoryApiGateway(GatewayInterface):
         # 4. Remove unwanted fields
         data = self.field_remover.transform(data, context)
 
+        # Optional debug metadata aggregation (controlled by gateway.debug)
+        try:
+            gcm = get_global_config_manager()
+            if gcm.is_initialized():
+                gw_cfg = gcm.get_section("gateway") or {}
+                dbg = gw_cfg.get("debug") or {}
+                if dbg.get("enabled") and dbg.get("include_rerank_cache_hit"):
+                    results = data.get("results", []) or []
+                    agg_hit = any(
+                        isinstance(it, dict) and
+                        isinstance(it.get("metadata"), dict) and
+                        isinstance(it["metadata"].get("observability"), dict) and
+                        it["metadata"]["observability"].get("rerank_cache_hit") is True
+                        for it in results
+                    )
+                    md = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                    obs = md.setdefault("observability", {}) if isinstance(md, dict) else {}
+                    if isinstance(obs, dict):
+                        obs["rerank_cache_hit"] = agg_hit
+        except Exception:
+            # Best-effort: do not break pipeline on debug enrich failures
+            pass
+
         # Return transformed response with defaults to satisfy API contract
         status = service_response.get("status", "success")
         code = service_response.get("code") if service_response.get("code") is not None else 200
