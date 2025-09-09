@@ -22,20 +22,24 @@ class RetrievalAdapter:
         return await self._retrieve(query_text, max_results)
 
     async def _retrieve(self, query_text: str, max_results: int) -> List[Dict[str, Any]]:
-        # Prefer optional query_topk if available for efficiency
-        if hasattr(self.store, "query_topk"):
-            results = await getattr(self.store, "query_topk")(query_text, max_results)
-            return [
-                {"id": r.id, "content": r.content, "score": r.score, "metadata": r.metadata}
-                for r in results
-            ]
-        # Fallback: single-result query
-        q = Query(text=query_text, metadata={"top_k": max_results})
-        r = await self.store.query(q)
-        return (
-            [{"id": r.id, "content": r.content, "score": r.score, "metadata": r.metadata}]
-            if r else []
-        )
+        try:
+            # Prefer optional query_topk if available for efficiency
+            if hasattr(self.store, "query_topk"):
+                results = await getattr(self.store, "query_topk")(query_text, max_results)
+                return [
+                    {"id": r.id, "content": r.content, "score": r.score, "metadata": r.metadata}
+                    for r in results
+                ]
+            # Fallback: single-result query
+            q = Query(text=query_text, metadata={"top_k": max_results})
+            r = await self.store.query(q)
+            return (
+                [{"id": r.id, "content": r.content, "score": r.score, "metadata": r.metadata}]
+                if r else []
+            )
+        except Exception:
+            # Be safe in adapter to avoid breaking upstream pipelines
+            return []
 
     def as_handler(self) -> Callable[[str, int], Awaitable[List[Dict[str, Any]]]]:
         async def handler(query_text: str, max_results: int) -> List[Dict[str, Any]]:

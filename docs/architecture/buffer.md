@@ -60,3 +60,7 @@ plugins:
 
 These validate that plugin order and effects are deterministic and reversible by configuration.
 
+## Related
+- See also: execution order across layers in docs/architecture/execution_order.md
+
+
