@@ -181,6 +181,85 @@ class ConfigPIIRedactorFilter:
         return response
 
 
+class ConfigMaxContentLengthFilter:
+    """Clamp/limit content field length when guardrail.length is enabled.
+
+    Config: guardrail.length
+      enabled: bool
+      max_content_length: int
+      suffix: string (default '...') appended when truncated
+    """
+
+    def __init__(self):
+        gcm = get_global_config_manager()
+        cfg = gcm.get_section("guardrail") if gcm.is_initialized() else {}
+        length_cfg = cfg.get("length", {}) or {}
+        self.enabled = bool(length_cfg.get("enabled", False))
+        self.max_len = int(length_cfg.get("max_content_length", 0) or 0)
+        self.suffix = str(length_cfg.get("suffix", "..."))
+
+    def apply(self, response: Dict[str, Any], context: RequestContext) -> Dict[str, Any]:
+        if not self.enabled or self.max_len <= 0:
+            return response
+        data = response.get("data", {})
+        results = data.get("results", [])
+        for r in results:
+            c = r.get("content")
+            if isinstance(c, str) and len(c) > self.max_len:
+                truncated = c[: self.max_len] + self.suffix
+                r["content"] = truncated
+                md = r.setdefault("metadata", {})
+                if isinstance(md, dict):
+                    md["length_truncated"] = True
+        return response
+
+
+class ConfigSensitiveWordFilter:
+    """Mask sensitive words in content when guardrail.sensitive is enabled.
+
+    Config: guardrail.sensitive
+      enabled: bool
+      words: list[str]
+      mask_token: string (default '[SENSITIVE]')
+      case_insensitive: bool (default True)
+    """
+
+    def __init__(self):
+        gcm = get_global_config_manager()
+        cfg = gcm.get_section("guardrail") if gcm.is_initialized() else {}
+        s_cfg = cfg.get("sensitive", cfg.get("sensitive_words", {})) or {}
+        self.enabled = bool(s_cfg.get("enabled", False))
+        self.words = [w for w in (s_cfg.get("words") or []) if isinstance(w, str)]
+        self.mask_token = str(s_cfg.get("mask_token", "[SENSITIVE]"))
+        self.case_insensitive = bool(s_cfg.get("case_insensitive", True))
+
+    def apply(self, response: Dict[str, Any], context: RequestContext) -> Dict[str, Any]:
+        if not self.enabled or not self.words:
+            return response
+        data = response.get("data", {})
+        results = data.get("results", [])
+        for r in results:
+            c = r.get("content")
+            if not isinstance(c, str) or not c:
+                continue
+            new_c = c
+            for w in self.words:
+                if not w:
+                    continue
+                if self.case_insensitive:
+                    # Simple case-insensitive replace: iterate matches with re
+                    pattern = re.compile(re.escape(w), flags=re.IGNORECASE)
+                    new_c = pattern.sub(self.mask_token, new_c)
+                else:
+                    new_c = new_c.replace(w, self.mask_token)
+            if new_c != c:
+                r["content"] = new_c
+                md = r.setdefault("metadata", {})
+                if isinstance(md, dict):
+                    md["sensitive_hit"] = True
+        return response
+
+
 class ConfigToxicityAnnotatorFilter:
     """Annotate responses with a toxicity flag using simple keyword heuristic.
 
@@ -249,6 +328,9 @@ def build_filters_from_config(cfg: Dict[str, Any] | None) -> Tuple[List[InboundF
         "output_remove": ConfigOutputRemovalFilter,
         "pii_redact": ConfigPIIRedactorFilter,
         "toxicity_mark": ConfigToxicityAnnotatorFilter,
+        "max_length": ConfigMaxContentLengthFilter,
+        "sensitive_word": ConfigSensitiveWordFilter,
+        "sensitive_words": ConfigSensitiveWordFilter,
     }
 
     # Inbound
