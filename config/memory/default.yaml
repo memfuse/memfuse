@@ -14,19 +14,19 @@
 
 # Processing strategy - controls how layers work together
 processing:
-  strategy: "parallel"          # parallel | sequential
-  enable_fallback: true         # fallback to sequential if parallel fails
-  max_concurrent_layers: 3      # maximum layers processing simultaneously
+  strategy: "parallel" # parallel | sequential
+  enable_fallback: true # fallback to sequential if parallel fails
+  max_concurrent_layers: 3 # maximum layers processing simultaneously
 
   # Global timeout and retry settings
   timeout:
-    per_layer: 30.0            # timeout per layer operation (seconds)
-    total_operation: 120.0     # total operation timeout (seconds)
+    per_layer: 30.0 # timeout per layer operation (seconds)
+    total_operation: 120.0 # total operation timeout (seconds)
 
   retry:
-    max_attempts: 3            # maximum retry attempts
-    base_delay: 1.0           # base delay between retries (seconds)
-    max_delay: 10.0           # maximum delay between retries (seconds)
+    max_attempts: 3 # maximum retry attempts
+    base_delay: 1.0 # base delay between retries (seconds)
+    max_delay: 10.0 # maximum delay between retries (seconds)
     exponential_backoff: true # use exponential backoff
 
 # =============================================================================
@@ -41,7 +41,7 @@ layers:
 
     # M0-specific settings
     buffer_size: 1000
-    auto_flush_interval: 60    # seconds
+    auto_flush_interval: 60 # seconds
     storage_backends: ["vector", "keyword", "sql"]
 
     # M0 storage tables
@@ -85,7 +85,7 @@ layers:
 
   # M3: Procedural Memory - Learned patterns and procedures
   m3:
-    enabled: true  # Now fully implemented
+    enabled: true # Now fully implemented
     priority: 4
 
     # M3-specific settings
@@ -139,7 +139,7 @@ storage:
     connection_pool_size: 3
     timeout: 15.0
     enable_transactions: true
-    backend: "sqlite"  # Keyword search optimized for SQLite
+    backend: "sqlite" # Keyword search optimized for SQLite
 
   graph:
     connection_pool_size: 3
@@ -147,7 +147,7 @@ storage:
     enable_auto_save: true
     store_type: "networkx"
     enable_transactions: true
-    backend: "sqlite"  # Graph storage uses SQLite for simplicity
+    backend: "sqlite" # Graph storage uses SQLite for simplicity
 
   sql:
     connection_pool_size: 5
@@ -162,12 +162,13 @@ storage:
 
 # Memory service configuration - controls how MemoryService integrates with layers
 memory_service:
-  parallel_enabled: true        # Enable M0/M1/M2 parallel processing
+  m2_enabled: true
+  parallel_enabled: true # Enable M0/M1/M2 parallel processing
   parallel_strategy: "parallel" # Processing strategy
-  enable_fallback: true         # Fallback to traditional processing on errors
-  log_processing_mode: true     # Log processing decisions
-  timeout_per_layer: 30.0       # Timeout per layer (seconds)
-  max_retries: 3               # Maximum retry attempts
+  enable_fallback: true # Fallback to traditional processing on errors
+  log_processing_mode: true # Log processing decisions
+  timeout_per_layer: 30.0 # Timeout per layer (seconds)
+  max_retries: 3 # Maximum retry attempts
 
 # =============================================================================
 # PERFORMANCE AND MONITORING
@@ -177,11 +178,11 @@ performance:
   enable_monitoring: true
   enable_caching: true
   cache_size: 1000
-  log_interval: 60.0           # performance log interval (seconds)
+  log_interval: 60.0 # performance log interval (seconds)
 
   # Error handling
   max_error_history: 100
-  error_threshold_for_fallback: 0.5  # 50% error rate triggers fallback
+  error_threshold_for_fallback: 0.5 # 50% error rate triggers fallback
 
 # =============================================================================
 # ENVIRONMENT-SPECIFIC SETTINGS
@@ -194,6 +195,6 @@ development:
 
 production:
   enable_metrics_collection: true
-  metrics_export_interval: 300  # seconds
+  metrics_export_interval: 300 # seconds
   enable_health_checks: true
-  health_check_interval: 60     # seconds
+  health_check_interval: 60 # seconds
