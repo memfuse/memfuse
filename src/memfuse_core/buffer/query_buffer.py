@@ -83,14 +83,22 @@ class QueryBuffer(BufferComponentInterface):
 
         logger.info(f"QueryBuffer: Initialized with max_size={max_size}, default_sort={default_sort_by}, rerank_enabled={rerank_handler is not None}")
 
-        # Load buffer plugins from config if available
+        # Load buffer plugins and buffer settings from config if available
         self._plugins: List[BufferPlugin] = []
+        self.retrieval_timeout_seconds = None
         gcm = get_global_config_manager()
         if gcm.is_initialized():
             bp_cfg = gcm.get_section("buffer_plugins")
             self._plugins = build_plugins_from_config(bp_cfg)
             if self._plugins:
                 logger.info(f"QueryBuffer: Loaded {len(self._plugins)} buffer plugins")
+            buf_cfg = gcm.get_section("buffer") or {}
+            try:
+                rts = buf_cfg.get("retrieval_timeout_seconds")
+                if rts is not None:
+                    self.retrieval_timeout_seconds = float(rts)
+            except Exception:
+                self.retrieval_timeout_seconds = None
 
     def set_hybrid_buffer(self, hybrid_buffer):
         """Set the HybridBuffer instance for queries.
@@ -342,7 +350,20 @@ class QueryBuffer(BufferComponentInterface):
         if self.retrieval_handler:
             # Request fewer storage results since we have buffer results
             storage_top_k = max(top_k - len(buffer_results), top_k // 2)
-            storage_results = await self.retrieval_handler(query_text, storage_top_k)
+            try:
+                if self.retrieval_timeout_seconds:
+                    storage_results = await asyncio.wait_for(
+                        self.retrieval_handler(query_text, storage_top_k),
+                        timeout=self.retrieval_timeout_seconds,
+                    )
+                else:
+                    storage_results = await self.retrieval_handler(query_text, storage_top_k)
+            except asyncio.TimeoutError:
+                logger.warning("QueryBuffer: Retrieval handler timed out; continuing without storage results")
+                storage_results = []
+            except Exception as e:
+                logger.warning(f"QueryBuffer: Retrieval handler failed: {e}")
+                storage_results = []
             self.total_storage_results += len(storage_results or [])
             logger.info(f"QueryBuffer: Got {len(storage_results or [])} results from storage")
 
@@ -696,7 +717,17 @@ class QueryBuffer(BufferComponentInterface):
         try:
             # Use session-specific query
             query_text = f"session_id:{session_id}"
-            results = await self.retrieval_handler(query_text, limit or 100)
+            if self.retrieval_timeout_seconds:
+                try:
+                    results = await asyncio.wait_for(
+                        self.retrieval_handler(query_text, limit or 100),
+                        timeout=self.retrieval_timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("QueryBuffer: Storage session retrieval timed out")
+                    results = []
+            else:
+                results = await self.retrieval_handler(query_text, limit or 100)
 
             # Filter and sort results
             session_results = [
