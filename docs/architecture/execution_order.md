@@ -12,10 +12,10 @@ flowchart TD
   H --> I[Guardrail audit_response]
 ```
 
-
 This document outlines the minimal execution order and responsibilities across the main pathway.
 
 ## Main Pathway
+
 1. Gateway (Inbound Filters)
    - Normalize/validate request (lightweight)
    - No heavy logic here; forward context (user_id, agent_id, session_id, query, top_k)
@@ -33,15 +33,16 @@ This document outlines the minimal execution order and responsibilities across t
    - audit_response() field removal/sanitization according to config
 
 ## Notes
+
 - Plugins and filters are configured via global config manager and can be enabled/disabled independently.
 - QueryBuffer default behavior remains unchanged when no plugins are enabled.
 - Persistence interface is normalized by RetrievalAdapter/handler to List[dict] (id, content, score, metadata).
 
 ## Testing Strategy
+
 - Unit-level tests mock BufferRetrieval to avoid DB dependency.
 - End-to-end unit tests wire: Gateway → QueryBuffer (with plugins) → Outbound Filters → Guardrail.
 - Persistence tests cover adapters and fallback behavior without external services.
-
 
 ## Configuration examples
 
