@@ -183,6 +183,25 @@ gateway:
     include_score_range: true
     include_dedup_removed_count: true
     include_score_clip_stats: true
+
+### Cache-hit example
+
+When rerank cache is enabled and a subsequent query hits the cache, each item may carry `metadata.observability.rerank_cache_hit: true` (depending on your enricher settings), and Gateway can aggregate this as a top-level flag when `gateway.debug.include_rerank_cache_hit: true`.
+
+Response excerpt:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "results": [
+      {"id": "...", "relevance_score": 0.83, "metadata": {"observability": {"rerank_cache_hit": true}}},
+      {"id": "...", "relevance_score": 0.77, "metadata": {"observability": {"rerank_cache_hit": true}}}
+    ],
+    "total": 2,
+    "metadata": {"observability": {"rerank_cache_hit": true}}
+  }
+}
 ```
 
 Expected response (excerpt):
