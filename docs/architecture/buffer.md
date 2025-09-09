@@ -169,7 +169,13 @@ Effect (response excerpt):
     "metadata": {
       "observability": {
         "rerank_cache_hit": true,
-        "plugin_order": ["DeduplicatePlugin", "ResultEnricherPlugin", "FieldKeepOrRemovePlugin"]
+        "plugin_order": ["DeduplicatePlugin", "ResultEnricherPlugin", "FieldKeepOrRemovePlugin"],
+        "durations": {
+          "response_processor": 0.125,
+          "metadata_enricher": 0.089,
+          "scope_calculator": 0.034,
+          "field_remover": 0.012
+        }
       }
     }
   }
@@ -217,6 +223,7 @@ gateway:
     include_score_clip_stats: true
     include_dedup_unique_count: true
     include_dedup_key_source: true
+    include_durations: true  # optional: transformation stage timings (ms)
 
 ### Cache-hit example
 

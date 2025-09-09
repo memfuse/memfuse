@@ -99,6 +99,9 @@ class MemoryApiGateway(GatewayInterface):
         operation_type: OperationType = OperationType.QUERY
     ) -> Dict[str, Any]:
         """Process a complete request through the gateway pipeline."""
+        import time
+        overall_start = time.perf_counter()
+
         try:
             # Step 1: Parse request and create context
             context = self.request_parser.parse_request(request_data)
@@ -157,6 +160,22 @@ class MemoryApiGateway(GatewayInterface):
 
             # Step 6: Audit response
             self.guardrail.audit_response(transformed_response, context)
+
+            # Optional: Add overall timing to debug metadata
+            overall_duration = time.perf_counter() - overall_start
+            try:
+                gcm = get_global_config_manager()
+                if gcm.is_initialized():
+                    gw_cfg = gcm.get_section("gateway") or {}
+                    dbg = gw_cfg.get("debug") or {}
+                    if dbg.get("enabled") and dbg.get("include_durations"):
+                        data = transformed_response.get("data", {})
+                        md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                        obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                        if isinstance(obs_top, dict) and "durations" in obs_top:
+                            obs_top["durations"]["overall"] = round(overall_duration * 1000, 3)
+            except Exception:
+                pass
 
             return transformed_response
 
@@ -236,16 +255,29 @@ class MemoryApiGateway(GatewayInterface):
 
         logger.info(f"Gateway: Starting transformation pipeline with {len(data.get('results', []))} results")
 
+        # Optional timing collection for debug
+        durations = {}
+        import time
+
         # 1. Transform response format (field renaming, memory type handling)
+        start_time = time.perf_counter()
         data = self.response_processor.transform(data, context)
+        durations["response_processor"] = time.perf_counter() - start_time
+
         # 2. Enrich metadata
+        start_time = time.perf_counter()
         data = self.metadata_enricher.transform(data, context)
+        durations["metadata_enricher"] = time.perf_counter() - start_time
 
         # 3. Calculate scope
+        start_time = time.perf_counter()
         data = self.scope_calculator.transform(data, context)
+        durations["scope_calculator"] = time.perf_counter() - start_time
 
         # 4. Remove unwanted fields
+        start_time = time.perf_counter()
         data = self.field_remover.transform(data, context)
+        durations["field_remover"] = time.perf_counter() - start_time
 
         # Optional debug metadata aggregation (controlled by gateway.debug)
         try:
@@ -377,6 +409,15 @@ class MemoryApiGateway(GatewayInterface):
                         obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
                         if isinstance(obs_top, dict):
                             obs_top["score_clip_stats"] = clip_stats
+                # Aggregate durations (if enabled)
+                if dbg.get("enabled") and dbg.get("include_durations"):
+                    md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                    obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                    if isinstance(obs_top, dict):
+                        # Convert to milliseconds and round to 3 decimal places
+                        obs_top["durations"] = {
+                            k: round(v * 1000, 3) for k, v in durations.items()
+                        }
         except Exception:
             # Best-effort: do not break pipeline on debug enrich failures
             pass
