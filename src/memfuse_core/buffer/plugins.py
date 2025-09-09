@@ -74,6 +74,8 @@ class ScoreClipPlugin:
                 "max_before": float(max_before) if max_before is not None else None,
                 "min_after": float(min_after) if min_after is not None else None,
                 "max_after": float(max_after) if max_after is not None else None,
+                "min_threshold": float(self.min_v),
+                "max_threshold": float(self.max_v),
             }
             # Attach to first result's observability to avoid duplicating across all items
             first = results[0]

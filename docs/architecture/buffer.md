@@ -84,8 +84,11 @@ plugins:
     enabled: true
     params:
       keep_fields: []
+
       remove_fields: ["metadata.source", "metadata.observability.query_len"]
 ```
+
+Note: When `score_clip.include_stats: true`, each batch will emit `metadata.observability.score_clip_stats` on the first item with summary fields: `count_clipped`, `min_before/max_before`, `min_after/max_after`, and thresholds `min_threshold/max_threshold`. Gateway can optionally surface this at the top level via `gateway.debug.include_score_clip_stats`.
 
 ## Timeout and fallback (storage retrieval)
 

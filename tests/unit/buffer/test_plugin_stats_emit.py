@@ -49,6 +49,7 @@ async def test_score_clip_plugin_emits_stats_when_enabled():
     assert scs.get("count_clipped") == 2
     assert scs.get("min_before") == 0.05 and scs.get("max_before") == 0.95
     assert scs.get("min_after") == 0.1 and scs.get("max_after") == 0.9
+    assert scs.get("min_threshold") == 0.1 and scs.get("max_threshold") == 0.9
     # ctx mirror
     assert ctx.get("score_clip_stats", {}) == scs
 
