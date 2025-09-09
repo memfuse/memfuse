@@ -18,7 +18,6 @@ Execution order inside QueryBuffer:
 4. merge/sort/rerank (existing logic)
 5. after_merge(results, ctx)
 
-
 ### Plugin order and rerank
 
 Inside QueryBuffer, the effective execution order when rerank is enabled is:
@@ -28,6 +27,7 @@ Inside QueryBuffer, the effective execution order when rerank is enabled is:
 - after_merge plugins, in the configured order
 
 Notes:
+
 - Plugins do not run before rerank except for optional after_retrieve hooks that only touch buffer-side results.
 - Typical recommended order for after_merge plugins: deduplicate → score_clip → result_enricher → field_keep_or_remove.
 - Rerank uses a small cache keyed by query + result ids; repeated queries avoid re-running rerank.
@@ -95,10 +95,10 @@ buffer:
 ```
 
 Behavior:
+
 - Mixed path (buffer + storage): storage call wrapped by asyncio.wait_for; timeout → continue with buffer results only
 - Session path: storage part times out → return Hybrid results only (still sorted/limited)
 - No exception propagated; logs contain a warning
-
 
 ### Common plugin combinations
 
