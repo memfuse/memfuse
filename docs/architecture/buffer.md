@@ -121,6 +121,7 @@ gateway:
   debug:
     enabled: true
     include_rerank_cache_hit: true
+    include_plugin_order: true
 ```
 
 Effect (response excerpt):
@@ -132,7 +133,10 @@ Effect (response excerpt):
     "results": [...],
     "total": 10,
     "metadata": {
-      "observability": { "rerank_cache_hit": true }
+      "observability": {
+        "rerank_cache_hit": true,
+        "plugin_order": ["DeduplicatePlugin", "ResultEnricherPlugin", "FieldKeepOrRemovePlugin"]
+      }
     }
   }
 }

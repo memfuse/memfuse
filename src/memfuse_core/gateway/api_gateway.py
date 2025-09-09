@@ -22,8 +22,6 @@ from .processors import (
 from .filters import (
     InboundFilter,
     OutboundFilter,
-    NoOpInboundFilter,
-    NoOpOutboundFilter,
     build_filters_from_config,
 )
 from ..utils.global_config_manager import get_global_config_manager
@@ -255,19 +253,47 @@ class MemoryApiGateway(GatewayInterface):
             if gcm.is_initialized():
                 gw_cfg = gcm.get_section("gateway") or {}
                 dbg = gw_cfg.get("debug") or {}
+                results = data.get("results", []) or []
+                # Aggregate rerank cache hit
                 if dbg.get("enabled") and dbg.get("include_rerank_cache_hit"):
-                    results = data.get("results", []) or []
-                    agg_hit = any(
-                        isinstance(it, dict) and
-                        isinstance(it.get("metadata"), dict) and
-                        isinstance(it["metadata"].get("observability"), dict) and
-                        it["metadata"]["observability"].get("rerank_cache_hit") is True
-                        for it in results
-                    )
-                    md = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
-                    obs = md.setdefault("observability", {}) if isinstance(md, dict) else {}
-                    if isinstance(obs, dict):
-                        obs["rerank_cache_hit"] = agg_hit
+                    def _has_cache_hit(item: Dict[str, Any]) -> bool:
+                        if not isinstance(item, dict):
+                            return False
+                        md = item.get("metadata")
+                        if not isinstance(md, dict):
+                            return False
+                        obs = md.get("observability")
+                        return isinstance(obs, dict) and obs.get("rerank_cache_hit") is True
+                    agg_hit = any(_has_cache_hit(it) for it in results)
+                    md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                    obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                    if isinstance(obs_top, dict):
+                        obs_top["rerank_cache_hit"] = agg_hit
+                # Aggregate plugin order (first non-empty list)
+                if dbg.get("enabled") and dbg.get("include_plugin_order"):
+                    def _get_order(item: Dict[str, Any]):
+                        if not isinstance(item, dict):
+                            return None
+                        md = item.get("metadata")
+                        if not isinstance(md, dict):
+                            return None
+                        obs = md.get("observability")
+                        if not isinstance(obs, dict):
+                            return None
+                        order = obs.get("plugin_order")
+                        if isinstance(order, list) and len(order) > 0:
+                            return order
+                        return None
+                    first_order = None
+                    for it in results:
+                        first_order = _get_order(it)
+                        if first_order:
+                            break
+                    if first_order:
+                        md_top = data.setdefault("metadata", {}) if isinstance(data, dict) else {}
+                        obs_top = md_top.setdefault("observability", {}) if isinstance(md_top, dict) else {}
+                        if isinstance(obs_top, dict):
+                            obs_top["plugin_order"] = first_order
         except Exception:
             # Best-effort: do not break pipeline on debug enrich failures
             pass
