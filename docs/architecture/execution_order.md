@@ -46,7 +46,7 @@ This document outlines the minimal execution order and responsibilities across t
 
 ## Configuration examples
 
-Example: enable QueryBuffer plugins and outbound filters.
+Example: enable QueryBuffer plugins, inbound/outbound filters.
 
 ```yaml
 buffer_plugins:
@@ -65,7 +65,9 @@ buffer_plugins:
 
 gateway:
   pipeline:
-    inbound: []
+    inbound:
+      - name: noop_inbound  # placeholder; add real normalizers later
+        enabled: true
     outbound:
       - name: pii_redact
         enabled: true

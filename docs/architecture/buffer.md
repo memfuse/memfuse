@@ -57,7 +57,25 @@ plugins:
     enabled: true
     params:
       key: id
+  - name: result_enricher
+    enabled: true
+    params:
+      stage: merge
+      include_query_len: true
+  - name: field_keep_or_remove
+    enabled: true
+    params:
+      keep_fields: []
+      remove_fields: ["metadata.source", "metadata.observability.query_len"]
 ```
+
+### Common plugin combinations
+
+- Dedup + Enrich + Remove
+  - Order: deduplicate → result_enricher → field_keep_or_remove
+  - Effect: remove dupes, add observability metadata, then drop sensitive aux fields
+- Session annotate + Rag annotate
+  - Ensure session_id/agent_id present and metadata.source tagged for downstream filters
 
 ## Testing
 
