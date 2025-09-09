@@ -17,6 +17,8 @@ defaults:
   - server: default
   - buffer: default
   - storage: default
+  - gateway: pipeline
+  - guardrail: default
   - _self_
 
 # All detailed configurations are loaded from subdirectories

@@ -19,7 +19,14 @@ from .processors import (
     ScopeCalculator,
     FieldRemover
 )
-from .filters import InboundFilter, OutboundFilter, NoOpInboundFilter, NoOpOutboundFilter
+from .filters import (
+    InboundFilter,
+    OutboundFilter,
+    NoOpInboundFilter,
+    NoOpOutboundFilter,
+    build_filters_from_config,
+)
+from ..utils.global_config_manager import get_global_config_manager
 
 
 class MemoryRequestParser:
@@ -67,9 +74,24 @@ class MemoryApiGateway(GatewayInterface):
             'metadata.retrieval',
             'metadata.source'
         ]
-        # Filters registration points (inbound/outbound); empty by default
+        # Filters registration points (inbound/outbound)
+        # By default empty; may be populated from config if available
         self.inbound_filters: list[InboundFilter] = []
         self.outbound_filters: list[OutboundFilter] = []
+
+        # Try to load filters from configuration (if global config is initialized)
+        try:
+            gcm = get_global_config_manager()
+            if gcm.is_initialized():
+                gateway_cfg = gcm.get_section("gateway")
+                inbound, outbound = build_filters_from_config(gateway_cfg)
+                if inbound:
+                    self.inbound_filters = inbound
+                if outbound:
+                    self.outbound_filters = outbound
+        except Exception:
+            # Best-effort; keep empty if config not available
+            pass
 
         self.field_remover = FieldRemover(fields_to_remove=unused_fields)
 

@@ -1,0 +1,15 @@
+# Guardrail defaults (minimal)
+enabled: false
+thresholds:
+  toxicity: 0.9
+pii:
+  enabled: false
+output:
+  enabled: false
+  remove_fields:
+    - metadata.level
+    - metadata.retrieval
+    - metadata.source
+quota:
+  enabled: false
+
