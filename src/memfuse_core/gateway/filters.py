@@ -15,6 +15,44 @@ class InboundFilter(Protocol):
         ...
 
 
+class ConfigRequestNormalizerInboundFilter:
+    """Normalize incoming request fields using gateway.request_normalizer config.
+
+    - Coerce query to string (fallback to empty string)
+    - Clamp top_k into [min_top_k, max_top_k] with default_top_k when missing/invalid
+    """
+
+    def __init__(self) -> None:
+        gcm = get_global_config_manager()
+        cfg = gcm.get_section("gateway") if gcm.is_initialized() else {}
+        rn = (cfg or {}).get("request_normalizer", {}) or {}
+        self.enabled = bool(rn.get("enabled", False))
+        self.min_top_k = int(rn.get("min_top_k", 1))
+        self.max_top_k = int(rn.get("max_top_k", 50))
+        self.default_top_k = int(rn.get("default_top_k", 5))
+
+    def apply(self, request_data: Dict[str, Any], context: RequestContext) -> Dict[str, Any]:
+        if not self.enabled:
+            return request_data
+        # normalize query
+        q = request_data.get("query", "")
+        if not isinstance(q, str):
+            q = "" if q is None else str(q)
+        request_data["query"] = q
+        # normalize top_k
+        tk = request_data.get("top_k", self.default_top_k)
+        try:
+            tk = int(tk)
+        except Exception:
+            tk = self.default_top_k
+        if tk < self.min_top_k:
+            tk = self.min_top_k
+        if tk > self.max_top_k:
+            tk = self.max_top_k
+        request_data["top_k"] = tk
+        return request_data
+
+
 class OutboundFilter(Protocol):
     def apply(self, response: Dict[str, Any], context: RequestContext) -> Dict[str, Any]:
         ...
@@ -171,6 +209,7 @@ def build_filters_from_config(cfg: Dict[str, Any] | None) -> Tuple[List[InboundF
     # Registry of available filters
     inbound_registry: Dict[str, type] = {
         "noop_inbound": NoOpInboundFilter,
+        "request_normalizer": ConfigRequestNormalizerInboundFilter,
     }
     outbound_registry: Dict[str, type] = {
         "noop_outbound": NoOpOutboundFilter,
