@@ -4,7 +4,7 @@ Plugins can hook into QueryBuffer lifecycle to augment results without
 changing core logic. Hooks are lightweight and synchronous.
 """
 from __future__ import annotations
-from typing import Any, Dict, List, Protocol, Tuple, Type
+from typing import Any, Dict, List, Protocol, Type
 
 
 class BufferPlugin(Protocol):
@@ -49,6 +49,56 @@ class ScoreClipPlugin:
         return results
 
 
+class SessionAnnotatorPlugin:
+    """Ensure session/agent fields exist in metadata; can use defaults via params.
+
+    Params:
+      default_session_id: optional default value when missing
+      default_agent_id: optional default value when missing
+    """
+
+    def __init__(self, **params: Any) -> None:
+        self.default_session_id = params.get("default_session_id")
+        self.default_agent_id = params.get("default_agent_id")
+
+    def after_merge(self, results: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            md = r.setdefault("metadata", {})
+            if isinstance(md, dict):
+                md.setdefault("session_id", ctx.get("session_id", self.default_session_id))
+                md.setdefault("agent_id", ctx.get("agent_id", self.default_agent_id))
+        return results
+
+
+class DeduplicatePlugin:
+    """Remove duplicate results by key or content hash in after_merge phase.
+
+    Params:
+      key: field name to use for deduplication (default: 'id')
+    """
+
+    def __init__(self, **params: Any) -> None:
+        self.key = params.get("key", "id")
+
+    def after_merge(self, results: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+        seen = set()
+        unique: List[Dict[str, Any]] = []
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            k = r.get(self.key)
+            if k is None:
+                # fallback to hash of content
+                k = (r.get("content"), r.get("score"))
+            if k in seen:
+                continue
+            seen.add(k)
+            unique.append(r)
+        return unique
+
+
 def build_plugins_from_config(cfg: Dict[str, Any] | None) -> List[BufferPlugin]:
     """Instantiate plugins from buffer_plugins config.
 
@@ -66,6 +116,8 @@ def build_plugins_from_config(cfg: Dict[str, Any] | None) -> List[BufferPlugin]:
     registry: Dict[str, Type] = {
         "rag_annotator": RagAnnotatorPlugin,
         "score_clip": ScoreClipPlugin,
+        "session_annotator": SessionAnnotatorPlugin,
+        "deduplicate": DeduplicatePlugin,
     }
 
     created: List[BufferPlugin] = []
