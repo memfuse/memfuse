@@ -18,6 +18,20 @@ Execution order inside QueryBuffer:
 4. merge/sort/rerank (existing logic)
 5. after_merge(results, ctx)
 
+
+### Plugin order and rerank
+
+Inside QueryBuffer, the effective execution order when rerank is enabled is:
+
+- Sort (according to sort_by/order)
+- Rerank (if rerank_handler provided and use_rerank=True)
+- after_merge plugins, in the configured order
+
+Notes:
+- Plugins do not run before rerank except for optional after_retrieve hooks that only touch buffer-side results.
+- Typical recommended order for after_merge plugins: deduplicate → score_clip → result_enricher → field_keep_or_remove.
+- Rerank uses a small cache keyed by query + result ids; repeated queries avoid re-running rerank.
+
 Where ctx is a small dict including: { query_text, top_k, sort_by, order }. Plugins can be extended to use more context in the future.
 
 ## Plugin Port & Examples
