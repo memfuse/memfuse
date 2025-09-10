@@ -23,6 +23,10 @@ async def test_orchestrator_writes_run_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr(chat_mod.ChatLLM, "chat", fake_chat, raising=False)
     monkeypatch.setattr(chat_mod.ChatLLM, "completion_json", fake_completion_json, raising=False)
 
+    # avoid embedding model load
+    from memfuse_core.utils import embeddings as emb_mod
+    monkeypatch.setattr(emb_mod, "create_embedding", lambda text: [0.0] * 16, raising=False)
+
     from memfuse_core.m3.orchestrator import Orchestrator
 
     orch = Orchestrator()
@@ -38,4 +42,4 @@ async def test_orchestrator_writes_run_artifacts(tmp_path, monkeypatch):
     assert (run_dir / "input.json").exists()
     assert (run_dir / "plan.json").exists()
     assert (run_dir / "report.txt").exists()
-
+    assert (run_dir / "reflection.json").exists()

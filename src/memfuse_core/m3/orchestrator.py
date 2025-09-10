@@ -221,6 +221,29 @@ class Orchestrator:
                     await self.store.insert_lesson(vec, user_goal, s.agent, "success", None, "", s.input)
                 elif isinstance(o, dict) and o.get("error"):
                     await self.store.insert_lesson(vec, user_goal, s.agent, "fail", str(o.get("error"))[:500], "", s.input)
+            # reflection summary
+            try:
+                def _ok(out: Dict[str, Any]) -> bool:
+                    return bool(isinstance(out, dict) and (out.get("report") or out.get("answer")) and not out.get("error"))
+
+                summary = {
+                    "total_steps": len(executed),
+                    "success": sum(1 for _s, o in executed if _ok(o)),
+                    "fail": sum(1 for _s, o in executed if not _ok(o)),
+                }
+                steps_ref = [
+                    {
+                        "agent": s.agent,
+                        "success": _ok(o),
+                        "keys": list(o.keys()) if isinstance(o, dict) else [],
+                    }
+                    for s, o in executed
+                ]
+                (run_dir / "reflection.json").write_text(
+                    json.dumps({"summary": summary, "steps": steps_ref}, ensure_ascii=False, indent=2)
+                )
+            except Exception:
+                pass
         except Exception:
             pass
 
