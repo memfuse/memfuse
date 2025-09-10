@@ -8,7 +8,6 @@ lessons storage will be wired in later steps against ProceduralStore.
 """
 
 import json
-from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple, Optional
 
 from ..llm.chat import ChatLLM
@@ -16,15 +15,14 @@ from ..rag.rag_service import RAGService
 from ..procedural.store import ProceduralStore
 from ..utils.embeddings import create_embedding
 from ..utils.global_config_manager import get_global_config_manager
+from .executor import AgentExecutor
+from .agents.websearch import WebSearchAgent
 import os
 import time
 from pathlib import Path
 
 
-@dataclass
-class PlanStep:
-    agent: str
-    input: Dict[str, Any]
+from .types import PlanStep
 
 
 class Planner:
@@ -98,13 +96,7 @@ class ReportGenerationAgent:
             return {"report": f"[offline] {text[:500]}", "note": str(e)}
 
 
-class WebSearchAgent:
-    def __init__(self) -> None:
-        pass
-
-    async def execute(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        # Placeholder agent: disabled by default to avoid network dependency
-        return {"error": "web search disabled in Phase A"}
+# WebSearchAgent now implemented in agents/websearch.py
 
 
 class ShellCommandAgent:
@@ -256,7 +248,6 @@ class Orchestrator:
 
         context: Dict[str, Any] = {}
         last_output: Dict[str, Any] = {}
-        executed: List[Tuple[PlanStep, Dict[str, Any]]] = []
         self.last_step_outcomes: List[Dict[str, Any]] = []
 
         # Pre-lessons (global) to help parameterization and observability
@@ -282,83 +273,18 @@ class Orchestrator:
                 pass
         except Exception:
             pass
-        for idx, step in enumerate(steps):
-            agent = self.agents.get(step.agent)
-            if not agent:
-                continue
-            try:
-                t0 = time.perf_counter()
-                payload = dict(step.input)
-                payload.setdefault("context", context)
-                # Lessons-informed parameterization: try to seed payload from prior successful params for this agent
-                success_params: List[Dict[str, Any]] = []
-                avoid_patterns: List[str] = []
-                if goal_vec is not None:
-                    try:
-                        agent_lessons = await self.store.query_lessons_similar(goal_vec, agent=step.agent, top_k=5)
-                        for _lid, st, fx, wp, _sc in agent_lessons:
-                            if st == 'success' and isinstance(wp, dict):
-                                success_params.append(wp)
-                            elif st == 'fail' and fx:
-                                avoid_patterns.append(str(fx))
-                        if success_params:
-                            # Merge first successful params into payload (do not override provided values)
-                            for k, v in success_params[0].items():
-                                if k not in payload:
-                                    payload[k] = v
-                    except Exception:
-                        pass
-                # Attempt execution with simple success heuristic
-                attempts = 0
-                success = False
-                out: Dict[str, Any] = {}
-                for attempt in range(max(1, int(self.planner_max_attempts or 1))):
-                    attempts = attempt + 1
-                    try:
-                        out = await agent.execute(session_id, payload)
-                    except Exception:
-                        out = {"error": "agent execution failed"}
-                    # Heuristic success
-                    def _ok(a: str, o: Dict[str, Any]) -> bool:
-                        if not isinstance(o, dict):
-                            return False
-                        if o.get("error"):
-                            return False
-                        if a == "RAGQueryAgent":
-                            return bool(o.get("answer"))
-                        if a == "ReportGenerationAgent":
-                            return bool(o.get("report"))
-                        return True
-                    success = _ok(step.agent, out)
-                    if success:
-                        break
-                last_output = out
-                context[step.agent] = out
-                duration_ms = int((time.perf_counter() - t0) * 1000)
-                executed.append((step, out))
-                self.last_step_outcomes.append({
-                    "agent": step.agent,
-                    "success": bool(success),
-                    "attempts": attempts,
-                    "duration_ms": duration_ms,
-                    "error": (str(out.get("error"))[:200] if isinstance(out, dict) and out.get("error") else None),
-                })
-                # Write per-step trace
-                try:
-                    (run_dir / f"step_{idx}_{step.agent}.json").write_text(
-                        json.dumps({
-                            "input": {k: v for k, v in payload.items() if k != "context"},
-                            "output": out,
-                            "attempts": attempts,
-                            "success": success,
-                            "lessons": {"success_examples": len(success_params), "avoid_patterns": len(avoid_patterns)},
-                            "duration_ms": duration_ms,
-                        }, ensure_ascii=False, indent=2)
-                    )
-                except Exception:
-                    pass
-            except Exception:
-                continue
+        # Use AgentExecutor to run steps
+        executor = AgentExecutor(self.agents, self.store, planner_max_attempts=self.planner_max_attempts)
+        executed, outcomes = await executor.execute_steps(
+            session_id=session_id,
+            steps=steps,
+            context=context,
+            run_dir=run_dir,
+            user_goal_vec=goal_vec,
+        )
+        self.last_step_outcomes = outcomes
+        if executed:
+            last_output = executed[-1][1]
         # Final text
         if "report" in last_output:
             final_text = str(last_output.get("report") or "")

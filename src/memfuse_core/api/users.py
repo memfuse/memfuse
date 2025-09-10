@@ -291,28 +291,66 @@ async def query_memory(
 
         store = ProceduralStore()
         emb = await create_embedding(request.query)
-        workflows = await store.query_procedural_similar(emb, top_k=max(1, request.top_k or 5))
-        lessons = await store.query_lessons_similar(emb, agent=None, top_k=max(1, request.top_k or 5))
+        top_k = max(1, request.top_k or 5)
+        workflows = await store.query_procedural_similar(emb, top_k=top_k)
+        # lessons: filter_agent may be specified; default None for global
+        meta = request.metadata or {}
+        filter_agent = meta.get("filter_agent") or None
+        lessons = await store.query_lessons_similar(emb, agent=(filter_agent or None), top_k=top_k)
+
+        include_workflows = True if meta.get("include_workflows", True) else False
         session_workflows = []
-        if request.session_id:
+        if include_workflows and request.session_id:
             try:
-                session_workflows = await store.query_message_workflows_for_session(request.session_id, limit=max(1, request.top_k or 50))
+                sw_limit = int(meta.get("session_workflows_limit", max(1, request.top_k or 50)))
+            except Exception:
+                sw_limit = max(1, request.top_k or 50)
+            try:
+                session_workflows = await store.query_message_workflows_for_session(request.session_id, limit=sw_limit)
             except Exception:
                 session_workflows = []
+
+        # Apply client-like filters server-side for convenience
+        filter_workflow_id = meta.get("filter_workflow_id")
+        try:
+            min_score = float(meta.get("min_score")) if meta.get("min_score") is not None else None
+        except Exception:
+            min_score = None
+        filter_status = meta.get("filter_status")
+        filter_tags = meta.get("filter_tags") if isinstance(meta.get("filter_tags"), list) else None
 
         wf_list = [
             {"workflow_id": w, "score": s, "workflow": wf}
             for (w, wf, s) in workflows
+            if (filter_workflow_id is None or w == filter_workflow_id)
+            and (min_score is None or (s is not None and s >= min_score))
         ]
+
         lesson_list = [
             {"lesson_id": lid, "status": st, "score": sc, "working_params": wp, "fix_summary": fx}
             for (lid, st, fx, wp, sc) in lessons
+            if (filter_status is None or st == filter_status)
+            and (min_score is None or (sc is not None and sc >= min_score))
         ]
+
+        sw_list = session_workflows
+        if filter_workflow_id is not None:
+            sw_list = [sw for sw in sw_list if (sw.get("workflow_id") == filter_workflow_id)]
+        if filter_tags:
+            want = set([str(t) for t in filter_tags])
+            def _has_any(tags):
+                try:
+                    return bool(set(tags or []) & want)
+                except Exception:
+                    return False
+            sw_list = [sw for sw in sw_list if _has_any(sw.get("tags"))]
+
         results = {
             "procedural_memory": wf_list,
             "lessons": lesson_list,
-            "session_workflows": session_workflows,
+            "session_workflows": sw_list,
         }
+
         return ApiResponse.success(
             data={"results": results},
             message="M3 results retrieved",
