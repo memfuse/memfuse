@@ -98,6 +98,63 @@ class ReportGenerationAgent:
             return {"report": f"[offline] {text[:500]}", "note": str(e)}
 
 
+class WebSearchAgent:
+    def __init__(self) -> None:
+        pass
+
+    async def execute(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        # Placeholder agent: disabled by default to avoid network dependency
+        return {"error": "web search disabled in Phase A"}
+
+
+class ShellCommandAgent:
+    def __init__(self) -> None:
+        self.allowed = str(os.getenv("ALLOW_SHELL_AGENT", "false")).lower() in ("1", "true", "yes")
+
+    async def execute(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.allowed:
+            return {"error": "shell agent disabled"}
+        cmd = payload.get("cmd") or payload.get("command")
+        if not cmd or not isinstance(cmd, str):
+            return {"error": "cmd required"}
+        # Extremely restricted: only allow safe commands like 'echo'
+        parts = cmd.strip().split()
+        if not parts or parts[0] not in ("echo",):
+            return {"error": "command not allowed"}
+        try:
+            import subprocess
+            proc = subprocess.run(parts, capture_output=True, text=True, timeout=5)
+            return {"exit": proc.returncode, "output": (proc.stdout or proc.stderr)[:1000]}
+        except Exception as e:
+            return {"error": f"shell exec failed: {e}"}
+
+
+class DatabaseQueryAgent:
+    def __init__(self) -> None:
+        pass
+
+    async def execute(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        # Minimal placeholder using DatabaseService if available; safe select-only
+        try:
+            from ..services.database_service import DatabaseService
+        except Exception:
+            return {"error": "database service unavailable"}
+        query = str(payload.get("query") or "").strip()
+        if not query or not query.lower().startswith("select"):
+            return {"error": "only SELECT allowed"}
+        try:
+            db = await DatabaseService.get_instance()
+            rows = await db.backend.execute(query, tuple())  # type: ignore[attr-defined]
+            # Limit results for safety
+            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+                headers = list(rows[0].keys())
+            else:
+                headers = []
+            return {"headers": headers[:50], "rows": rows[:20] if isinstance(rows, list) else []}
+        except Exception as e:
+            return {"error": f"db query failed: {e}"}
+
+
 class Orchestrator:
     def __init__(self, store: Optional[ProceduralStore] = None) -> None:
         self.llm = ChatLLM()
@@ -106,6 +163,9 @@ class Orchestrator:
         self.agents = {
             "RAGQueryAgent": RAGQueryAgent(self.rag),
             "ReportGenerationAgent": ReportGenerationAgent(self.llm),
+            "WebSearchAgent": WebSearchAgent(),
+            "ShellCommandAgent": ShellCommandAgent(),
+            "DatabaseQueryAgent": DatabaseQueryAgent(),
         }
         self.store = store or ProceduralStore()
         # Debug / last-run info
@@ -227,6 +287,7 @@ class Orchestrator:
             if not agent:
                 continue
             try:
+                t0 = time.perf_counter()
                 payload = dict(step.input)
                 payload.setdefault("context", context)
                 # Lessons-informed parameterization: try to seed payload from prior successful params for this agent
@@ -273,11 +334,14 @@ class Orchestrator:
                         break
                 last_output = out
                 context[step.agent] = out
+                duration_ms = int((time.perf_counter() - t0) * 1000)
                 executed.append((step, out))
                 self.last_step_outcomes.append({
                     "agent": step.agent,
                     "success": bool(success),
                     "attempts": attempts,
+                    "duration_ms": duration_ms,
+                    "error": (str(out.get("error"))[:200] if isinstance(out, dict) and out.get("error") else None),
                 })
                 # Write per-step trace
                 try:
@@ -288,6 +352,7 @@ class Orchestrator:
                             "attempts": attempts,
                             "success": success,
                             "lessons": {"success_examples": len(success_params), "avoid_patterns": len(avoid_patterns)},
+                            "duration_ms": duration_ms,
                         }, ensure_ascii=False, indent=2)
                     )
                 except Exception:

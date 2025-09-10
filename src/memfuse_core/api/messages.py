@@ -306,6 +306,10 @@ async def add_messages(
                                                 meta["success"] = bool(oc.get("success"))
                                             if oc.get("attempts") is not None:
                                                 meta["attempts"] = int(oc.get("attempts"))
+                                            if oc.get("duration_ms") is not None:
+                                                meta["duration_ms"] = int(oc.get("duration_ms"))
+                                            if oc.get("error"):
+                                                meta["error"] = str(oc.get("error"))[:200]
                                 except Exception:
                                     pass
                                 if agent_name:
