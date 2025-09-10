@@ -16,6 +16,8 @@ from ..rag.rag_service import RAGService
 from ..procedural.store import ProceduralStore
 from ..utils.embeddings import create_embedding
 import os
+import time
+from pathlib import Path
 
 
 @dataclass
@@ -112,6 +114,14 @@ class Orchestrator:
             self.procedural_reuse_threshold = 0.9
 
     async def handle_request(self, session_id: str, user_goal: str) -> str:
+        # Prepare run directory
+        base_dir = os.getenv("RUNS_BASE_DIR", "runs")
+        run_dir = Path(base_dir) / time.strftime('%Y%m%d_%H%M%S') / session_id
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "input.json").write_text(json.dumps({"session_id": session_id, "goal": user_goal}, ensure_ascii=False, indent=2))
+        except Exception:
+            pass
         # Try reuse first (soft-fail if any issue)
         steps: List[PlanStep]
         wid_reused: Optional[str] = None
@@ -142,10 +152,18 @@ class Orchestrator:
         except Exception:
             steps = self.planner.plan(user_goal)
 
+        # Persist plan
+        try:
+            (run_dir / "plan.json").write_text(
+                json.dumps({"steps": [{"agent": s.agent, "input": s.input} for s in steps]}, ensure_ascii=False, indent=2)
+            )
+        except Exception:
+            pass
+
         context: Dict[str, Any] = {}
         last_output: Dict[str, Any] = {}
         executed: List[Tuple[PlanStep, Dict[str, Any]]] = []
-        for step in steps:
+        for idx, step in enumerate(steps):
             agent = self.agents.get(step.agent)
             if not agent:
                 continue
@@ -156,6 +174,13 @@ class Orchestrator:
                 last_output = out
                 context[step.agent] = out
                 executed.append((step, out))
+                # Write per-step trace
+                try:
+                    (run_dir / f"step_{idx}_{step.agent}.json").write_text(
+                        json.dumps({"input": {k: v for k, v in payload.items() if k != "context"}, "output": out}, ensure_ascii=False, indent=2)
+                    )
+                except Exception:
+                    pass
             except Exception:
                 continue
         # Final text
@@ -172,6 +197,10 @@ class Orchestrator:
             if self.last_reused and wid_reused:
                 await self.store.bump_procedural_usage(wid_reused, 1)
                 self.last_workflow_id = wid_reused
+                try:
+                    (run_dir / "reused.json").write_text(json.dumps({"workflow_id": wid_reused}, ensure_ascii=False, indent=2))
+                except Exception:
+                    pass
             else:
                 workflow = {
                     "goal": user_goal,
@@ -182,12 +211,22 @@ class Orchestrator:
                 wid_new = str(_uuid.uuid4())
                 await self.store.upsert_procedural_workflow(wid_new, vec, workflow)
                 self.last_workflow_id = wid_new
+                try:
+                    (run_dir / "workflow.json").write_text(json.dumps({"workflow_id": wid_new, "workflow": workflow}, ensure_ascii=False, indent=2))
+                except Exception:
+                    pass
             # lessons
             for s, o in executed:
                 if isinstance(o, dict) and (o.get("report") or o.get("answer")):
                     await self.store.insert_lesson(vec, user_goal, s.agent, "success", None, "", s.input)
                 elif isinstance(o, dict) and o.get("error"):
                     await self.store.insert_lesson(vec, user_goal, s.agent, "fail", str(o.get("error"))[:500], "", s.input)
+        except Exception:
+            pass
+
+        # Write final report
+        try:
+            (run_dir / "report.txt").write_text(final_text)
         except Exception:
             pass
 
