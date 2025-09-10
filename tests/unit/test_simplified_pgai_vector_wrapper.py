@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typing import List, Dict, Any, Optional
 import numpy as np
 
-from src.memfuse_core.store.pgai_vector_wrapper import PgaiVectorWrapper
+from src.memfuse_core.store.pgai_store.pgai_vector_wrapper import PgaiVectorWrapper
 from src.memfuse_core.store.pgai_store import PgaiStore
 from src.memfuse_core.rag.chunk.base import ChunkData
 from src.memfuse_core.rag.encode.base import EncoderBase
@@ -258,7 +258,7 @@ class TestSimplifiedPgaiVectorWrapper:
         
         # Test __del__ method
         wrapper.initialized = True
-        with patch('src.memfuse_core.store.pgai_vector_wrapper.logger') as mock_logger:
+        with patch('src.memfuse_core.store.pgai_store.pgai_vector_wrapper.logger') as mock_logger:
             wrapper.__del__()
             mock_logger.debug.assert_called_once()
     

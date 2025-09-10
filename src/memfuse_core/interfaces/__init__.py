@@ -45,6 +45,22 @@ from .memory_layer import (
     LayerStatus
 )
 
+# Gateway interfaces
+from .gateway_interface import (
+    GatewayInterface,
+    RequestContext,
+    RoutingDecision,
+    ServiceType,
+    OperationType,
+    RequestParser,
+    ServiceRouter,
+    QueryResponseProcessor,
+    ResponseGuardrail,
+    MetadataBasedRouter,
+    SchemaValidator,
+    ResponseAuditor
+)
+
 __all__ = [
     # Model provider interfaces
     "ModelProvider",
@@ -84,4 +100,18 @@ __all__ = [
     "WriteResult",
     "QueryResult",
     "LayerStatus",
+
+    # Gateway interfaces
+    "GatewayInterface",
+    "RequestContext",
+    "RoutingDecision",
+    "ServiceType",
+    "OperationType",
+    "RequestParser",
+    "ServiceRouter",
+    "QueryResponseProcessor",
+    "ResponseGuardrail",
+    "MetadataBasedRouter",
+    "SchemaValidator",
+    "ResponseAuditor",
 ]

@@ -8,7 +8,6 @@ from typing import List
 from unittest.mock import patch, AsyncMock
 
 from src.memfuse_core.store.pgai_store import PgaiStore
-from src.memfuse_core.hierarchy.layers import M0EpisodicLayer
 from src.memfuse_core.models.schema import MessageRecord
 from src.memfuse_core.rag.chunk.base import ChunkData
 

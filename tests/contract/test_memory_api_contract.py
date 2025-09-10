@@ -94,10 +94,10 @@ class TestMemoryAPIContract:
             "type": "object",
             "properties": {
                 "id": {"type": "string"},
-                "content": {"type": "string"},
-                "score": {"type": "number", "minimum": 0, "maximum": 1},
-                "type": {"type": "string", "enum": ["message", "knowledge"]},
-                "role": {"type": ["string", "null"]},
+                "content": {"type": ["string", "null"]},
+                "fact": {"type": ["object", "null"]},
+                "relevance_score": {"type": "number", "minimum": 0, "maximum": 1},
+                "memory_type": {"type": "string"},
                 "created_at": {"type": ["string", "null"]},
                 "updated_at": {"type": ["string", "null"]},
                 "metadata": {
@@ -107,24 +107,14 @@ class TestMemoryAPIContract:
                         "agent_id": {"type": ["string", "null"]},
                         "session_id": {"type": ["string", "null"]},
                         "session_name": {"type": ["string", "null"]},
-                        "scope": {"type": ["string", "null"], "enum": ["in_session", "cross_session", None]},
-                        "level": {"type": "integer"},
-                        "retrieval": {
-                            "type": "object",
-                            "properties": {
-                                "source": {"type": "string"},
-                                "similarity": {"type": "number"}
-                            },
-                            "required": ["source"],
-                            "additionalProperties": True
-                        }
+                        "scope": {"type": ["string", "null"], "enum": ["in_session", "cross_session", None]}
                     },
-                    "required": ["user_id", "level", "retrieval"],
+                    "required": ["user_id", "scope"],
                     "additionalProperties": True
                 }
             },
-            "required": ["id", "content", "score", "type", "metadata"],
-            "additionalProperties": False
+            "required": ["id", "relevance_score", "memory_type", "metadata"],
+            "additionalProperties": True
         }
     
     @property
@@ -202,9 +192,8 @@ class TestMemoryAPIContract:
             result = {
                 "id": f"msg-{i+1}",
                 "content": f"This is test message {i+1}",
-                "score": 0.95 - (i * 0.1),
-                "type": "message",
-                "role": "user" if i % 2 == 0 else "assistant",
+                "relevance_score": 0.95 - (i * 0.1),
+                "memory_type": "message",
                 "created_at": "2023-01-01T12:00:00Z",
                 "updated_at": "2023-01-01T12:00:00Z",
                 "metadata": {
@@ -212,12 +201,7 @@ class TestMemoryAPIContract:
                     "agent_id": "test-agent",
                     "session_id": session_id or "test-session",
                     "session_name": "Test Session",
-                    "scope": "in_session" if session_id else None,
-                    "level": 0,
-                    "retrieval": {
-                        "source": "vector_store",
-                        "similarity": 0.95 - (i * 0.1)
-                    }
+                    "scope": "in_session" if session_id else None
                 }
             }
             results.append(result)
@@ -350,7 +334,6 @@ class TestMemoryAPIContract:
         
         # Setup mock response
         mock_results = self.create_mock_results(count=1, user_id=user_id)
-        mock_results[0]["metadata"]["retrieval"]["source"] = "vector_store"
         mock_memory_service.query.return_value = {
             "status": "success",
             "data": {
@@ -733,7 +716,6 @@ class TestMemoryAPIContract:
         
         # Setup mock response
         mock_results = self.create_mock_results(count=1, user_id=user_id)
-        mock_results[0]["metadata"]["retrieval"]["source"] = "graph_store"
         mock_memory_service.query.return_value = {
             "status": "success",
             "data": {

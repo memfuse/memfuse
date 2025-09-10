@@ -82,6 +82,7 @@ class MemoryQuery(BaseModel):
     store_type: Optional[StoreType] = None
     include_messages: bool = True
     include_knowledge: bool = True
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional metadata for the query")
 
 
 class MessageAdd(BaseModel):
