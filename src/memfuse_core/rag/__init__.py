@@ -1,26 +1,6 @@
-"""Retrieval and ranking implementations for MemFuse server.
+"""RAG service package (Phase A scaffolding).
 
-This module provides various retrieval, reranking, and score fusion strategies
-for the MemFuse framework.
+Implements MVP-like RAG under MemFuse Core with compatibility to
+future VectorStore/HybridBuffer alignment.
 """
 
-from .base import BaseRetrieval
-from .retrieve import HybridRetrieval
-from .rerank import RerankerBase, MiniLMReranker
-from .fusion import (
-    ScoreFusionStrategy,
-    SimpleWeightedSum,
-    NormalizedWeightedSum,
-    ReciprocalRankFusion
-)
-
-__all__ = [
-    'BaseRetrieval',
-    'HybridRetrieval',
-    'RerankerBase',
-    'MiniLMReranker',
-    'ScoreFusionStrategy',
-    'SimpleWeightedSum',
-    'NormalizedWeightedSum',
-    'ReciprocalRankFusion',
-]

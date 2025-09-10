@@ -223,6 +223,60 @@ async def add_messages(
             if key not in ["status", "code", "data", "message", "errors"]:
                 response_data[key] = value
 
+    # If any user message carries metadata.tag == 'm3', trigger orchestrator flow
+    try:
+        from memfuse_core.m3.orchestrator import Orchestrator
+        from memfuse_core.procedural.store import ProceduralStore
+        import uuid as _uuid
+
+        m3_msgs = [
+            m for m in messages
+            if isinstance(m, dict)
+            and str(m.get("role","")) == "user"
+            and isinstance(m.get("metadata"), dict)
+            and str(m.get("metadata", {}).get("tag", "")).lower() == "m3"
+        ]
+        if m3_msgs:
+            # Use the last m3-tagged user message as the user goal
+            user_goal = str(m3_msgs[-1].get("content") or "").strip()
+            if user_goal:
+                orch = Orchestrator()
+                ai_text = orch.handle_request(session_id, user_goal)
+
+                # Create assistant reply via memory service so it flows through the same pipeline
+                assistant_msg = [{
+                    "role": "assistant",
+                    "content": ai_text,
+                    "metadata": {"m3_enabled": True, "source": "orchestrator"},
+                }]
+                ai_result = await memory.add(assistant_msg, session_id=session_id)
+                ai_ids = []
+                if (ai_result and ai_result.get("status") == "success" and ai_result.get("data")):
+                    ai_ids = ai_result["data"].get("message_ids", [])
+                if ai_ids:
+                    response_data["assistant_message_id"] = ai_ids[0]
+
+                # Log workflow reference (temporary Phase A table)
+                try:
+                    store = ProceduralStore()
+                    workflow_id = str(_uuid.uuid4())
+                    if ai_ids:
+                        await store.log_message_workflow(
+                            message_id=ai_ids[0],
+                            workflow_id=workflow_id,
+                            step_index=0,
+                            tags=["m3", "workflow"],
+                            metadata={"m3_enabled": True, "user_goal": user_goal},
+                        )
+                    response_data["workflow_id"] = workflow_id
+                except Exception as e:
+                    # Soft-fail logging
+                    logger.warning(f"Failed to log message_workflow: {e}
+")
+    except Exception as e:
+        # Orchestrator not available or other issues: ignore to preserve backward compatibility
+        logger.info(f"M3 orchestration skipped: {e}")
+
     return ApiResponse.success(
         data=response_data,
         message="Messages added successfully",

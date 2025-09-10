@@ -1,18 +1,6 @@
-"""LLM integration module for MemFuse.
+"""LLM integration module for MemFuse Core.
 
-This module provides a unified interface for different LLM providers,
-enabling seamless integration of language models for contextual chunking
-and other AI-powered features.
+Provides a thin abstraction compatible with MVP-style ChatLLM while
+remaining aligned with the current project's dependencies and patterns.
 """
 
-from .base import LLMProvider, LLMRequest, LLMResponse
-from .providers import OpenAIProvider
-from .config import LLMConfig
-
-__all__ = [
-    "LLMProvider",
-    "LLMRequest",
-    "LLMResponse",
-    "OpenAIProvider",
-    "LLMConfig",
-]
