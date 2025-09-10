@@ -30,6 +30,15 @@ curl -s -X POST "$BASE/sessions/$SESSION_ID/messages" \
     - Session workflow logs from `message_workflows`
     - Lessons from `procedural_lessons`
 
+Optional filters:
+- `session_id`: include session-specific `message_workflows` (default true via `include_workflows`)
+- `include_workflows`: whether to include `message_workflows`
+- `filter_workflow_id`: filter by a known workflow id
+- `filter_tags`: (array) any-match tags for `message_workflows`
+- `filter_agent`: filter lessons by agent (server-side when possible)
+- `filter_status`: `success` or `fail` for lessons
+- `min_score`: minimum similarity score (0–1) for workflows/lessons
+
 Example:
 
 ```bash
@@ -41,7 +50,11 @@ curl -s -X POST "$BASE/users/$USER_ID/query" \
   -d '{
     "query": "memory patterns",
     "top_k": 5,
-    "metadata": {"tag": "m3"}
+    "metadata": {"tag": "m3"},
+    "session_id": "<optional-session>",
+    "include_workflows": true,
+    "filter_status": "success",
+    "min_score": 0.8
   }' | jq .
 ```
 
