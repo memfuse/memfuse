@@ -150,9 +150,14 @@ class Orchestrator:
         self.last_workflow_id = None
         self.last_reused = False
         self.last_plan_steps = []
+        goal_vec = None
         try:
-            vec = await create_embedding(user_goal)
-            recs = await self.store.query_procedural_similar(vec, max(1, self.procedural_top_k))
+            goal_vec = await create_embedding(user_goal)
+        except Exception:
+            goal_vec = None
+        try:
+            vec = goal_vec
+            recs = await self.store.query_procedural_similar(vec, max(1, self.procedural_top_k)) if vec is not None else []
             if recs:
                 wid, wf, score = recs[0]
                 if score >= self.procedural_reuse_threshold:
@@ -193,6 +198,30 @@ class Orchestrator:
         last_output: Dict[str, Any] = {}
         executed: List[Tuple[PlanStep, Dict[str, Any]]] = []
         self.last_step_outcomes: List[Dict[str, Any]] = []
+
+        # Pre-lessons (global) to help parameterization and observability
+        try:
+            pre_lessons: Dict[str, Any] = {}
+            if goal_vec is not None:
+                lessons_list = await self.store.query_lessons_similar(goal_vec, agent=None, top_k=5)
+                pre_lessons = {
+                    "total": len(lessons_list),
+                    "success": [
+                        {"lesson_id": lid, "fix_summary": fx, "working_params": wp, "score": sc}
+                        for (lid, st, fx, wp, sc) in lessons_list if st == 'success'
+                    ],
+                    "fail": [
+                        {"lesson_id": lid, "fix_summary": fx, "working_params": wp, "score": sc}
+                        for (lid, st, fx, wp, sc) in lessons_list if st == 'fail'
+                    ],
+                }
+            context["_pre_lessons"] = pre_lessons
+            try:
+                (run_dir / "pre_lessons.json").write_text(json.dumps(pre_lessons, ensure_ascii=False, indent=2))
+            except Exception:
+                pass
+        except Exception:
+            pass
         for idx, step in enumerate(steps):
             agent = self.agents.get(step.agent)
             if not agent:
@@ -200,6 +229,24 @@ class Orchestrator:
             try:
                 payload = dict(step.input)
                 payload.setdefault("context", context)
+                # Lessons-informed parameterization: try to seed payload from prior successful params for this agent
+                success_params: List[Dict[str, Any]] = []
+                avoid_patterns: List[str] = []
+                if goal_vec is not None:
+                    try:
+                        agent_lessons = await self.store.query_lessons_similar(goal_vec, agent=step.agent, top_k=5)
+                        for _lid, st, fx, wp, _sc in agent_lessons:
+                            if st == 'success' and isinstance(wp, dict):
+                                success_params.append(wp)
+                            elif st == 'fail' and fx:
+                                avoid_patterns.append(str(fx))
+                        if success_params:
+                            # Merge first successful params into payload (do not override provided values)
+                            for k, v in success_params[0].items():
+                                if k not in payload:
+                                    payload[k] = v
+                    except Exception:
+                        pass
                 # Attempt execution with simple success heuristic
                 attempts = 0
                 success = False
@@ -235,7 +282,13 @@ class Orchestrator:
                 # Write per-step trace
                 try:
                     (run_dir / f"step_{idx}_{step.agent}.json").write_text(
-                        json.dumps({"input": {k: v for k, v in payload.items() if k != "context"}, "output": out, "attempts": attempts, "success": success}, ensure_ascii=False, indent=2)
+                        json.dumps({
+                            "input": {k: v for k, v in payload.items() if k != "context"},
+                            "output": out,
+                            "attempts": attempts,
+                            "success": success,
+                            "lessons": {"success_examples": len(success_params), "avoid_patterns": len(avoid_patterns)},
+                        }, ensure_ascii=False, indent=2)
                     )
                 except Exception:
                     pass

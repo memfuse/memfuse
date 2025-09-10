@@ -1,7 +1,7 @@
 """User API endpoints."""
 
 from loguru import logger
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Query
 from typing import Optional
 
 from ..models import (
@@ -209,6 +209,7 @@ async def delete_user(
 async def query_memory(
     user_id: str,
     request: MemoryQuery,
+    tag: str | None = Query(default=None, description="Compatibility: use 'm3' to route query to M3"),
     _: dict = Depends(validate_api_key),  # API key validation
 ) -> ApiResponse:
     """Query memory across all sessions for a user.
@@ -279,10 +280,12 @@ async def query_memory(
 
     # M3-specific query path: when metadata.tag == 'm3', use Procedural store (Phase A)
     try:
-        tag = str((request.metadata or {}).get("tag", "")).lower()
+        meta_tag = str((request.metadata or {}).get("tag", "")).lower()
     except Exception:
-        tag = ""
-    if tag == "m3":
+        meta_tag = ""
+    # Backward compatibility: accept query param tag=m3
+    route_tag = (tag or meta_tag)
+    if (route_tag or "").lower() == "m3":
         from ..procedural.store import ProceduralStore
         from ..utils.embeddings import create_embedding
 

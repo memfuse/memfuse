@@ -1,13 +1,14 @@
 # M3 API Usage
 
 Phase A implementation provides minimal orchestration, RAG, and query integration. M3 is gated by `memory.layers.m3.enabled`.
+Compatibility: legacy `tag=m3` query param is accepted on message add and user query endpoints; server-side persistence still uses request `metadata` and `message_workflows`.
 
 ## Message Creation / Chat
 - Use existing sessions/messages endpoints.
 - To invoke M3 behavior, include `{"tag": "m3"}` in the message `metadata`.
 - M3 orchestration will route the request and log results using `message_workflows`.
 
-Example:
+Example (body metadata):
 
 ```bash
 BASE="http://localhost:8000/api/v1"
@@ -38,7 +39,7 @@ Optional filters:
 - `filter_status`: `success` or `fail` for lessons
 - `min_score`: minimum similarity score (0–1) for workflows/lessons
 
-Example:
+Example (body metadata):
 
 ```bash
 BASE="http://localhost:8000/api/v1"
@@ -55,6 +56,14 @@ curl -s -X POST "$BASE/users/$USER_ID/query" \
     "filter_status": "success",
     "min_score": 0.8
   }' | jq .
+```
+
+Compatibility (query param):
+
+```bash
+curl -s -X POST "$BASE/users/$USER_ID/query?tag=m3" \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "memory patterns", "top_k": 5}' | jq .
 ```
 
 ## Filtering

@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional, Any, cast
 from loguru import logger
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Query
 
 from ..models import (
     MessageAdd,
@@ -178,6 +178,7 @@ def normalize_messages_response(messages: Any) -> List[Dict[str, Any]]:
 async def add_messages(
     session_id: str,
     request: MessageAdd,
+    tag: str | None = Query(default=None, description="Compatibility: use 'm3' to trigger M3 orchestration"),
     # Underscore prefix to indicate unused
     _api_key_data: dict = api_key_dependency,
 ) -> ApiResponse:
@@ -225,7 +226,7 @@ async def add_messages(
             if key not in ["status", "code", "data", "message", "errors"]:
                 response_data[key] = value
 
-    # If any user message carries metadata.tag == 'm3', trigger orchestrator flow
+    # If any user message carries metadata.tag == 'm3' OR query param tag == 'm3', trigger orchestrator flow
     try:
         from memfuse_core.m3.orchestrator import Orchestrator
         from memfuse_core.procedural.store import ProceduralStore
@@ -239,7 +240,8 @@ async def add_messages(
             and isinstance(m.get("metadata"), dict)
             and str(m.get("metadata", {}).get("tag", "")).lower() == "m3"
         ]
-        if m3_msgs:
+        tag_is_m3 = str(tag or "").lower() == "m3"
+        if m3_msgs or tag_is_m3:
             # Check global config gating for M3
             try:
                 cfg = get_global_config_manager()
@@ -250,7 +252,11 @@ async def add_messages(
                 logger.info("M3 tag present but memory.layers.m3.enabled is False; skipping orchestration")
                 raise RuntimeError("M3 disabled by configuration")
             # Use the last m3-tagged user message as the user goal
-            user_goal = str(m3_msgs[-1].get("content") or "").strip()
+            if m3_msgs:
+                user_goal = str(m3_msgs[-1].get("content") or "").strip()
+            else:
+                user_msgs = [m for m in messages if isinstance(m, dict) and str(m.get("role","")) == "user"]
+                user_goal = str(user_msgs[-1].get("content") or "").strip() if user_msgs else ""
             if user_goal:
                 orch = Orchestrator()
                 ai_text = await orch.handle_request(session_id, user_goal)
