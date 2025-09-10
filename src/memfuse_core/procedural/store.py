@@ -63,6 +63,24 @@ class ProceduralStore:
         db = await DatabaseService.get_instance()
         try:
             await db.backend.execute(_SCHEMA_SQL, tuple())  # type: ignore[attr-defined]
+            # Create indexes best-effort (some ops like diskann may not be available)
+            index_statements = [
+                # message_workflows
+                "CREATE INDEX IF NOT EXISTS idx_message_workflows_message_id ON message_workflows (message_id)",
+                "CREATE INDEX IF NOT EXISTS idx_message_workflows_workflow_id ON message_workflows (workflow_id)",
+                "CREATE INDEX IF NOT EXISTS idx_message_workflows_tags ON message_workflows USING GIN (tags)",
+                "CREATE INDEX IF NOT EXISTS idx_message_workflows_metadata_gin ON message_workflows USING GIN (metadata)",
+                # procedural_memory (vector)
+                "CREATE INDEX IF NOT EXISTS idx_procedural_memory_trigger_embedding ON procedural_memory USING diskann (trigger_embedding vector_cosine_ops)",
+                # procedural_lessons (vector + agent)
+                "CREATE INDEX IF NOT EXISTS idx_procedural_lessons_trigger_embedding ON procedural_lessons USING diskann (trigger_embedding vector_cosine_ops)",
+                "CREATE INDEX IF NOT EXISTS idx_procedural_lessons_agent ON procedural_lessons (agent)",
+            ]
+            for stmt in index_statements:
+                try:
+                    await db.backend.execute(stmt, tuple())  # type: ignore[attr-defined]
+                except Exception as ie:
+                    logger.debug(f"Skipping index creation due to: {ie}")
             self._initialized = True
         except Exception as e:
             logger.error(f"Failed to init procedural tables: {e}")

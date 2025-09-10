@@ -228,6 +228,7 @@ async def add_messages(
         from memfuse_core.m3.orchestrator import Orchestrator
         from memfuse_core.procedural.store import ProceduralStore
         import uuid as _uuid
+        from memfuse_core.utils.global_config_manager import get_global_config_manager
 
         m3_msgs = [
             m for m in messages
@@ -237,6 +238,15 @@ async def add_messages(
             and str(m.get("metadata", {}).get("tag", "")).lower() == "m3"
         ]
         if m3_msgs:
+            # Check global config gating for M3
+            try:
+                cfg = get_global_config_manager()
+                m3_enabled = bool(cfg.get("memory.layers.m3.enabled", False))
+            except Exception:
+                m3_enabled = False
+            if not m3_enabled:
+                logger.info("M3 tag present but memory.layers.m3.enabled is False; skipping orchestration")
+                raise RuntimeError("M3 disabled by configuration")
             # Use the last m3-tagged user message as the user goal
             user_goal = str(m3_msgs[-1].get("content") or "").strip()
             if user_goal:
@@ -264,14 +274,38 @@ async def add_messages(
                     if not workflow_id:
                         # Fallback to a random id if none available
                         workflow_id = str(_uuid.uuid4())
+                    # Per-step logging: write one row per executed plan step, reference the assistant message id
                     if ai_ids:
-                        await store.log_message_workflow(
-                            message_id=ai_ids[0],
-                            workflow_id=workflow_id,
-                            step_index=0,
-                            tags=["m3", "workflow"],
-                            metadata={"m3_enabled": True, "user_goal": user_goal, "reused": getattr(orch, "last_reused", False)},
-                        )
+                        steps = getattr(orch, "last_plan_steps", None) or []
+                        if isinstance(steps, list) and steps:
+                            for idx, st in enumerate(steps):
+                                try:
+                                    agent_name = getattr(st, "agent", None) or (st.get("agent") if isinstance(st, dict) else None)
+                                except Exception:
+                                    agent_name = None
+                                meta = {
+                                    "m3_enabled": True,
+                                    "user_goal": user_goal,
+                                    "reused": getattr(orch, "last_reused", False),
+                                }
+                                if agent_name:
+                                    meta["agent"] = agent_name
+                                await store.log_message_workflow(
+                                    message_id=ai_ids[0],
+                                    workflow_id=workflow_id,
+                                    step_index=idx,
+                                    tags=["m3", "workflow"],
+                                    metadata=meta,
+                                )
+                        else:
+                            # Fallback to a single entry when no step detail is available
+                            await store.log_message_workflow(
+                                message_id=ai_ids[0],
+                                workflow_id=workflow_id,
+                                step_index=0,
+                                tags=["m3", "workflow"],
+                                metadata={"m3_enabled": True, "user_goal": user_goal, "reused": getattr(orch, "last_reused", False)},
+                            )
                     response_data["workflow_id"] = workflow_id
                 except Exception as e:
                     # Soft-fail logging

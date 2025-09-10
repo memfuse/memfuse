@@ -96,6 +96,12 @@ layers:
     batch_size: 3
     min_confidence_threshold: 0.8
 
+    # Phase A orchestration knobs
+    procedural_top_k: 5
+    procedural_reuse_threshold: 0.9
+    planner_max_attempts: 3
+    runs_base_dir: "runs"
+
     # M3 storage tables
     storage:
       pattern_table: "m3_procedural"

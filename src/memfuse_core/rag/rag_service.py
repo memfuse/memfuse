@@ -103,10 +103,9 @@ class RAGService:
             context_lines.append(f"({i}) score={score:.2f}: {text[:300]}")
         context_lines.append("[End Retrieved]")
         context = "\n".join(context_lines)
-        # Compose messages
+        # Compose messages (system prompt passed separately; do not duplicate inside messages)
         system = "You are MemFuse RAG assistant. Use retrieved chunks when relevant."
         messages = [
-            {"role": "system", "content": system},
             {"role": "user", "content": f"Context:\n{context}\n\nQuery: {user_query}"},
         ]
         return self._llm.chat(system, messages)

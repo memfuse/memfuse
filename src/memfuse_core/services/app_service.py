@@ -74,7 +74,6 @@ class AppService(BaseService):
         """
         # Import API routers here to avoid circular imports
         from ..api import health, users, agents, sessions, messages, knowledge, api_keys, chunks
-        from ..api import m3_query
         from ..utils.auth import RateLimitMiddleware
         
         # Get configuration from unified config manager
@@ -140,7 +139,6 @@ class AppService(BaseService):
             app: FastAPI application to register routes with
         """
         from ..api import health, users, agents, sessions, messages, knowledge, api_keys, chunks
-        from ..api import m3_query
         
         # Register all API routers
         app.include_router(health.router, prefix="/api/v1/health", tags=["health"])
@@ -168,12 +166,8 @@ class AppService(BaseService):
             tags=["chunks"]
         )
 
-        # M3 Query API (Phase A)
-        app.include_router(
-            m3_query.router,
-            prefix="/api/v1/users",
-            tags=["m3"]
-        )
+        # Note: M3-specific query behavior routes via existing users query endpoint
+        # when request.metadata.tag == 'm3'.
 
         logger.debug("API routes registered successfully")
 

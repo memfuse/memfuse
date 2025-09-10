@@ -1,6 +1,6 @@
-# M3 API Usage (Planned)
+# M3 API Usage
 
-This is the intended API surface for Phase A. No behavior change is implemented in this patch.
+Phase A implementation provides minimal orchestration, RAG, and query integration. M3 is gated by `memory.layers.m3.enabled`.
 
 ## Message Creation / Chat
 - Use existing sessions/messages endpoints.
@@ -24,11 +24,10 @@ curl -s -X POST "$BASE/sessions/$SESSION_ID/messages" \
 
 ## Query (M3 focus)
 - `POST /api/v1/users/{user_id}/query`
-  - Request body includes `{"metadata": {"tag": "m3"}}` to focus on workflows and lessons.
-  - Returns:
-    - Similar workflows from `procedural_memory`
-    - Session workflow logs from `message_workflows`
-    - Lessons from `procedural_lessons`
+  - Use the existing users query endpoint; when `metadata.tag == 'm3'`, the server routes to M3-specific logic to search:
+    - `procedural_memory` for similar workflows
+    - `message_workflows` for session-scoped workflow logs (when `session_id` provided)
+    - `procedural_lessons` for related execution lessons
 
 Optional filters:
 - `session_id`: include session-specific `message_workflows` (default true via `include_workflows`)

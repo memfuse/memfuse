@@ -277,6 +277,44 @@ async def query_memory(
             )
             raise_api_error(error_response)
 
+    # M3-specific query path: when metadata.tag == 'm3', use Procedural store (Phase A)
+    try:
+        tag = str((request.metadata or {}).get("tag", "")).lower()
+    except Exception:
+        tag = ""
+    if tag == "m3":
+        from ..procedural.store import ProceduralStore
+        from ..utils.embeddings import create_embedding
+
+        store = ProceduralStore()
+        emb = await create_embedding(request.query)
+        workflows = await store.query_procedural_similar(emb, top_k=max(1, request.top_k or 5))
+        lessons = await store.query_lessons_similar(emb, agent=None, top_k=max(1, request.top_k or 5))
+        session_workflows = []
+        if request.session_id:
+            try:
+                session_workflows = await store.query_message_workflows_for_session(request.session_id, limit=max(1, request.top_k or 50))
+            except Exception:
+                session_workflows = []
+
+        wf_list = [
+            {"workflow_id": w, "score": s, "workflow": wf}
+            for (w, wf, s) in workflows
+        ]
+        lesson_list = [
+            {"lesson_id": lid, "status": st, "score": sc, "working_params": wp, "fix_summary": fx}
+            for (lid, st, fx, wp, sc) in lessons
+        ]
+        results = {
+            "procedural_memory": wf_list,
+            "lessons": lesson_list,
+            "session_workflows": session_workflows,
+        }
+        return ApiResponse.success(
+            data={"results": results},
+            message="M3 results retrieved",
+        )
+
     # Create API Gateway instance
     from ..gateway.api_gateway import create_memory_gateway
     from ..interfaces.gateway_interface import OperationType

@@ -15,6 +15,7 @@ from ..llm.chat import ChatLLM
 from ..rag.rag_service import RAGService
 from ..procedural.store import ProceduralStore
 from ..utils.embeddings import create_embedding
+from ..utils.global_config_manager import get_global_config_manager
 import os
 import time
 from pathlib import Path
@@ -110,19 +111,33 @@ class Orchestrator:
         # Debug / last-run info
         self.last_workflow_id: Optional[str] = None
         self.last_reused: bool = False
+        self.last_plan_steps: List[PlanStep] = []
         # Controls via env (fallback defaults)
+        self.procedural_top_k = 5
+        self.procedural_reuse_threshold = 0.9
+        self.planner_max_attempts = 3
+        self.runs_base_dir = os.getenv("RUNS_BASE_DIR", "runs")
         try:
-            self.procedural_top_k = int(os.getenv("PROCEDURAL_TOP_K", "5"))
+            cfg = get_global_config_manager()
+            # Read from global config if available
+            self.procedural_top_k = int(cfg.get("memory.layers.m3.procedural_top_k", self.procedural_top_k))
+            self.procedural_reuse_threshold = float(cfg.get("memory.layers.m3.procedural_reuse_threshold", self.procedural_reuse_threshold))
+            self.planner_max_attempts = int(cfg.get("memory.layers.m3.planner_max_attempts", self.planner_max_attempts))
+            self.runs_base_dir = str(cfg.get("memory.layers.m3.runs_base_dir", self.runs_base_dir))
         except Exception:
-            self.procedural_top_k = 5
-        try:
-            self.procedural_reuse_threshold = float(os.getenv("PROCEDURAL_REUSE_THRESHOLD", "0.9"))
-        except Exception:
-            self.procedural_reuse_threshold = 0.9
+            # Fallback to environment variables
+            try:
+                self.procedural_top_k = int(os.getenv("PROCEDURAL_TOP_K", str(self.procedural_top_k)))
+            except Exception:
+                pass
+            try:
+                self.procedural_reuse_threshold = float(os.getenv("PROCEDURAL_REUSE_THRESHOLD", str(self.procedural_reuse_threshold)))
+            except Exception:
+                pass
 
     async def handle_request(self, session_id: str, user_goal: str) -> str:
         # Prepare run directory
-        base_dir = os.getenv("RUNS_BASE_DIR", "runs")
+        base_dir = self.runs_base_dir or os.getenv("RUNS_BASE_DIR", "runs")
         run_dir = Path(base_dir) / time.strftime('%Y%m%d_%H%M%S') / session_id
         try:
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -134,6 +149,7 @@ class Orchestrator:
         wid_reused: Optional[str] = None
         self.last_workflow_id = None
         self.last_reused = False
+        self.last_plan_steps = []
         try:
             vec = await create_embedding(user_goal)
             recs = await self.store.query_procedural_similar(vec, max(1, self.procedural_top_k))
@@ -158,6 +174,12 @@ class Orchestrator:
                 steps = self.planner.plan(user_goal)
         except Exception:
             steps = self.planner.plan(user_goal)
+
+        # Expose plan steps for external logging use
+        try:
+            self.last_plan_steps = steps[:]
+        except Exception:
+            self.last_plan_steps = []
 
         # Persist plan
         try:
