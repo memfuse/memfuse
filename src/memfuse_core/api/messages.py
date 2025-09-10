@@ -271,8 +271,7 @@ async def add_messages(
                     response_data["workflow_id"] = workflow_id
                 except Exception as e:
                     # Soft-fail logging
-                    logger.warning(f"Failed to log message_workflow: {e}
-")
+                    logger.warning(f"Failed to log message_workflow: {e}")
     except Exception as e:
         # Orchestrator not available or other issues: ignore to preserve backward compatibility
         logger.info(f"M3 orchestration skipped: {e}")

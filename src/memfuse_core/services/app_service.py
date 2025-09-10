@@ -140,6 +140,7 @@ class AppService(BaseService):
             app: FastAPI application to register routes with
         """
         from ..api import health, users, agents, sessions, messages, knowledge, api_keys, chunks
+        from ..api import m3_query
         
         # Register all API routers
         app.include_router(health.router, prefix="/api/v1/health", tags=["health"])
