@@ -192,6 +192,7 @@ class Orchestrator:
         context: Dict[str, Any] = {}
         last_output: Dict[str, Any] = {}
         executed: List[Tuple[PlanStep, Dict[str, Any]]] = []
+        self.last_step_outcomes: List[Dict[str, Any]] = []
         for idx, step in enumerate(steps):
             agent = self.agents.get(step.agent)
             if not agent:
@@ -199,15 +200,42 @@ class Orchestrator:
             try:
                 payload = dict(step.input)
                 payload.setdefault("context", context)
-                # Await agent execution (agents are async)
-                out = await agent.execute(session_id, payload)
+                # Attempt execution with simple success heuristic
+                attempts = 0
+                success = False
+                out: Dict[str, Any] = {}
+                for attempt in range(max(1, int(self.planner_max_attempts or 1))):
+                    attempts = attempt + 1
+                    try:
+                        out = await agent.execute(session_id, payload)
+                    except Exception:
+                        out = {"error": "agent execution failed"}
+                    # Heuristic success
+                    def _ok(a: str, o: Dict[str, Any]) -> bool:
+                        if not isinstance(o, dict):
+                            return False
+                        if o.get("error"):
+                            return False
+                        if a == "RAGQueryAgent":
+                            return bool(o.get("answer"))
+                        if a == "ReportGenerationAgent":
+                            return bool(o.get("report"))
+                        return True
+                    success = _ok(step.agent, out)
+                    if success:
+                        break
                 last_output = out
                 context[step.agent] = out
                 executed.append((step, out))
+                self.last_step_outcomes.append({
+                    "agent": step.agent,
+                    "success": bool(success),
+                    "attempts": attempts,
+                })
                 # Write per-step trace
                 try:
                     (run_dir / f"step_{idx}_{step.agent}.json").write_text(
-                        json.dumps({"input": {k: v for k, v in payload.items() if k != "context"}, "output": out}, ensure_ascii=False, indent=2)
+                        json.dumps({"input": {k: v for k, v in payload.items() if k != "context"}, "output": out, "attempts": attempts, "success": success}, ensure_ascii=False, indent=2)
                     )
                 except Exception:
                     pass

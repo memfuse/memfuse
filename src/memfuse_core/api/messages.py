@@ -277,6 +277,7 @@ async def add_messages(
                     # Per-step logging: write one row per executed plan step, reference the assistant message id
                     if ai_ids:
                         steps = getattr(orch, "last_plan_steps", None) or []
+                        outcomes = getattr(orch, "last_step_outcomes", None) or []
                         if isinstance(steps, list) and steps:
                             for idx, st in enumerate(steps):
                                 try:
@@ -288,6 +289,17 @@ async def add_messages(
                                     "user_goal": user_goal,
                                     "reused": getattr(orch, "last_reused", False),
                                 }
+                                # Attach outcome if available
+                                try:
+                                    if idx < len(outcomes):
+                                        oc = outcomes[idx]
+                                        if isinstance(oc, dict):
+                                            if oc.get("success") is not None:
+                                                meta["success"] = bool(oc.get("success"))
+                                            if oc.get("attempts") is not None:
+                                                meta["attempts"] = int(oc.get("attempts"))
+                                except Exception:
+                                    pass
                                 if agent_name:
                                     meta["agent"] = agent_name
                                 await store.log_message_workflow(
