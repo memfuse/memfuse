@@ -11,7 +11,7 @@ class ExtractedFact(BaseModel):
         ..., 
         description="Clear, self-contained factual statement",
         min_length=10,
-        max_length=500
+        max_length=200
     )
     source_chunk_ids: List[str] = Field(
         ..., 
@@ -31,21 +31,5 @@ class FactExtractionResponse(BaseModel):
     facts: List[ExtractedFact] = Field(
         ..., 
         description="List of extracted facts from the memory chunk",
-        max_length=20
-    )
-    processing_notes: Optional[str] = Field(
-        None, 
-        description="Additional processing information or observations",
-        max_length=200
-    )
-
-
-# Alternative simplified model for basic extractions
-class SimpleFactExtractionResponse(BaseModel):
-    """Simplified response model for basic fact extraction."""
-    
-    facts: List[str] = Field(
-        ...,
-        description="List of fact content strings",
         max_length=20
     )

@@ -186,6 +186,12 @@ class TestFactExtraction:
         assert len(facts) >= 1
         # Should extract meaningful lines
         assert any("Python programming" in fact for fact in facts)
+
+    def test_parse_json_with_processing_notes_and_empty_facts(self, memory_service):
+        """JSON with empty facts and processing_notes should yield no facts (avoid key leakage)."""
+        content = '{"processing_notes": "no extractable facts", "facts": []}'
+        facts = memory_service._parse_fact_extraction_response(content)
+        assert facts == []
     
     def test_parse_empty_response(self, memory_service):
         """Test handling of empty response."""

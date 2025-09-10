@@ -30,6 +30,7 @@ from ..interfaces.message_interface import MessageBatchList
 from ..models.core import M2Status, Chunk, Fact, M2FactStatus
 from .sync_connection_pool import sync_connection_pool
 from ..llm.base import LLMProviderError
+from ..models.m2_extraction import FactExtractionResponse, ExtractedFact
 
 # Import TYPE_CHECKING to avoid circular imports
 from typing import TYPE_CHECKING
@@ -669,6 +670,9 @@ class SimplifiedMemoryService(MessageInterface):
 
         # State
         self._initialized = False
+        # M2 autonomous background processing state
+        self.m2_running: bool = False
+        self.m2_processor_task: Optional[asyncio.Task] = None
 
         logger.info(f"SimplifiedMemoryService: Initialized for user: {user}")
 
@@ -738,9 +742,316 @@ class SimplifiedMemoryService(MessageInterface):
         # Add compatibility attribute for BufferService
         self.multi_path_retrieval = self  # Point to self for compatibility
 
+        # Start autonomous M2 background processing if enabled via config
+        try:
+            m2_enabled = self._resolve_m2_enabled_from_config()
+            if m2_enabled:
+                await self._start_m2_background_processing()
+            else:
+                logger.opt(colors=True).info(
+                    "<magenta>[M2]</magenta> Background worker disabled by configuration"
+                )
+        except Exception as e:
+            logger.error(f"Failed to evaluate/start M2 background processing: {e}")
+
         self._initialized = True
         logger.info("SimplifiedMemoryService: Initialization complete")
         return self
+
+    def _resolve_m2_enabled_from_config(self) -> bool:
+        """Resolve the m2_enabled flag from multiple config locations.
+
+        Supports both top-level and nested Hydra layouts:
+        - cfg["m2_enabled"]
+        - cfg["memory_service"]["m2_enabled"]
+        - cfg["memory"]["m2_enabled"]
+        - cfg["memory"]["memory_service"]["m2_enabled"]
+        """
+        try:
+            cfg = self.config or {}
+
+            # Direct top-level
+            v1 = cfg.get("m2_enabled") if hasattr(cfg, 'get') else None
+            if isinstance(v1, bool):
+                logger.opt(colors=True).debug(
+                    "<magenta>[M2]</magenta> Config resolved: top-level m2_enabled=%s",
+                    v1,
+                )
+                return v1
+
+            # Top-level memory_service
+            ms = cfg.get("memory_service", {}) if hasattr(cfg, 'get') else {}
+            v2 = ms.get("m2_enabled") if hasattr(ms, 'get') else None
+            if isinstance(v2, bool):
+                logger.opt(colors=True).debug(
+                    "<magenta>[M2]</magenta> Config resolved: memory_service.m2_enabled=%s",
+                    v2,
+                )
+                return v2
+
+            # Nested under memory
+            memory = cfg.get("memory", {}) if hasattr(cfg, 'get') else {}
+            v3 = memory.get("m2_enabled") if hasattr(memory, 'get') else None
+            if isinstance(v3, bool):
+                logger.opt(colors=True).debug(
+                    "<magenta>[M2]</magenta> Config resolved: memory.m2_enabled=%s",
+                    v3,
+                )
+                return v3
+
+            # Nested under memory.memory_service
+            memory_ms = memory.get("memory_service", {}) if hasattr(memory, 'get') else {}
+            v4 = memory_ms.get("m2_enabled") if hasattr(memory_ms, 'get') else None
+            if isinstance(v4, bool):
+                logger.opt(colors=True).debug(
+                    "<magenta>[M2]</magenta> Config resolved: memory.memory_service.m2_enabled=%s",
+                    v4,
+                )
+                return v4
+
+            # Default false if not specified
+            logger.opt(colors=True).debug(
+                "<magenta>[M2]</magenta> Config not found; defaulting m2_enabled=False"
+            )
+            return False
+        except Exception as e:
+            logger.warning(f"M2 config resolution error: {e}")
+            return False
+
+    async def _start_m2_background_processing(self):
+        """Start autonomous M2 fact extraction background tasks."""
+        if self.m2_running and self.m2_processor_task and not self.m2_processor_task.done():
+            logger.debug("M2 autonomous background processing already running")
+            return
+
+        self.m2_running = True
+        # M2 processor - completely independent of other operations
+        self.m2_processor_task = asyncio.create_task(self._m2_autonomous_processor())
+        logger.opt(colors=True).info(
+            "<magenta>[M2]</magenta> Autonomous background processing started"
+        )
+
+    async def _m2_autonomous_processor(self):
+        """Main loop that autonomously processes pending M2 chunks in batches."""
+        # Configuration knobs with safe defaults
+        batch_size: int = int(self.config.get("m2_batch_size", 5))
+        interval_secs: float = float(self.config.get("m2_interval_secs", 5.0))
+
+        # For global processing, we do not scope by user when scanning/locking.
+        # We'll look up the chunk's user_id per item to save facts with correct ownership.
+        logger.opt(colors=True).info(
+            "<magenta>[M2]</magenta> Processor configured | batch_size=%s | interval=%ss",
+            batch_size,
+            interval_secs,
+        )
+
+        # One-time visibility probe flag
+        probe_logged = False
+
+        try:
+            while self.m2_running:
+                try:
+                    import time
+                    batch_started = time.monotonic()
+
+                    # One-time probe: report total pending across DB for visibility
+                    if not probe_logged:
+                        try:
+                            with sync_connection_pool.get_connection() as conn:
+                                with conn.cursor() as cur:
+                                    cur.execute(
+                                        "SELECT COUNT(*) FROM m1_episodic WHERE m2_status = %s",
+                                        (M2Status.PENDING.value,),
+                                    )
+                                    total_pending = cur.fetchone()[0]
+                                    logger.opt(colors=True).info(
+                                        "<magenta>[M2]</magenta> Probe: total pending chunks in DB = %s",
+                                        total_pending,
+                                    )
+                        except Exception as probe_err:
+                            logger.opt(colors=True).warning(
+                                "<magenta>[M2]</magenta> Probe failed: %s",
+                                probe_err,
+                            )
+                        finally:
+                            probe_logged = True
+
+                    # Fetch pending chunks
+                    pending_ids = await self._get_pending_m2_chunks(
+                        batch_size=batch_size, user_id=None
+                    )
+
+                    if not pending_ids:
+                        logger.opt(colors=True).info(
+                            "<magenta>[M2]</magenta> No pending chunks. Sleeping %ss",
+                            interval_secs,
+                        )
+                        await asyncio.sleep(interval_secs)
+                        continue
+
+                    logger.opt(colors=True).info(
+                        "<magenta>[M2]</magenta> Found %s pending chunk(s)",
+                        len(pending_ids),
+                    )
+
+                    processed = 0
+                    succeeded = 0
+                    failed = 0
+
+                    for chunk_id in pending_ids:
+                        if not self.m2_running:
+                            break
+
+                        # Lock chunk for processing
+                        locked = await self._lock_chunk_for_m2_processing(
+                            chunk_id=chunk_id, user_id=None
+                        )
+                        if not locked:
+                            # Could be racing with another worker; skip
+                            short_id = str(chunk_id)[:8]
+                            logger.opt(colors=True).info(
+                                "<magenta>[M2]</magenta> Skip chunk %s: could not "
+                                "acquire lock",
+                                short_id,
+                            )
+                            continue
+
+                        processed += 1
+                        short_id = str(chunk_id)[:8]
+                        logger.opt(colors=True).info(
+                            "<magenta>[M2]</magenta> Locked chunk %s for processing",
+                            short_id,
+                        )
+
+                        try:
+                            # Retrieve chunk to determine its user_id for saving facts
+                            chunk_data = await self._get_m1_chunk(chunk_id, user_id=None)
+                            chunk_user_id = None
+                            if isinstance(chunk_data, dict):
+                                chunk_user_id = chunk_data.get("user_id")
+                            # Extract structured facts (content + optional confidence)
+                            ext_started = time.monotonic()
+                            extracted_facts = await self._extract_list_of_structured_facts_from_chunk(
+                                chunk_id=chunk_id, user_id=chunk_user_id
+                            )
+                            ext_duration = time.monotonic() - ext_started
+                            logger.opt(colors=True).info(
+                                "<magenta>[M2]</magenta> Extracted %s fact strings "
+                                "for chunk %s in %.2fs",
+                                len(extracted_facts or []),
+                                short_id,
+                                ext_duration,
+                            )
+
+                            # Convert to fact dicts for saving/marking completed
+                            fact_dicts: List[Dict[str, Any]] = []
+                            for item in extracted_facts or []:
+                                # Support both dicts (with confidence) and raw strings
+                                if isinstance(item, dict):
+                                    raw_text = item.get("text") or item.get("content")
+                                    conf = item.get("confidence")
+                                else:
+                                    raw_text = str(item)
+                                    conf = None
+
+                                if not isinstance(raw_text, str):
+                                    continue
+                                cleaned = raw_text.strip()
+                                if not cleaned:
+                                    continue
+
+                                fact_entry: Dict[str, Any] = {
+                                    "text": cleaned,
+                                    "chunk_ids": [chunk_id],
+                                    "user_id": chunk_user_id,
+                                    "metadata": {
+                                        "source": "m2-autonomous-processor",
+                                        "strategy": "m2-background",
+                                    },
+                                }
+                                # Only include confidence if LLM provided one; otherwise
+                                # allow downstream defaulting/clamping to apply
+                                if isinstance(conf, (int, float)):
+                                    fact_entry["confidence"] = float(conf)
+
+                                fact_dicts.append(fact_entry)
+
+                            # If nothing extracted, mark failed to avoid infinite retries
+                            if not fact_dicts:
+                                failed += 1
+                                logger.opt(colors=True).warning(
+                                    "<magenta>[M2]</magenta> No facts extracted for "
+                                    "chunk %s; marking failed",
+                                    short_id,
+                                )
+                                await self._mark_chunk_m2_failed(
+                                    chunk_id, "No facts extracted", user_id=user_id
+                                )
+                                continue
+
+                            # Mark completed (will also save facts via _save_m2_facts)
+                            completed = await self._mark_chunk_m2_completed(
+                                chunk_id, fact_dicts, user_id=chunk_user_id
+                            )
+                            if not completed:
+                                failed += 1
+                                logger.opt(colors=True).error(
+                                    "<magenta>[M2]</magenta> Failed to save/complete "
+                                    "for chunk %s; marking failed",
+                                    short_id,
+                                )
+                                await self._mark_chunk_m2_failed(
+                                    chunk_id, "Failed to complete/save facts", user_id=chunk_user_id
+                                )
+                            else:
+                                succeeded += 1
+                                logger.opt(colors=True).info(
+                                    "<magenta>[M2]</magenta> Completed chunk %s | "
+                                    "facts_saved=%s",
+                                    short_id,
+                                    len(fact_dicts),
+                                )
+
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as e:
+                            logger.error(
+                                f"Error processing chunk {chunk_id} in M2 autonomous processor: {e}"
+                            )
+                            try:
+                                await self._mark_chunk_m2_failed(
+                                    chunk_id, f"Processing error: {e}", user_id=user_id
+                                )
+                            except Exception:
+                                # Ensure loop continues even if marking failed
+                                pass
+
+                    batch_duration = time.monotonic() - batch_started
+                    logger.opt(colors=True).info(
+                        "<magenta>[M2]</magenta> Batch summary | scanned=%s | "
+                        "processed=%s | succeeded=%s | failed=%s | duration=%.2fs | "
+                        "sleep=%ss",
+                        len(pending_ids),
+                        processed,
+                        succeeded,
+                        failed,
+                        batch_duration,
+                        interval_secs,
+                    )
+
+                    # Yield control between batches
+                    await asyncio.sleep(0)
+
+                except asyncio.CancelledError:
+                    break
+                except Exception as loop_error:
+                    logger.error(f"M2 autonomous processor loop error: {loop_error}")
+                    # Backoff before next iteration to avoid tight error loops
+                    await asyncio.sleep(interval_secs)
+        finally:
+            logger.opt(colors=True).info(
+                "<magenta>[M2]</magenta> Autonomous background processing stopped"
+            )
 
     async def _initialize_user_id(self):
         """Initialize _user_id from users table to ensure ID consistency."""
@@ -1229,7 +1540,7 @@ class SimplifiedMemoryService(MessageInterface):
         
         Args:
             batch_size: Maximum number of chunk IDs to return (default 10)
-            user_id: Optional user_id filter for security scoping
+            user_id: DEPRECATED - ignored. Processing now scans all users.
             
         Returns:
             List of chunk ID strings ready for M2 fact extraction
@@ -1239,32 +1550,35 @@ class SimplifiedMemoryService(MessageInterface):
             
             with sync_connection_pool.get_connection() as conn:
                 with conn.cursor() as cur:
-                    if user_id:
-                        # User-scoped query for security
-                        cur.execute("""
-                            SELECT chunk_id
-                            FROM m1_episodic 
-                            WHERE m2_status = %s AND user_id = %s
-                            ORDER BY created_at ASC
-                            LIMIT %s
-                        """, (M2Status.PENDING.value, user_id, batch_size))
-                    else:
-                        # No user filtering (fallback - should be avoided in production)
-                        logger.warning("_get_pending_m2_chunks: No user_id provided, querying all pending chunks")
-                        cur.execute("""
-                            SELECT chunk_id
-                            FROM m1_episodic 
-                            WHERE m2_status = %s
-                            ORDER BY created_at ASC
-                            LIMIT %s
-                        """, (M2Status.PENDING.value, batch_size))
+                    # Global scan (no user filter): process pending chunks across all users
+                    cur.execute(
+                        """
+                        SELECT chunk_id
+                        FROM m1_episodic
+                        WHERE m2_status = %s
+                        ORDER BY created_at ASC
+                        LIMIT %s
+                        """,
+                        (M2Status.PENDING.value, batch_size),
+                    )
                     
                     rows = cur.fetchall()
                     
                     for row in rows:
                         results.append(str(row[0]))
             
-            logger.info(f"✅ Found {len(results)} pending M2 chunk IDs (batch_size={batch_size}, user_id={user_id})")
+            logger.opt(colors=True).info(
+                "<magenta>[M2]</magenta> Found %s pending chunk ID(s) (batch_size=%s)",
+                len(results),
+                batch_size,
+            )
+            if results:
+                sample = ", ".join([rid[:8] for rid in results[: min(5, len(results))]])
+                logger.opt(colors=True).info(
+                    "<magenta>[M2]</magenta> Pending sample (first %s): %s",
+                    min(5, len(results)),
+                    sample,
+                )
             return results
             
         except Exception as e:
@@ -2131,6 +2445,68 @@ Please extract clear, factual statements that would be useful for future memory 
         except Exception as e:
             logger.error(f"❌ Error extracting facts from chunk {chunk_id}: {e}")
             return []
+
+    async def _extract_list_of_structured_facts_from_chunk(
+        self,
+        chunk_id: str,
+        context: Optional[List[Chunk]] = None,
+        user_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Extract structured facts (text + optional confidence) from a chunk.
+
+        Mirrors `_extract_list_of_fact_content_from_chunk` but preserves confidence
+        from the LLM when available.
+        """
+        try:
+            # Step 1: Get the target chunk
+            target_chunk = await self._get_m1_chunk(chunk_id, user_id)
+            if not target_chunk:
+                logger.error(f"Target chunk not found: {chunk_id}")
+                return []
+
+            # Step 2: Get session context if not provided
+            if context is None:
+                context = await self._get_session_context_for_chunk(
+                    chunk_id,
+                    context_chunks_before=5,
+                    user_id=user_id,
+                )
+                if context is None:
+                    context = []
+
+            # Step 3: Apply token budget limit
+            context = self._apply_token_budget_limit(context, limit=2000)
+
+            # Step 4: Build extraction prompt
+            messages = self._build_fact_extraction_prompt(target_chunk, context)
+
+            # Step 5: Initialize LLM provider
+            llm_provider = await self._get_llm_provider()
+            if not llm_provider:
+                logger.error("No LLM provider available for fact extraction")
+                return []
+
+            # Step 6: Create LLM request
+            from ..llm.base import LLMRequest
+            model = self._get_preferred_extraction_model()
+            request = LLMRequest(
+                messages=messages,
+                model=model,
+                temperature=0.3,
+                max_tokens=1500,
+            )
+
+            # Step 7: Generate with retry (structured)
+            facts = await self._extract_facts_with_retry_structured(llm_provider, request)
+
+            logger.info(
+                f"✅ Extracted {len(facts)} structured facts from chunk {chunk_id}"
+            )
+            return facts
+
+        except Exception as e:
+            logger.error(f"❌ Error extracting structured facts from chunk {chunk_id}: {e}")
+            return []
     
     async def _get_llm_provider(self):
         """Get LLM provider for fact extraction.
@@ -2163,7 +2539,7 @@ Please extract clear, factual statements that would be useful for future memory 
             except Exception as e:
                 raise LLMProviderError(f"Failed to initialize OpenAI provider: {e}")
 
-        # Custom OpenAI-compatible proxy: force OpenAI semantics via LiteLLM, disable structured API
+        # Custom OpenAI-compatible proxy: use LiteLLMProvider with structured API enabled
         try:
             from ..llm.providers.litellm import LiteLLMProvider
 
@@ -2171,9 +2547,8 @@ Please extract clear, factual statements that would be useful for future memory 
                 "api_key": api_key,
                 "base_url": base_url,
                 "timeout": 30.0,
-                # Force OpenAI provider path inside LiteLLM and disable structured API
-                "custom_llm_provider": "openai",
-                "enable_structured_api": False,
+                # Allow provider to handle structured outputs when supported
+                # (match scripts/smoke_litellm usage)
             }
             provider = LiteLLMProvider(config)
             return provider
@@ -2256,6 +2631,100 @@ Please extract clear, factual statements that would be useful for future memory 
 
         logger.error(f"All fact extraction attempts failed. Last error: {last_error}")
         return []
+
+    async def _extract_facts_with_retry_structured(
+        self,
+        llm_provider,
+        request: "LLMRequest",
+        max_retries: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Extract structured facts (text + optional confidence) with retry.
+
+        Returns a list of dicts: {"text": str, "confidence": Optional[float]}.
+        """
+        from ..models.m2_extraction import FactExtractionResponse
+        import asyncio
+
+        last_error = None
+        fallback_facts: Optional[List[Dict[str, Any]]] = None
+        skip_calls = False
+
+        for attempt in range(max_retries):
+            try:
+                if not skip_calls:
+                    if hasattr(llm_provider, 'generate_structured'):
+                        try:
+                            response = await llm_provider.generate_structured(
+                                request, FactExtractionResponse
+                            )
+
+                            if response.success and getattr(response, 'parsed_data', None):
+                                results: List[Dict[str, Any]] = []
+                                for fact in response.parsed_data.facts:  # type: ignore[attr-defined]
+                                    try:
+                                        content = getattr(fact, 'content', None)
+                                        confidence = getattr(fact, 'confidence', None)
+                                        if isinstance(content, str) and content.strip():
+                                            entry: Dict[str, Any] = {"text": content.strip()}
+                                            if isinstance(confidence, (int, float)):
+                                                entry["confidence"] = float(confidence)
+                                            results.append(entry)
+                                    except Exception:
+                                        continue
+
+                                if results:
+                                    logger.debug(
+                                        f"Structured extraction (parsed_data): {len(results)} facts"
+                                    )
+                                    return results
+
+                            if response.success and getattr(response, 'content', None):
+                                parsed = self._parse_fact_extraction_response_structured(
+                                    response.content
+                                )
+                                if parsed:
+                                    logger.debug(
+                                        f"Structured (content-parse) extraction: {len(parsed)} facts"
+                                    )
+                                    return parsed
+
+                        except Exception as structured_error:
+                            logger.warning(
+                                f"Structured extraction failed on attempt {attempt + 1}: {structured_error}"
+                            )
+
+                    try:
+                        response = await llm_provider.generate(request)
+                        if response.success and response.content:
+                            parsed = self._parse_fact_extraction_response_structured(
+                                response.content
+                            )
+                            if parsed:
+                                logger.debug(
+                                    f"JSON fallback extraction (structured): {len(parsed)} facts"
+                                )
+                                fallback_facts = parsed
+                                skip_calls = True
+
+                        last_error = getattr(response, 'error', None) if not response.success else "No facts extracted"
+                    except Exception as gen_err:
+                        last_error = str(gen_err)
+                        logger.warning(
+                            f"Regular generation failed on attempt {attempt + 1}: {gen_err}"
+                        )
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Fact extraction attempt {attempt + 1} failed: {e}")
+
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1.0 * (2 ** attempt))
+
+        if fallback_facts:
+            return fallback_facts
+
+        logger.error(f"All structured fact extraction attempts failed. Last error: {last_error}")
+        return []
     
     def _get_preferred_extraction_model(self) -> str:
         """Get the preferred model for fact extraction from environment variable.
@@ -2327,22 +2796,30 @@ Please extract clear, factual statements that would be useful for future memory 
                 
                 # Extract facts from JSON structure
                 facts = []
-                if isinstance(data, dict) and 'facts' in data and isinstance(data['facts'], list):
-                    for fact_item in data['facts']:
-                        if isinstance(fact_item, dict):
-                            # Handle structured fact objects
-                            content = fact_item.get('content', '')
-                            if content and isinstance(content, str):
-                                facts.append(content.strip())
-                        elif isinstance(fact_item, str):
-                            # Handle simple string facts
-                            if fact_item.strip():
-                                facts.append(fact_item.strip())
-                
-                if facts:
-                    logger.debug(f"Parsed {len(facts)} facts from JSON response")
-                    return facts
-            
+                if isinstance(data, dict):
+                    items = data.get('facts')
+                    if isinstance(items, list):
+                        for fact_item in items:
+                            if isinstance(fact_item, dict):
+                                # Handle structured fact objects
+                                content = fact_item.get('content') or fact_item.get('text')
+                                if content and isinstance(content, str):
+                                    content = content.strip()
+                                    if content:
+                                        facts.append(content)
+                            elif isinstance(fact_item, str):
+                                # Handle simple string facts
+                                if fact_item.strip():
+                                    facts.append(fact_item.strip())
+                    # If JSON is present but no facts extracted, do NOT fall back to
+                    # line-based parsing to avoid saving keys like "facts" or "processing_notes".
+                    if facts:
+                        logger.debug(f"Parsed {len(facts)} facts from JSON response")
+                        return facts
+                    else:
+                        logger.debug("JSON detected but no facts found; returning empty list")
+                        return []
+
             except (json.JSONDecodeError, KeyError) as e:
                 logger.debug(f"JSON parsing failed, falling back to text parsing: {e}")
             
@@ -2387,6 +2864,104 @@ Please extract clear, factual statements that would be useful for future memory 
         
         except Exception as e:
             logger.error(f"Error parsing fact extraction response: {e}")
+            return []
+
+    def _parse_fact_extraction_response_structured(self, response_content: str) -> List[Dict[str, Any]]:
+        """Parse LLM response into structured facts with optional confidence.
+
+        Returns a list of dictionaries: {"text": str, "confidence": Optional[float]}.
+        """
+        try:
+            import json
+            import re
+
+            if not response_content or not response_content.strip():
+                return []
+
+            original_text = response_content.strip()
+
+            # Attempt to isolate JSON object
+            json_candidate = None
+            if '```json' in original_text:
+                m = re.search(r'```json\s*(\{.*?\})\s*```', original_text, re.DOTALL)
+                if m:
+                    json_candidate = m.group(1)
+            elif original_text.startswith('{') and original_text.endswith('}'):
+                json_candidate = original_text
+            else:
+                m = re.search(r'\{.*\}', original_text, re.DOTALL)
+                if m:
+                    json_candidate = m.group(0)
+
+            if json_candidate:
+                try:
+                    data = json.loads(json_candidate)
+                    items = data.get('facts') if isinstance(data, dict) else None
+                    results: List[Dict[str, Any]] = []
+                    if isinstance(items, list):
+                        for it in items:
+                            if isinstance(it, dict):
+                                text = it.get('content') or it.get('text')
+                                if isinstance(text, str) and text.strip():
+                                    entry: Dict[str, Any] = {"text": text.strip()}
+                                    conf = it.get('confidence')
+                                    if isinstance(conf, (int, float)):
+                                        entry["confidence"] = float(conf)
+                                    results.append(entry)
+                            elif isinstance(it, str):
+                                s = it.strip()
+                                if s:
+                                    results.append({"text": s})
+                    if results:
+                        logger.debug(
+                            f"Parsed {len(results)} structured facts from JSON response"
+                        )
+                        return results[:20]
+                    else:
+                        logger.debug(
+                            "JSON detected but no structured facts found; returning empty list"
+                        )
+                        return []
+                except Exception as json_err:
+                    logger.debug(f"JSON parsing failed in structured parser: {json_err}")
+
+            # Fallback: extract lines/bullets without confidence
+            facts: List[str] = []
+            bullet_matches = re.findall(r"^[\s]*[\-\*\•]\s*(.+)$", original_text, flags=re.MULTILINE)
+            if bullet_matches:
+                for item in bullet_matches:
+                    item = item.strip()
+                    if len(item) >= 3:
+                        facts.append(item)
+            else:
+                lines = original_text.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    line = re.sub(r'^[\-\*\•]\s*', '', line)
+                    line = re.sub(r'^\d+\.\s*', '', line)
+                    line = re.sub(r'^Facts?\s*:\s*', '', line, flags=re.IGNORECASE)
+                    lower = line.lower()
+                    if lower.startswith(('here', 'the following', 'extracted', 'based on', 'this should')):
+                        continue
+                    if len(line) >= 10:
+                        facts.append(line)
+
+            seen = set()
+            unique: List[Dict[str, Any]] = []
+            for f in facts:
+                fl = f.lower()
+                if fl not in seen:
+                    seen.add(fl)
+                    unique.append({"text": f})
+
+            logger.debug(
+                f"Parsed {len(unique)} structured facts from text fallback"
+            )
+            return unique[:20]
+        except Exception as e:
+            logger.error(f"Error parsing structured fact extraction response: {e}")
             return []
     
     def _success_response(self, data: Any, message: str) -> Dict[str, Any]:
@@ -2572,6 +3147,18 @@ Please extract clear, factual statements that would be useful for future memory 
 
     async def close(self):
         """Close database connections."""
+        # Stop M2 background task if running
+        if self.m2_processor_task is not None:
+            self.m2_running = False
+            try:
+                self.m2_processor_task.cancel()
+                try:
+                    await self.m2_processor_task
+                except asyncio.CancelledError:
+                    pass
+            finally:
+                self.m2_processor_task = None
+
         if self.db_manager:
             self.db_manager.close()
 

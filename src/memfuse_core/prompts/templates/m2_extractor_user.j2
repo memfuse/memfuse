@@ -4,13 +4,7 @@ author: Calvin
 version: 1.0
 ---
 
-## Primary Extraction Target
-
-Focus your fact extraction on this key memory chunk, which represents the most significant content for semantic processing:
-
-**[KEY CHUNK]**
-{{ key_chunk }}
-
+<instruction>
 ## Processing Instructions
 
 ### 1. Key Chunk Priority
@@ -33,5 +27,14 @@ Focus your fact extraction on this key memory chunk, which represents the most s
 - Ensure extracted facts are self-contained and meaningful without requiring the full context
 - Verify that key chunk facts have higher confidence scores when supported by context
 - Flag any key chunk information that seems inconsistent with the broader narrative
+
+## Primary Extraction Target
+
+Focus your fact extraction on this key memory chunk, which represents the most significant content for semantic processing:
+
+<key_chunk>
+{{ key_chunk }}
+</key_chunk>
+</instruction>
 
 **Begin extraction now, prioritizing the key chunk while leveraging the contextual fragments for validation and enhancement.**
