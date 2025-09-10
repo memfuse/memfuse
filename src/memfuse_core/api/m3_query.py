@@ -26,6 +26,8 @@ class M3UserQuery(BaseModel):
     query: str = Field(..., description="Free-text user query")
     top_k: Optional[int] = Field(default=5)
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    session_id: Optional[str] = Field(default=None, description="Optional session id to include session workflow logs")
+    include_workflows: Optional[bool] = Field(default=True, description="Include message_workflows when session_id provided")
 
 
 @router.post("/{user_id}/query", response_model=ApiResponse)
@@ -54,6 +56,12 @@ async def m3_user_query(
     # Phase A: search procedural memory and lessons globally (no user scoping yet)
     workflows = await store.query_procedural_similar(emb, top_k=max(1, request.top_k or 5))
     lessons = await store.query_lessons_similar(emb, agent=None, top_k=max(1, request.top_k or 5))
+    session_workflows = []
+    if request.include_workflows and request.session_id:
+        try:
+            session_workflows = await store.query_message_workflows_for_session(request.session_id, limit=max(1, request.top_k or 50))
+        except Exception:
+            session_workflows = []
 
     results = {
         "procedural_memory": [
@@ -64,10 +72,10 @@ async def m3_user_query(
             {"lesson_id": lid, "status": st, "score": sc, "working_params": wp, "fix_summary": fx}
             for (lid, st, fx, wp, sc) in lessons
         ],
+        "session_workflows": session_workflows,
     }
 
     return ApiResponse.success(
         data={"results": results},
         message="M3 results retrieved",
     )
-

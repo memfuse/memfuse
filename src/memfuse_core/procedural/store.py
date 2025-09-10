@@ -204,3 +204,24 @@ class ProceduralStore:
             logger.warning(f"query_lessons_similar failed: {e}")
             return []
 
+    async def query_message_workflows_for_session(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Return message_workflows rows for messages belonging to a session.
+
+        This performs a subquery join:
+          message_workflows.message_id IN (SELECT m.id FROM messages m JOIN rounds r ON m.round_id=r.id WHERE r.session_id=%s)
+        """
+        await self._ensure_tables()
+        db = await DatabaseService.get_instance()
+        q = (
+            "SELECT id, message_id, workflow_id, step_index, tags, metadata, created_at, updated_at "
+            "FROM message_workflows WHERE message_id IN ("
+            "  SELECT m.id FROM messages m JOIN rounds r ON m.round_id = r.id WHERE r.session_id = %s"
+            ") ORDER BY created_at ASC LIMIT %s"
+        )
+        try:
+            rows = await db.execute(q, (session_id, limit))
+            # rows is a list of dicts via PostgresDB
+            return rows
+        except Exception as e:
+            logger.warning(f"query_message_workflows_for_session failed: {e}")
+            return []

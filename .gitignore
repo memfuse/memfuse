@@ -1,4 +1,3 @@
-
 !benchmarkss/**/*.py
 !build/
 !data/README.md
@@ -133,6 +132,7 @@ languageServer/**
 lib64/
 local_settings.py
 log.log
+logs/
 next-env.d.ts
 nodeLanguageServer.*/**
 nosetests.xml
@@ -151,6 +151,7 @@ profile_default/
 pydevd*.log
 python_files/get-pip.py
 python_files/lib/**
+runs/
 sdist/
 share/python-wheels/
 target/
