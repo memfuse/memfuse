@@ -9,10 +9,13 @@ lessons storage will be wired in later steps against ProceduralStore.
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 from ..llm.chat import ChatLLM
 from ..rag.rag_service import RAGService
+from ..procedural.store import ProceduralStore
+from ..utils.embeddings import create_embedding
+import os
 
 
 @dataclass
@@ -86,7 +89,7 @@ class ReportGenerationAgent:
 
 
 class Orchestrator:
-    def __init__(self) -> None:
+    def __init__(self, store: Optional[ProceduralStore] = None) -> None:
         self.llm = ChatLLM()
         self.rag = RAGService()
         self.planner = Planner(self.llm)
@@ -94,11 +97,54 @@ class Orchestrator:
             "RAGQueryAgent": RAGQueryAgent(self.rag),
             "ReportGenerationAgent": ReportGenerationAgent(self.llm),
         }
+        self.store = store or ProceduralStore()
+        # Debug / last-run info
+        self.last_workflow_id: Optional[str] = None
+        self.last_reused: bool = False
+        # Controls via env (fallback defaults)
+        try:
+            self.procedural_top_k = int(os.getenv("PROCEDURAL_TOP_K", "5"))
+        except Exception:
+            self.procedural_top_k = 5
+        try:
+            self.procedural_reuse_threshold = float(os.getenv("PROCEDURAL_REUSE_THRESHOLD", "0.9"))
+        except Exception:
+            self.procedural_reuse_threshold = 0.9
 
-    def handle_request(self, session_id: str, user_goal: str) -> str:
-        steps = self.planner.plan(user_goal)
+    async def handle_request(self, session_id: str, user_goal: str) -> str:
+        # Try reuse first (soft-fail if any issue)
+        steps: List[PlanStep]
+        wid_reused: Optional[str] = None
+        self.last_workflow_id = None
+        self.last_reused = False
+        try:
+            vec = await create_embedding(user_goal)
+            recs = await self.store.query_procedural_similar(vec, max(1, self.procedural_top_k))
+            if recs:
+                wid, wf, score = recs[0]
+                if score >= self.procedural_reuse_threshold:
+                    plan_list = wf.get("plan", []) if isinstance(wf, dict) else []
+                    cand = [
+                        PlanStep(agent=str(s.get("agent", "")), input=s.get("input") or {})
+                        for s in plan_list
+                        if isinstance(s, dict) and str(s.get("agent", "")).strip()
+                    ]
+                    if cand:
+                        steps = cand
+                        wid_reused = wid
+                        self.last_reused = True
+                    else:
+                        steps = self.planner.plan(user_goal)
+                else:
+                    steps = self.planner.plan(user_goal)
+            else:
+                steps = self.planner.plan(user_goal)
+        except Exception:
+            steps = self.planner.plan(user_goal)
+
         context: Dict[str, Any] = {}
         last_output: Dict[str, Any] = {}
+        executed: List[Tuple[PlanStep, Dict[str, Any]]] = []
         for step in steps:
             agent = self.agents.get(step.agent)
             if not agent:
@@ -109,13 +155,40 @@ class Orchestrator:
                 out = agent.execute(session_id, payload)
                 last_output = out
                 context[step.agent] = out
+                executed.append((step, out))
             except Exception:
                 continue
-        # Final text response
+        # Final text
         if "report" in last_output:
-            return str(last_output.get("report") or "")
-        if "answer" in last_output:
-            return str(last_output.get("answer") or "")
-        # fallback to simple stitched summary
-        return json.dumps({"result": context}, ensure_ascii=False)
+            final_text = str(last_output.get("report") or "")
+        elif "answer" in last_output:
+            final_text = str(last_output.get("answer") or "")
+        else:
+            final_text = json.dumps({"result": context}, ensure_ascii=False)
 
+        # Persist usage/workflow/lessons (soft-fail)
+        try:
+            vec = await create_embedding(user_goal)
+            if self.last_reused and wid_reused:
+                await self.store.bump_procedural_usage(wid_reused, 1)
+                self.last_workflow_id = wid_reused
+            else:
+                workflow = {
+                    "goal": user_goal,
+                    "plan": [{"agent": s.agent, "input": s.input} for (s, _o) in executed],
+                    "result_keys": list(last_output.keys()),
+                }
+                import uuid as _uuid
+                wid_new = str(_uuid.uuid4())
+                await self.store.upsert_procedural_workflow(wid_new, vec, workflow)
+                self.last_workflow_id = wid_new
+            # lessons
+            for s, o in executed:
+                if isinstance(o, dict) and (o.get("report") or o.get("answer")):
+                    await self.store.insert_lesson(vec, user_goal, s.agent, "success", None, "", s.input)
+                elif isinstance(o, dict) and o.get("error"):
+                    await self.store.insert_lesson(vec, user_goal, s.agent, "fail", str(o.get("error"))[:500], "", s.input)
+        except Exception:
+            pass
+
+        return final_text

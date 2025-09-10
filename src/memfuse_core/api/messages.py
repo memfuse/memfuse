@@ -241,7 +241,7 @@ async def add_messages(
             user_goal = str(m3_msgs[-1].get("content") or "").strip()
             if user_goal:
                 orch = Orchestrator()
-                ai_text = orch.handle_request(session_id, user_goal)
+                ai_text = await orch.handle_request(session_id, user_goal)
 
                 # Create assistant reply via memory service so it flows through the same pipeline
                 assistant_msg = [{
@@ -259,14 +259,18 @@ async def add_messages(
                 # Log workflow reference (temporary Phase A table)
                 try:
                     store = ProceduralStore()
-                    workflow_id = str(_uuid.uuid4())
+                    # Prefer orchestrator's own workflow id (reuse/new)
+                    workflow_id = getattr(orch, "last_workflow_id", None)
+                    if not workflow_id:
+                        # Fallback to a random id if none available
+                        workflow_id = str(_uuid.uuid4())
                     if ai_ids:
                         await store.log_message_workflow(
                             message_id=ai_ids[0],
                             workflow_id=workflow_id,
                             step_index=0,
                             tags=["m3", "workflow"],
-                            metadata={"m3_enabled": True, "user_goal": user_goal},
+                            metadata={"m3_enabled": True, "user_goal": user_goal, "reused": getattr(orch, "last_reused", False)},
                         )
                     response_data["workflow_id"] = workflow_id
                 except Exception as e:
