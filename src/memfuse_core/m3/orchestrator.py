@@ -67,11 +67,18 @@ class RAGQueryAgent:
     def __init__(self, rag: RAGService) -> None:
         self.rag = rag
 
-    def execute(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         query = str(payload.get("query") or payload.get("question") or "").strip()
         if not query:
             return {"error": "query required"}
-        ans = self.rag.chat(session_id, query)
+        # try to extract lightweight history from payload.context if present
+        hist = None
+        ctx = payload.get("context") if isinstance(payload, dict) else None
+        if isinstance(ctx, dict):
+            hist = ctx.get("_history_messages")
+            if not isinstance(hist, list):
+                hist = None
+        ans = await self.rag.chat(session_id, query, history_messages=hist or [])
         return {"answer": ans}
 
 
@@ -79,7 +86,7 @@ class ReportGenerationAgent:
     def __init__(self, llm: ChatLLM) -> None:
         self.llm = llm
 
-    def execute(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         points = payload.get("points") or payload.get("data") or payload
         text = json.dumps(points, ensure_ascii=False)
         system = "You are a precise report writer. Summarize inputs into a concise brief."
@@ -170,7 +177,8 @@ class Orchestrator:
             try:
                 payload = dict(step.input)
                 payload.setdefault("context", context)
-                out = agent.execute(session_id, payload)
+                # Await agent execution (agents are async)
+                out = await agent.execute(session_id, payload)
                 last_output = out
                 context[step.agent] = out
                 executed.append((step, out))
