@@ -85,7 +85,7 @@ class ProceduralStore:
                 "INSERT INTO message_workflows (id, message_id, workflow_id, step_index, tags, metadata) "
                 "VALUES (%s, %s, %s, %s, %s, %s)"
             )
-            await db.execute(query, (mw_id, message_id, workflow_id, step_index, tags or [], json.dumps(metadata or {})))
+            await db.backend.execute(query, (mw_id, message_id, workflow_id, step_index, tags or [], json.dumps(metadata or {})))
         except Exception as e:
             logger.warning(f"log_message_workflow failed: {e}")
         return mw_id
@@ -112,7 +112,7 @@ class ProceduralStore:
         )
         try:
             # asyncpg will accept Python list for vector when pgvector installed
-            await db.execute(query, (workflow_id, trigger_embedding, trigger_pattern, json.dumps(successful_workflow)))
+            await db.backend.execute(query, (workflow_id, trigger_embedding, trigger_pattern, json.dumps(successful_workflow)))
         except Exception as e:
             logger.warning(f"upsert_procedural_workflow failed: {e}")
 
@@ -125,7 +125,7 @@ class ProceduralStore:
             "FROM procedural_memory, q ORDER BY trigger_embedding <=> q.v ASC LIMIT %s"
         )
         try:
-            rows = await db.execute(query, (query_embedding, top_k))
+            rows = await db.backend.execute(query, (query_embedding, top_k))
             results: List[Tuple[str, Dict[str, Any], float]] = []
             for r in rows:
                 wid = r.get("workflow_id")
@@ -142,7 +142,7 @@ class ProceduralStore:
         db = await DatabaseService.get_instance()
         try:
             q = "UPDATE procedural_memory SET usage_count = usage_count + %s WHERE workflow_id = %s"
-            count = await db.execute(q, (by, workflow_id))
+            count = await db.backend.execute(q, (by, workflow_id))
             return int(count or 0)
         except Exception as e:
             logger.warning(f"bump_procedural_usage failed: {e}")
@@ -167,7 +167,7 @@ class ProceduralStore:
                 "INSERT INTO procedural_lessons (lesson_id, trigger_embedding, goal_text, agent, status, error, fix_summary, working_params) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)"
             )
-            await db.execute(q, (lid, trigger_embedding, goal_text, agent, status, error, fix_summary, json.dumps(working_params or {})))
+            await db.backend.execute(q, (lid, trigger_embedding, goal_text, agent, status, error, fix_summary, json.dumps(working_params or {})))
         except Exception as e:
             logger.warning(f"insert_lesson failed: {e}")
         return lid
@@ -187,7 +187,7 @@ class ProceduralStore:
             f"FROM procedural_lessons, q {where} ORDER BY trigger_embedding <=> q.v ASC LIMIT %s"
         )
         try:
-            rows = await db.execute(q, tuple(params))
+            rows = await db.backend.execute(q, tuple(params))
             out: List[Tuple[str, str, str, Dict[str, Any], float]] = []
             for r in rows:
                 out.append(
@@ -219,7 +219,7 @@ class ProceduralStore:
             ") ORDER BY created_at ASC LIMIT %s"
         )
         try:
-            rows = await db.execute(q, (session_id, limit))
+            rows = await db.backend.execute(q, (session_id, limit))
             # rows is a list of dicts via PostgresDB
             return rows
         except Exception as e:
