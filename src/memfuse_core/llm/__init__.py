@@ -6,7 +6,7 @@ and other AI-powered features.
 """
 
 from .base import LLMProvider, LLMRequest, LLMResponse
-from .providers import OpenAIProvider
+from .providers import OpenAIProvider, LiteLLMProvider
 from .config import LLMConfig
 
 __all__ = [
@@ -14,5 +14,6 @@ __all__ = [
     "LLMRequest",
     "LLMResponse",
     "OpenAIProvider",
+    "LiteLLMProvider",
     "LLMConfig",
 ]

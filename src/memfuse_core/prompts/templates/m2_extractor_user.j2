@@ -1,0 +1,37 @@
+---
+description: A template for extracting M2 facts from M1 chunks with focused key chunk analysis (user)
+author: Calvin
+version: 1.0
+---
+
+## Primary Extraction Target
+
+Focus your fact extraction on this key memory chunk, which represents the most significant content for semantic processing:
+
+**[KEY CHUNK]**
+{{ key_chunk }}
+
+## Processing Instructions
+
+### 1. Key Chunk Priority
+- **Primary Focus**: Extract the most important facts from the key chunk above
+- **Context Integration**: Use the provided fragment context to disambiguate and enrich facts
+- **Source Attribution**: Clearly indicate when facts originate from the key chunk vs. supporting context
+
+### 2. Contextual Validation
+- Cross-reference key chunk information against the broader fragment context
+- Resolve any ambiguities using supporting fragments
+- Note when key chunk information contradicts or extends context fragments
+
+### 3. Enhanced Extraction Strategy
+- **Direct Facts**: Extract explicit information stated in the key chunk
+- **Inferred Facts**: Derive facts that become clear when key chunk is combined with context
+- **Relationship Facts**: Identify connections between key chunk content and context fragments
+- **Temporal Sequencing**: Position key chunk events within the timeline established by context
+
+### 4. Quality Assurance
+- Ensure extracted facts are self-contained and meaningful without requiring the full context
+- Verify that key chunk facts have higher confidence scores when supported by context
+- Flag any key chunk information that seems inconsistent with the broader narrative
+
+**Begin extraction now, prioritizing the key chunk while leveraging the contextual fragments for validation and enhancement.**

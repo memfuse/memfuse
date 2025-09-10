@@ -29,6 +29,18 @@ from ..interfaces import MessageInterface
 from ..interfaces.message_interface import MessageBatchList
 from ..models.core import M2Status, Chunk, Fact, M2FactStatus
 from .sync_connection_pool import sync_connection_pool
+from ..llm.base import LLMProviderError
+
+# Import TYPE_CHECKING to avoid circular imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ..llm.base import LLMRequest
+
+# Expose PromptManager at module level for test patching and safe usage
+try:
+    from ..prompts.prompt_manager import PromptManager  # type: ignore
+except Exception:  # pragma: no cover - fallback for environments without prompts
+    PromptManager = None  # type: ignore
 
 
 class SimplifiedDatabaseManager:
@@ -1963,6 +1975,419 @@ class SimplifiedMemoryService(MessageInterface):
         logger.info(f"✅ Applied token budget limit: {len(truncated_context)}/{len(context)} chunks, "
                     f"{current_tokens}/{limit} tokens")
         return truncated_context
+    
+    def _build_fact_extraction_prompt(
+        self,
+        target_chunk: Optional[Dict[str, Any]],
+        context_chunks: Optional[List[Chunk]]
+    ) -> List[Dict[str, str]]:
+        """Build messages for LLM fact extraction using existing prompt templates.
+        
+        Args:
+            target_chunk: The main chunk to extract facts from
+            context_chunks: List of context chunks for additional information
+            
+        Returns:
+            List of message dictionaries for LLM consumption
+        """
+        try:
+            # Normalize inputs
+            context_list: List[Chunk] = context_chunks or []
+            # Ensure chronological ordering (oldest first)
+            try:
+                context_list = sorted(
+                    context_list,
+                    key=lambda c: getattr(c, 'created_at', None) or datetime.now()
+                )
+            except Exception:
+                # If sorting fails, keep original order
+                pass
+
+            # Format context chunks as chronological text
+            if context_list:
+                context_parts = []
+                for i, chunk in enumerate(context_list):
+                    created = getattr(chunk, 'created_at', None)
+                    context_parts.append(
+                        f"**Context Chunk {i+1}:**\n{getattr(chunk, 'content', '')}\n"
+                        f"timestamp: {created}"
+                    )
+                chunk_context = "\n\n".join(context_parts)
+            else:
+                chunk_context = "No additional context chunks available."
+
+            # Get the key chunk content safely
+            key_chunk = ''
+            if isinstance(target_chunk, dict):
+                key_chunk = target_chunk.get('content', '')
+
+            # Use module-level PromptManager if available
+            if PromptManager is None:
+                raise ImportError("PromptManager not available")
+
+            system_prompt = PromptManager.get_prompt(
+                "m2_extractor_system",
+                chunk_context=chunk_context
+            )
+            user_prompt = PromptManager.get_prompt(
+                "m2_extractor_user",
+                key_chunk=key_chunk
+            )
+
+            # Validate prompt types; fallback if unexpected
+            if not isinstance(system_prompt, str) or not isinstance(user_prompt, str):
+                raise ValueError("PromptManager returned non-string content")
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+
+            logger.debug(f"Built fact extraction prompt with {len(context_list)} context chunks")
+            return messages
+
+        except Exception as e:
+            logger.error(f"Failed to build fact extraction prompt: {e}")
+            # Fallback to basic prompt
+            content = ''
+            if isinstance(target_chunk, dict):
+                content = target_chunk.get('content', '')
+            fallback_prompt = f"""Extract semantic facts from this memory chunk:
+
+{content}
+
+Please extract clear, factual statements that would be useful for future memory retrieval. Return your response as JSON with a 'facts' array containing objects with 'content' and 'source_chunk_ids' fields."""
+            
+            return [
+                {"role": "system", "content": "You are an expert at extracting semantic facts from conversational content."},
+                {"role": "user", "content": fallback_prompt}
+            ]
+
+    async def _extract_list_of_fact_content_from_chunk(
+        self, 
+        chunk_id: str, 
+        context: Optional[List[Chunk]] = None,
+        user_id: Optional[str] = None
+    ) -> List[str]:
+        """Extract fact content strings from chunk using LLM with structured outputs.
+        
+        Args:
+            chunk_id: The UUID of the chunk to extract facts from
+            context: Optional context chunks for additional information  
+            user_id: Optional user ID for security scoping
+            
+        Returns:
+            List of fact content strings extracted from the chunk
+        """
+        try:
+            # Step 1: Get the target chunk
+            target_chunk = await self._get_m1_chunk(chunk_id, user_id)
+            if not target_chunk:
+                logger.error(f"Target chunk not found: {chunk_id}")
+                return []
+            
+            # Step 2: Get session context if not provided
+            if context is None:
+                context = await self._get_session_context_for_chunk(
+                    chunk_id, 
+                    context_chunks_before=5, 
+                    user_id=user_id
+                )
+                if context is None:
+                    context = []
+            
+            # Step 3: Apply token budget limit
+            context = self._apply_token_budget_limit(context, limit=2000)
+            
+            # Step 4: Build extraction prompt
+            messages = self._build_fact_extraction_prompt(target_chunk, context)
+            
+            # Step 5: Initialize LLM provider
+            llm_provider = await self._get_llm_provider()
+            if not llm_provider:
+                logger.error("No LLM provider available for fact extraction")
+                return []
+            
+            # Step 6: Create LLM request with structured output
+            from ..llm.base import LLMRequest
+            from ..models.m2_extraction import FactExtractionResponse
+            
+            # Choose model - prefer structured output capable model
+            model = self._get_preferred_extraction_model()
+            
+            request = LLMRequest(
+                messages=messages,
+                model=model,
+                temperature=0.3,  # Lower temperature for more consistent extraction
+                max_tokens=1500
+            )
+            
+            # Step 7: Generate with retry logic
+            facts = await self._extract_facts_with_retry(llm_provider, request)
+            
+            logger.info(f"✅ Extracted {len(facts)} facts from chunk {chunk_id}")
+            return facts
+            
+        except Exception as e:
+            logger.error(f"❌ Error extracting facts from chunk {chunk_id}: {e}")
+            return []
+    
+    async def _get_llm_provider(self):
+        """Get LLM provider for fact extraction.
+
+        Behavior:
+        - If using official OpenAI endpoint (or no base_url), use OpenAIProvider
+          to leverage native structured outputs when available.
+        - If using a custom OpenAI-compatible base URL, use LiteLLMProvider,
+          forced to OpenAI provider semantics and with structured API disabled.
+        """
+        import os
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL") or ""
+
+        # Official OpenAI endpoint? Use OpenAIProvider to enable native structured
+        is_official_openai = (not base_url) or ("api.openai.com" in base_url)
+
+        if is_official_openai:
+            try:
+                from ..llm.providers.openai import OpenAIProvider
+
+                config = {
+                    "api_key": api_key,
+                    "base_url": base_url if base_url else None,
+                    "timeout": 30.0,
+                }
+                provider = OpenAIProvider(config)
+                return provider
+            except Exception as e:
+                raise LLMProviderError(f"Failed to initialize OpenAI provider: {e}")
+
+        # Custom OpenAI-compatible proxy: force OpenAI semantics via LiteLLM, disable structured API
+        try:
+            from ..llm.providers.litellm import LiteLLMProvider
+
+            config = {
+                "api_key": api_key,
+                "base_url": base_url,
+                "timeout": 30.0,
+                # Force OpenAI provider path inside LiteLLM and disable structured API
+                "custom_llm_provider": "openai",
+                "enable_structured_api": False,
+            }
+            provider = LiteLLMProvider(config)
+            return provider
+        except Exception as e:
+            raise LLMProviderError(f"Failed to initialize LiteLLM provider: {e}")
+    
+    async def _extract_facts_with_retry(
+        self,
+        llm_provider,
+        request: "LLMRequest",
+        max_retries: int = 3
+    ) -> List[str]:
+        """Extract facts with retry logic and fallback parsing."""
+        from ..models.m2_extraction import FactExtractionResponse
+        import asyncio
+        
+        last_error = None
+        fallback_facts: Optional[List[str]] = None
+        skip_calls = False  # If we already have fallback facts, skip further network calls
+
+        for attempt in range(max_retries):
+            try:
+                if not skip_calls:
+                    # Try structured output first if provider supports it
+                    if hasattr(llm_provider, 'generate_structured'):
+                        try:
+                            response = await llm_provider.generate_structured(
+                                request, FactExtractionResponse
+                            )
+
+                            # Primary path: parsed structured data
+                            if response.success and getattr(response, 'parsed_data', None):
+                                facts: List[str] = []
+                                for fact in response.parsed_data.facts:  # type: ignore[attr-defined]
+                                    if hasattr(fact, 'content'):
+                                        facts.append(fact.content)
+                                    elif isinstance(fact, str):
+                                        facts.append(fact)
+
+                                logger.debug(f"Structured extraction: {len(facts)} facts")
+                                return facts
+
+                            # Secondary path: structured call succeeded but only raw JSON content provided
+                            if response.success and getattr(response, 'content', None):
+                                parsed = self._parse_fact_extraction_response(response.content)
+                                if parsed:
+                                    logger.debug(f"Structured (content-parse) extraction: {len(parsed)} facts")
+                                    return parsed
+
+                        except Exception as structured_error:
+                            logger.warning(f"Structured extraction failed on attempt {attempt + 1}: {structured_error}")
+
+                    # Fall back to regular generation with JSON parsing
+                    try:
+                        response = await llm_provider.generate(request)
+
+                        if response.success and response.content:
+                            facts = self._parse_fact_extraction_response(response.content)
+                            if facts:
+                                logger.debug(f"JSON fallback extraction: {len(facts)} facts")
+                                fallback_facts = facts
+                                skip_calls = True  # Do not make more provider calls; still honor backoff timing
+
+                        last_error = getattr(response, 'error', None) if not response.success else "No facts extracted"
+                    except Exception as gen_err:
+                        last_error = str(gen_err)
+                        logger.warning(f"Regular generation failed on attempt {attempt + 1}: {gen_err}")
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Fact extraction attempt {attempt + 1} failed: {e}")
+            
+            # Wait before retry
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1.0 * (2 ** attempt))  # Exponential backoff
+        
+        # If we captured fallback facts, return them after completing retries/backoff
+        if fallback_facts:
+            return fallback_facts
+
+        logger.error(f"All fact extraction attempts failed. Last error: {last_error}")
+        return []
+    
+    def _get_preferred_extraction_model(self) -> str:
+        """Get the preferred model for fact extraction from environment variable.
+        
+        Returns:
+            Model name string for LLM requests
+        """
+        import os
+        
+        # Try to get model from OPENAI_COMPATIBLE_MODEL environment variable
+        env_model = os.getenv("OPENAI_COMPATIBLE_MODEL")
+        if env_model:
+            logger.debug(f"Using model from OPENAI_COMPATIBLE_MODEL: {env_model}")
+            return env_model
+        
+        # Fallback hierarchy based on available API keys
+        openai_key = os.getenv("OPENAI_API_KEY")
+        xai_key = os.getenv("XAI_API_KEY")
+        
+        if openai_key:
+            # Prefer newer OpenAI models with structured output support
+            logger.debug("Using OpenAI model for fact extraction")
+            return "gpt-4o-2024-08-06"
+        elif xai_key:
+            # Fallback to XAI/Grok model
+            logger.debug("Using XAI model for fact extraction")
+            return "grok-3-mini"
+        else:
+            # Default fallback
+            logger.warning("No API keys found, using default model")
+            return "gpt-4o"
+    
+    def _parse_fact_extraction_response(self, response_content: str) -> List[str]:
+        """Parse LLM response content to extract fact strings.
+        
+        Args:
+            response_content: Raw response content from LLM
+            
+        Returns:
+            List of fact content strings
+        """
+        try:
+            import json
+            import re
+
+            if not response_content or not response_content.strip():
+                return []
+
+            original_text = response_content.strip()
+
+            # Try JSON parsing first (without losing original text)
+            try:
+                json_candidate = None
+                # Handle JSON wrapped in markdown code blocks
+                if '```json' in original_text:
+                    json_match = re.search(r'```json\s*(\{.*?\})\s*```', original_text, re.DOTALL)
+                    if json_match:
+                        json_candidate = json_match.group(1)
+                elif original_text.startswith('{') and original_text.endswith('}'):
+                    # Already looks like JSON
+                    json_candidate = original_text
+                else:
+                    # Try to find JSON object within the response
+                    json_match = re.search(r'\{.*\}', original_text, re.DOTALL)
+                    if json_match:
+                        json_candidate = json_match.group(0)
+
+                data = json.loads(json_candidate) if json_candidate else None
+                
+                # Extract facts from JSON structure
+                facts = []
+                if isinstance(data, dict) and 'facts' in data and isinstance(data['facts'], list):
+                    for fact_item in data['facts']:
+                        if isinstance(fact_item, dict):
+                            # Handle structured fact objects
+                            content = fact_item.get('content', '')
+                            if content and isinstance(content, str):
+                                facts.append(content.strip())
+                        elif isinstance(fact_item, str):
+                            # Handle simple string facts
+                            if fact_item.strip():
+                                facts.append(fact_item.strip())
+                
+                if facts:
+                    logger.debug(f"Parsed {len(facts)} facts from JSON response")
+                    return facts
+            
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.debug(f"JSON parsing failed, falling back to text parsing: {e}")
+            
+            # Fallback: Text parsing for unstructured responses
+            facts: List[str] = []
+            # Prefer bullet-style lines if present
+            bullet_matches = re.findall(r"^[\s]*[\-\*\•]\s*(.+)$", original_text, flags=re.MULTILINE)
+            if bullet_matches:
+                for item in bullet_matches:
+                    item = item.strip()
+                    if len(item) >= 3:
+                        facts.append(item)
+            else:
+                # General line-based extraction
+                lines = original_text.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Remove list markers and prefixes
+                    line = re.sub(r'^[\-\*\•]\s*', '', line)
+                    line = re.sub(r'^\d+\.\s*', '', line)
+                    line = re.sub(r'^Facts?\s*:\s*', '', line, flags=re.IGNORECASE)
+                    # Filter out narrations
+                    lower = line.lower()
+                    if lower.startswith(('here', 'the following', 'extracted', 'based on', 'this should')):
+                        continue
+                    if len(line) >= 10:
+                        facts.append(line)
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_facts = []
+            for fact in facts:
+                fact_lower = fact.lower()
+                if fact_lower not in seen:
+                    seen.add(fact_lower)
+                    unique_facts.append(fact)
+            
+            logger.debug(f"Parsed {len(unique_facts)} facts from text fallback")
+            return unique_facts[:20]  # Limit to 20 facts max
+        
+        except Exception as e:
+            logger.error(f"Error parsing fact extraction response: {e}")
+            return []
     
     def _success_response(self, data: Any, message: str) -> Dict[str, Any]:
         """Create a success response compatible with BufferService expectations."""
