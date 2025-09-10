@@ -20,7 +20,7 @@ from ..utils import (
     raise_api_error,
 )
 from ..services.database_service import DatabaseService
-from ..services.service_factory import ServiceFactory
+# Avoid importing ServiceFactory at module load to prevent heavy side-effects
 
 
 router = APIRouter()
@@ -76,6 +76,8 @@ async def get_service_for_session(
     # Always use BufferService, which internally handles buffer enabled/disabled mode
     # based on config/buffer/default.yaml settings
     logger.info("Using BufferService for message operations")
+    # Lazy import to avoid heavy import at module import time
+    from ..services.service_factory import ServiceFactory
     service = await ServiceFactory.get_buffer_service(
         user=user_name,
         agent=agent_name,

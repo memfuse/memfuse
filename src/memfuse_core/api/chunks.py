@@ -9,7 +9,7 @@ from ..models import (
     ErrorDetail,
 )
 from ..services.database_service import DatabaseService
-from ..services.memory_service import MemoryService
+# Avoid importing MemoryService at module load to minimize side-effects
 from ..utils.auth import validate_api_key
 from ..utils import (
     validate_user_exists,
@@ -155,7 +155,8 @@ async def get_session_chunks(
                 errors=[ErrorDetail(field="session", message="Invalid session data")]
             )
 
-        # Initialize memory service
+        # Initialize memory service (lazy import)
+        from ..services.memory_service import MemoryService
         memory = MemoryService(
             user=user["name"],
             agent=agent["name"],

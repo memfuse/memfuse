@@ -1,15 +1,14 @@
-"""Services for MemFuse server."""
+"""Services for MemFuse server.
+
+This package initializes with a minimal import surface to avoid heavy side-effects
+at import time (e.g., optional dependencies like qdrant_client). Submodules should
+be imported directly where needed to enable lazy loading.
+"""
 
 from .base_service import BaseService, ServiceRegistry
 from .app_service import AppService, get_app_service
 from .logging_service import LoggingService, get_logging_service
-from .service_initializer import ServiceInitializer, get_service_initializer
-from .model_service import ModelService, get_model_service
-from .memory_service import MemoryService
-from .memory_service_proxy import MemoryServiceProxy
-from .buffer_service import BufferService
 from .database_service import DatabaseService
-from .service_factory import ServiceFactory
 
 __all__ = [
     # Base classes
@@ -21,17 +20,5 @@ __all__ = [
     "get_app_service",
     "LoggingService",
     "get_logging_service",
-    "ServiceInitializer",
-    "get_service_initializer",
-
-    # Business services
-    "ModelService",
-    "get_model_service",
-    "MemoryService",
-    "MemoryServiceProxy",
-    "BufferService",
     "DatabaseService",
-
-    # Factory
-    "ServiceFactory",
 ]

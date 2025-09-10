@@ -14,7 +14,10 @@ from fastapi import FastAPI
 from loguru import logger
 from omegaconf import DictConfig
 import uvicorn
-import hydra
+try:
+    import hydra  # Optional for tests that only import create_app_async
+except Exception:
+    hydra = None
 
 # Load environment variables from .env file
 try:
@@ -35,11 +38,7 @@ from .utils.global_config_manager import get_global_config_manager
 from .services.global_model_manager import get_global_model_manager
 
 # Import services
-from .services import (
-    get_app_service,
-    get_service_initializer,
-    ServiceFactory
-)
+# Avoid importing heavy services at module import time. Import selectively inside functions.
 
 
 # ============================================================================
@@ -66,6 +65,8 @@ def get_memory_service(
     Returns:
         Memory service instance or None if memory service is not initialized
     """
+    # Lazy import to avoid heavy side-effects at import time
+    from .services.service_factory import ServiceFactory
     return ServiceFactory.get_memory_service(
         user=user,
         agent=agent,
@@ -91,6 +92,8 @@ async def get_buffer_service(
     Returns:
         BufferService instance or None if buffer manager is not initialized
     """
+    # Lazy import to avoid heavy side-effects at import time
+    from .services.service_factory import ServiceFactory
     return await ServiceFactory.get_buffer_service(
         user=user,
         agent=agent,
@@ -328,6 +331,8 @@ def create_app() -> FastAPI:
     Returns:
         Configured FastAPI application
     """
+    # Prefer using AppService directly to avoid importing broader services package here
+    from .services.app_service import AppService, get_app_service
     app_service = get_app_service()
     app = app_service.get_app()
 
@@ -370,6 +375,8 @@ async def create_app_async() -> FastAPI:
     Returns:
         Configured FastAPI application
     """
+    # Lazy import to avoid side effects
+    from .services.app_service import AppService, get_app_service
     app_service = get_app_service()
     app = app_service.get_app()
 
@@ -403,15 +410,20 @@ def get_config_path():
     # Fallback: try relative path
     return "../../config"
 
-@hydra.main(version_base=None, config_path=get_config_path(), config_name="config")
-def main(cfg: DictConfig) -> None:
-    """Entry point for the memfuse-core command.
+if hydra is not None:
+    @hydra.main(version_base=None, config_path=get_config_path(), config_name="config")
+    def main(cfg: DictConfig) -> None:
+        """Entry point for the memfuse-core command.
 
-    This function is called when running:
-    - `poetry run memfuse-core`
-    - `python -m memfuse_core` (via __main__.py)
+        This function is called when running:
+        - `poetry run memfuse-core`
+        - `python -m memfuse_core` (via __main__.py)
 
-    Args:
-        cfg: Configuration from Hydra
-    """
-    run_server(cfg)
+        Args:
+            cfg: Configuration from Hydra
+        """
+        run_server(cfg)
+else:
+    def main(cfg: DictConfig | None = None) -> None:
+        """Fallback main when Hydra is unavailable (testing contexts)."""
+        raise RuntimeError("Hydra is not installed; main() is unavailable in this context.")
