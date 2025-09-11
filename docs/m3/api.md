@@ -1,14 +1,28 @@
 # M3 API Usage
 
 Phase A implementation provides minimal orchestration, RAG, and query integration. M3 is gated by `memory.layers.m3.enabled`.
-Compatibility: legacy `tag=m3` query param is accepted on message add and user query endpoints; server-side persistence still uses request `metadata` and `message_workflows`.
+Trigger migration: use `metadata.task` and `metadata.task_eos` instead of legacy `tag=m3`. A short deprecation window exists behind `memory.layers.m3.legacy_tag_trigger` (default: false).
 
 ## Message Creation / Chat
 - Use existing sessions/messages endpoints.
-- To invoke M3 behavior, include `{"tag": "m3"}` in the message `metadata`.
-- M3 orchestration will route the request and log results using `message_workflows`.
+- To invoke M3 behavior, send a final user message for a workflow with:
+  - `metadata.task`: The workflow name (e.g., `op_websearch_memory`)
+  - `metadata.task_eos: true`: Marks end-of-sequence; M3 triggers only on EOS.
+- M3 builds context by filtering session history to messages where `metadata.task` matches the workflow name.
+- The orchestrator reply is added as an assistant message; per-step logs are written to `message_workflows` including `task` and `task_eos` in metadata.
 
-Example (body metadata):
+Example (progress messages, not triggering):
+
+```json
+{
+  "messages": [
+    {"role":"user", "content":"Search articles about agent memory.", "metadata": {"task": "op_websearch_memory"}},
+    {"role":"assistant", "content":"Found 3 sources.", "metadata": {"task": "op_websearch_memory"}}
+  ]
+}
+```
+
+Example (final EOS message that triggers M3):
 
 ```bash
 BASE="http://localhost:8000/api/v1"
@@ -18,14 +32,14 @@ curl -s -X POST "$BASE/sessions/$SESSION_ID/messages" \
   -H 'Content-Type: application/json' \
   -d '{
     "messages": [
-      {"role":"user", "content":"Research latest LLM memory trends and summarize.", "metadata": {"tag": "m3"}}
+      {"role":"user", "content":"Summarize findings about agent memory.", "metadata": {"task": "op_websearch_memory", "task_eos": true}}
     ]
   }' | jq .
 ```
 
 ## Query (M3 focus)
 - `POST /api/v1/users/{user_id}/query`
-  - Use the existing users query endpoint; when `metadata.tag == 'm3'`, the server routes to M3-specific logic to search:
+  - Use the existing users query endpoint; when `metadata.task` is present, the server routes to M3-specific logic to search:
     - `procedural_memory` for similar workflows
     - `message_workflows` for session-scoped workflow logs (when `session_id` provided)
     - `procedural_lessons` for related execution lessons
@@ -33,6 +47,7 @@ curl -s -X POST "$BASE/sessions/$SESSION_ID/messages" \
 Optional filters:
 - `session_id`: include session-specific `message_workflows` (default true via `include_workflows`)
 - `include_workflows`: whether to include `message_workflows`
+- `task`: filter `session_workflows` by task/workflow name
 - `filter_workflow_id`: filter by a known workflow id
 - `filter_tags`: (array) any-match tags for `message_workflows`
 - `filter_agent`: filter lessons by agent (server-side when possible)
@@ -50,7 +65,7 @@ curl -s -X POST "$BASE/users/$USER_ID/query" \
   -d '{
     "query": "memory patterns",
     "top_k": 5,
-    "metadata": {"tag": "m3"},
+    "metadata": {"task": "op_websearch_memory"},
     "session_id": "<optional-session>",
     "include_workflows": true,
     "filter_status": "success",
@@ -58,13 +73,7 @@ curl -s -X POST "$BASE/users/$USER_ID/query" \
   }' | jq .
 ```
 
-Compatibility (query param):
-
-```bash
-curl -s -X POST "$BASE/users/$USER_ID/query?tag=m3" \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "memory patterns", "top_k": 5}' | jq .
-```
+Compatibility: a short deprecation window for `tag=m3` can be enabled via `memory.layers.m3.legacy_tag_trigger`.
 
 ## Filtering
 - Clients can join `messages` with `message_workflows` on `messages.id = message_workflows.message_id` to filter on tags/workflow_id/step_index.

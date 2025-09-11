@@ -12,6 +12,7 @@ from ..models import (
     ErrorDetail,
 )
 from ..services.database_service import DatabaseService
+from ..utils.global_config_manager import get_global_config_manager
 from ..utils.auth import validate_api_key
 from ..utils import (
     ensure_user_exists,
@@ -278,14 +279,26 @@ async def query_memory(
             )
             raise_api_error(error_response)
 
-    # M3-specific query path: when metadata.tag == 'm3', use Procedural store (Phase A)
+    # M3-specific query path: prefer metadata.task presence; optionally allow legacy tag when enabled
+    cfg = get_global_config_manager()
+    legacy_tag_trigger = bool(cfg.get("memory.layers.m3.legacy_tag_trigger", False))
+    md = request.metadata or {}
+    task_name = None
     try:
-        meta_tag = str((request.metadata or {}).get("tag", "")).lower()
+        task_name = str(md.get("task") or "") or None
     except Exception:
-        meta_tag = ""
-    # Backward compatibility: accept query param tag=m3
-    route_tag = (tag or meta_tag)
-    if (route_tag or "").lower() == "m3":
+        task_name = None
+    meta_tag = None
+    try:
+        meta_tag = str(md.get("tag", "")).lower()
+    except Exception:
+        meta_tag = None
+
+    route_m3 = bool(task_name)
+    if not route_m3 and legacy_tag_trigger and ((tag or "").lower() == "m3" or meta_tag == "m3"):
+        route_m3 = True
+
+    if route_m3:
         from ..procedural.store import ProceduralStore
         from ..utils.embeddings import create_embedding
 
@@ -334,6 +347,15 @@ async def query_memory(
         ]
 
         sw_list = session_workflows
+        # Filter by task/workflow name if provided
+        if task_name:
+            def _has_task(sw):
+                try:
+                    md = sw.get("metadata") or {}
+                    return str(md.get("task", "")) == task_name
+                except Exception:
+                    return False
+            sw_list = [sw for sw in sw_list if _has_task(sw)]
         if filter_workflow_id is not None:
             sw_list = [sw for sw in sw_list if (sw.get("workflow_id") == filter_workflow_id)]
         if filter_tags:

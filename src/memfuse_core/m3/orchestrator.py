@@ -187,7 +187,13 @@ class Orchestrator:
             except Exception:
                 pass
 
-    async def handle_request(self, session_id: str, user_goal: str) -> str:
+    async def handle_request(
+        self,
+        session_id: str,
+        user_goal: str,
+        workflow_name: Optional[str] = None,
+        history_messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         # Prepare run directory
         base_dir = self.runs_base_dir or os.getenv("RUNS_BASE_DIR", "runs")
         run_dir = Path(base_dir) / time.strftime('%Y%m%d_%H%M%S') / session_id
@@ -247,6 +253,16 @@ class Orchestrator:
             pass
 
         context: Dict[str, Any] = {}
+        if history_messages is not None:
+            try:
+                context["_history_messages"] = history_messages
+            except Exception:
+                pass
+        if workflow_name:
+            try:
+                context["_workflow_name"] = workflow_name
+            except Exception:
+                pass
         last_output: Dict[str, Any] = {}
         self.last_step_outcomes: List[Dict[str, Any]] = []
 
@@ -306,6 +322,7 @@ class Orchestrator:
             else:
                 workflow = {
                     "goal": user_goal,
+                    "workflow_name": workflow_name,
                     "plan": [{"agent": s.agent, "input": s.input} for (s, _o) in executed],
                     "result_keys": list(last_output.keys()),
                 }

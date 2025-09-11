@@ -178,7 +178,7 @@ def normalize_messages_response(messages: Any) -> List[Dict[str, Any]]:
 async def add_messages(
     session_id: str,
     request: MessageAdd,
-    tag: str | None = Query(default=None, description="Compatibility: use 'm3' to trigger M3 orchestration"),
+    tag: str | None = Query(default=None, description="Legacy compatibility only when enabled: tag=m3"),
     # Underscore prefix to indicate unused
     _api_key_data: dict = api_key_dependency,
 ) -> ApiResponse:
@@ -226,46 +226,105 @@ async def add_messages(
             if key not in ["status", "code", "data", "message", "errors"]:
                 response_data[key] = value
 
-    # If any user message carries metadata.tag == 'm3' OR query param tag == 'm3', trigger orchestrator flow
+    # New trigger path based on metadata.task/task_eos; legacy tag is optional (config-gated)
     try:
         from memfuse_core.m3.orchestrator import Orchestrator
         from memfuse_core.procedural.store import ProceduralStore
         import uuid as _uuid
         from memfuse_core.utils.global_config_manager import get_global_config_manager
 
-        m3_msgs = [
+        cfg = get_global_config_manager()
+        m3_enabled = bool(cfg.get("memory.layers.m3.enabled", False))
+        legacy_tag_trigger = bool(cfg.get("memory.layers.m3.legacy_tag_trigger", False))
+        max_history_scan = int(cfg.get("memory.layers.m3.max_history_scan", 2000))
+
+        eos_msgs = [
             m for m in messages
             if isinstance(m, dict)
-            and str(m.get("role","")) == "user"
+            and str(m.get("role", "")) == "user"
             and isinstance(m.get("metadata"), dict)
-            and str(m.get("metadata", {}).get("tag", "")).lower() == "m3"
+            and bool(m.get("metadata", {}).get("task_eos", False))
         ]
-        tag_is_m3 = str(tag or "").lower() == "m3"
-        if m3_msgs or tag_is_m3:
-            # Check global config gating for M3
-            try:
-                cfg = get_global_config_manager()
-                m3_enabled = bool(cfg.get("memory.layers.m3.enabled", False))
-            except Exception:
-                m3_enabled = False
-            if not m3_enabled:
-                logger.info("M3 tag present but memory.layers.m3.enabled is False; skipping orchestration")
-                raise RuntimeError("M3 disabled by configuration")
-            # Use the last m3-tagged user message as the user goal
-            if m3_msgs:
-                user_goal = str(m3_msgs[-1].get("content") or "").strip()
-            else:
-                user_msgs = [m for m in messages if isinstance(m, dict) and str(m.get("role","")) == "user"]
-                user_goal = str(user_msgs[-1].get("content") or "").strip() if user_msgs else ""
-            if user_goal:
-                orch = Orchestrator()
-                ai_text = await orch.handle_request(session_id, user_goal)
+        legacy_triggered = False
+        if not eos_msgs and legacy_tag_trigger:
+            body_tag_msgs = [
+                m for m in messages
+                if isinstance(m, dict)
+                and str(m.get("role","")) == "user"
+                and isinstance(m.get("metadata"), dict)
+                and str(m.get("metadata", {}).get("tag", "")).lower() == "m3"
+            ]
+            if body_tag_msgs or str(tag or "").lower() == "m3":
+                legacy_triggered = True
+                eos_msgs = body_tag_msgs or [m for m in messages if str(m.get("role","")) == "user"]
 
-                # Create assistant reply via memory service so it flows through the same pipeline
+        if not m3_enabled:
+            raise RuntimeError("M3 disabled by configuration")
+
+        if eos_msgs:
+            last = eos_msgs[-1]
+            user_goal = str(last.get("content") or "").strip()
+            md = last.get("metadata") or {}
+            workflow_name = str(md.get("task") or "").strip()
+            if legacy_triggered and not workflow_name:
+                workflow_name = "m3_legacy"
+
+            if user_goal:
+                # Build workflow-scoped history
+                history: list[dict] = []
+                try:
+                    db = await DatabaseService.get_instance()
+                    try:
+                        if hasattr(memory, 'get_messages_by_session'):
+                            history_all = await memory.get_messages_by_session(
+                                session_id=session_id,
+                                limit=max_history_scan,
+                                sort_by="timestamp",
+                                order="asc",
+                                buffer_only=None,
+                            )
+                        else:
+                            history_all = await db.get_messages_by_session(
+                                session_id=session_id,
+                                limit=max_history_scan,
+                                sort_by="timestamp",
+                                order="asc",
+                            )
+                    except Exception:
+                        history_all = await db.get_messages_by_session(
+                            session_id=session_id,
+                            limit=max_history_scan,
+                            sort_by="timestamp",
+                            order="asc",
+                        )
+                    try:
+                        history_all = normalize_messages_response(history_all)
+                    except Exception:
+                        history_all = []
+                    if workflow_name:
+                        def _has_task(md):
+                            try:
+                                return isinstance(md, dict) and str(md.get('task', '')) == workflow_name
+                            except Exception:
+                                return False
+                        history = [h for h in history_all if _has_task(h.get('metadata'))]
+                    else:
+                        history = history_all
+                except Exception:
+                    history = []
+
+                orch = Orchestrator()
+                ai_text = await orch.handle_request(
+                    session_id,
+                    user_goal,
+                    workflow_name=workflow_name or None,
+                    history_messages=history or None,
+                )
+
                 assistant_msg = [{
                     "role": "assistant",
                     "content": ai_text,
-                    "metadata": {"m3_enabled": True, "source": "orchestrator"},
+                    "metadata": {"m3_enabled": True, "source": "orchestrator", "task": workflow_name, "task_eos": True},
                 }]
                 ai_result = await memory.add(assistant_msg, session_id=session_id)
                 ai_ids = []
@@ -274,15 +333,9 @@ async def add_messages(
                 if ai_ids:
                     response_data["assistant_message_id"] = ai_ids[0]
 
-                # Log workflow reference (temporary Phase A table)
                 try:
                     store = ProceduralStore()
-                    # Prefer orchestrator's own workflow id (reuse/new)
-                    workflow_id = getattr(orch, "last_workflow_id", None)
-                    if not workflow_id:
-                        # Fallback to a random id if none available
-                        workflow_id = str(_uuid.uuid4())
-                    # Per-step logging: write one row per executed plan step, reference the assistant message id
+                    workflow_id = getattr(orch, "last_workflow_id", None) or str(_uuid.uuid4())
                     if ai_ids:
                         steps = getattr(orch, "last_plan_steps", None) or []
                         outcomes = getattr(orch, "last_step_outcomes", None) or []
@@ -296,8 +349,9 @@ async def add_messages(
                                     "m3_enabled": True,
                                     "user_goal": user_goal,
                                     "reused": getattr(orch, "last_reused", False),
+                                    "task": workflow_name,
+                                    "task_eos": True,
                                 }
-                                # Attach outcome if available
                                 try:
                                     if idx < len(outcomes):
                                         oc = outcomes[idx]
@@ -322,20 +376,23 @@ async def add_messages(
                                     metadata=meta,
                                 )
                         else:
-                            # Fallback to a single entry when no step detail is available
                             await store.log_message_workflow(
                                 message_id=ai_ids[0],
                                 workflow_id=workflow_id,
                                 step_index=0,
                                 tags=["m3", "workflow"],
-                                metadata={"m3_enabled": True, "user_goal": user_goal, "reused": getattr(orch, "last_reused", False)},
+                                metadata={
+                                    "m3_enabled": True,
+                                    "user_goal": user_goal,
+                                    "reused": getattr(orch, "last_reused", False),
+                                    "task": workflow_name,
+                                    "task_eos": True,
+                                },
                             )
                     response_data["workflow_id"] = workflow_id
                 except Exception as e:
-                    # Soft-fail logging
                     logger.warning(f"Failed to log message_workflow: {e}")
     except Exception as e:
-        # Orchestrator not available or other issues: ignore to preserve backward compatibility
         logger.info(f"M3 orchestration skipped: {e}")
 
     return ApiResponse.success(

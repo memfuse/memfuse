@@ -43,4 +43,5 @@ The orchestrator composes steps and delegates step execution to the executor.
 - Each step writes a JSON file under `runs/{timestamp}/{session_id}/` including:
   - input (excluding context), output, attempts, success, duration_ms
 - The orchestrator also writes `input.json`, `plan.json`, `pre_lessons.json`, `reflection.json`, `report.txt`.
-
+ 
+Context note: When triggered via `metadata.task_eos=true`, the orchestrator scopes history by `metadata.task` and sets `_history_messages` in context so agents (e.g., RAGQueryAgent) can consume the filtered history.
