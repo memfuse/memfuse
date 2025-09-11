@@ -207,6 +207,33 @@ async def add_messages(
         # Convert messages first
         messages = convert_pydantic_to_dict(request.messages)
 
+        # Route ADD operation via Gateway to keep API thin
+        from ..gateway.api_gateway import create_memory_gateway
+        from ..interfaces.gateway_interface import OperationType
+        request_data = {
+            "messages": messages,
+            "session_id": session_id,
+            "user_id": session.get("user_id") if isinstance(session, dict) else None,
+            "agent_id": session.get("agent_id") if isinstance(session, dict) else None,
+            "metadata": {},
+        }
+        gateway = create_memory_gateway(buffer_service=memory, db_service=db)
+        gw_resp = await gateway.process_request(request_data, operation_type=OperationType.ADD)
+        if isinstance(gw_resp, dict) and 'status' in gw_resp:
+            return ApiResponse(
+                status=gw_resp.get('status','success'),
+                code=gw_resp.get('code', 201),
+                data=gw_resp.get('data', {}),
+                message=gw_resp.get('message','Messages added successfully'),
+                errors=gw_resp.get('errors'),
+            )
+        else:
+            return ApiResponse.success(
+                data=gw_resp,
+                message="Messages added successfully",
+                code=201,
+            )
+
         # Precompute gateway decision for metadata-driven behaviors before any mutations
         from memfuse_core.gateway.message_metadata import MessageMetadataInterpreter as _MMI
         from memfuse_core.gateway.message_metadata import MessageAddDecision as _MAD
@@ -317,8 +344,20 @@ async def add_messages(
                             break
             except Exception:
                 pass
+        # Allow orchestrator when task is present even if task_eos detection failed (permissive fallback)
+        workflow_any = None
+        try:
+            for _m in reversed(messages or []):
+                md = _m.get('metadata') if isinstance(_m, dict) else None
+                if isinstance(md, dict):
+                    t = str(md.get('task') or '').strip()
+                    if t:
+                        workflow_any = t
+                        break
+        except Exception:
+            pass
         eos_msgs = eos_msgs_pre if trigger_eos else []
-        if trigger_eos:
+        if trigger_eos or workflow_any:
             # Read config lazily; default to safe values if unavailable
             m3_enabled = True
             max_history_scan = 2000
@@ -332,33 +371,37 @@ async def add_messages(
             if not m3_enabled:
                 eos_msgs = []
 
-        if trigger_eos and m3_enabled:
-            # Compute workflow and goal from last EOS message
-            workflow_name = wf_pre or getattr(decision, 'workflow_name', None)
-            user_goal = goal_pre or getattr(decision, 'user_goal', None)
-            # Final fallback: derive workflow_name from any message metadata.task
-            if not workflow_name:
+        if (trigger_eos or workflow_any) and m3_enabled:
+            # Prefer Gateway interpreter decision first
+            workflow_name = getattr(decision, 'workflow_name', None)
+            user_goal = getattr(decision, 'user_goal', None)
+            # Compute deterministically from converted messages if missing
+            if not workflow_name or not user_goal:
                 try:
-                    for _m in (request.messages or []):
-                        dm = _to_dict(_m)
-                        md = dm.get('metadata') or {}
-                        t = str(md.get('task') or '').strip()
-                        if t:
-                            workflow_name = t
-                except Exception:
-                    pass
-            # As a last resort, re-run conversion and scan for EOS/task
-            if (not workflow_name) or (not user_goal):
-                try:
-                    dm2 = convert_pydantic_to_dict(request.messages)
-                    for _m in (dm2 or []):
+                    # Prefer the last user message with task_eos == true
+                    for _m in reversed(messages or []):
                         if isinstance(_m, dict) and str(_m.get('role','')) == 'user':
                             md = _m.get('metadata') or {}
                             if bool(md.get('task_eos', False)):
-                                workflow_name = workflow_name or str(md.get('task') or '').strip() or None
-                                user_goal = user_goal or str(_m.get('content') or '').strip() or None
+                                workflow_name = workflow_name or (str(md.get('task') or '').strip() or None)
+                                user_goal = user_goal or (str(_m.get('content') or '').strip() or None)
+                                break
+                    # Fallback: any user message with a task
+                    if workflow_name is None:
+                        for _m in reversed(messages or []):
+                            md = _m.get('metadata') if isinstance(_m, dict) else None
+                            if isinstance(md, dict):
+                                t = str(md.get('task') or '').strip()
+                                if t:
+                                    workflow_name = t
+                                    if (user_goal is None) and isinstance(_m, dict):
+                                        user_goal = str(_m.get('content') or '').strip() or None
+                                    break
                 except Exception:
                     pass
+            # Ultimate fallback: use any workflow found earlier
+            if workflow_name is None:
+                workflow_name = workflow_any
 
             # Build workflow-scoped history
             history: list[dict] = []
