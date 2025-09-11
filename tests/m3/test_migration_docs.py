@@ -3,12 +3,12 @@ from pathlib import Path
 
 
 def test_migration_readme_exists():
-    assert Path("migration/README.md").exists(), "migration/README.md is missing"
+    assert Path("docs/m3/migration/README.md").exists(), "docs/m3/migration/README.md is missing"
 
 
 def test_m3_plan_exists_and_has_sections():
-    p = Path("migration/m3_migration_plan.md")
-    assert p.exists(), "migration/m3_migration_plan.md is missing"
+    p = Path("docs/m3/migration/m3_migration_plan.md")
+    assert p.exists(), "docs/m3/migration/m3_migration_plan.md is missing"
     text = p.read_text(encoding="utf-8")
     # Spot check a few critical sections
     for phrase in [
@@ -22,8 +22,8 @@ def test_m3_plan_exists_and_has_sections():
 
 
 def test_api_integration_notes_exist():
-    p = Path("migration/m3_api_integration.md")
-    assert p.exists(), "migration/m3_api_integration.md is missing"
+    p = Path("docs/m3/migration/m3_api_integration.md")
+    assert p.exists(), "docs/m3/migration/m3_api_integration.md is missing"
     text = p.read_text(encoding="utf-8")
     assert "metadata" in text and "message_workflows" in text
 
