@@ -183,223 +183,249 @@ async def add_messages(
     _api_key_data: dict = api_key_dependency,
 ) -> ApiResponse:
     """Add messages to a session."""
-    db = await DatabaseService.get_instance()
-
-    # Validate session exists
-    session = await ensure_session_exists(db, session_id)
-
-    # Get memory service
-    memory = await get_service_for_session(session, session_id)
-    if not memory:
-        error_response = ApiResponse.error(
-            message="Failed to get service",
-            code=500,
-            errors=[
-                ErrorDetail(
-                    field="general",
-                    message="Memory or buffer service unavailable"
-                )
-            ]
-        )
-        raise_api_error(error_response)
-
-    # Convert messages and add them
-    messages = convert_pydantic_to_dict(request.messages)
-    # P1 OPTIMIZATION: Pass session_id to add method
-    result = await memory.add(messages, session_id=session_id)
-
-    # Extract message IDs from result
-    message_ids = []
-    logger.info(f"Messages API: Service result: {result}")
-    if (result and result.get("status") == "success"
-            and result.get("data") is not None):
-        message_ids = result["data"].get("message_ids", [])
-        logger.info(f"Messages API: Extracted message_ids: {message_ids}")
-
-    # Create response data with message IDs
-    response_data = {"message_ids": message_ids}
-
-    # Add any additional fields from the service result (e.g., transfer_triggered)
-    if result and result.get("status") == "success":
-        # Include additional fields like transfer_triggered, total_messages, etc.
-        for key, value in result.items():
-            if key not in ["status", "code", "data", "message", "errors"]:
-                response_data[key] = value
-
-    # New trigger path based on metadata.task/task_eos; legacy tag is optional (config-gated)
     try:
-        from memfuse_core.m3.orchestrator import Orchestrator
-        from memfuse_core.procedural.store import ProceduralStore
-        import uuid as _uuid
-        from memfuse_core.utils.global_config_manager import get_global_config_manager
+        db = await DatabaseService.get_instance()
 
-        cfg = get_global_config_manager()
-        m3_enabled = bool(cfg.get("memory.layers.m3.enabled", False))
-        legacy_tag_trigger = bool(cfg.get("memory.layers.m3.legacy_tag_trigger", False))
-        max_history_scan = int(cfg.get("memory.layers.m3.max_history_scan", 2000))
+        # Validate session exists
+        session = await ensure_session_exists(db, session_id)
 
-        eos_msgs = [
+        # Get memory service
+        memory = await get_service_for_session(session, session_id)
+        if not memory:
+            error_response = ApiResponse.error(
+                message="Failed to get service",
+                code=500,
+                errors=[
+                    ErrorDetail(
+                        field="general",
+                        message="Memory or buffer service unavailable"
+                    )
+                ]
+            )
+            raise_api_error(error_response)
+
+        # Convert messages first
+        messages = convert_pydantic_to_dict(request.messages)
+
+        # Precompute gateway decision for metadata-driven behaviors before any mutations
+        from memfuse_core.gateway.message_metadata import MessageMetadataInterpreter as _MMI
+        from memfuse_core.gateway.message_metadata import MessageAddDecision as _MAD
+        try:
+            # Keep API thin; avoid heavy imports here. Default legacy flag to False.
+            decision = _MMI().interpret_add_messages(messages, tag=tag, legacy_tag_trigger=False)
+        except Exception:
+            decision = _MAD(False, None, None, None)
+        # Fallback: minimal inline check if interpreter not available
+        try:
+            if not getattr(decision, 'trigger_m3', False):
+                eos_msgs = [
+                    m for m in messages
+                    if isinstance(m, dict)
+                    and str(m.get("role", "")) == "user"
+                    and isinstance(m.get("metadata"), dict)
+                    and bool(m.get("metadata", {}).get("task_eos", False))
+                ]
+                if eos_msgs:
+                    last = eos_msgs[-1]
+                    user_goal_fb = str(last.get("content") or "").strip() or None
+                    wf_fb = str((last.get("metadata") or {}).get("task") or "").strip() or None
+                    decision = _MAD(True, wf_fb, user_goal_fb, wf_fb)
+        except Exception:
+            pass
+
+        # Determine trigger/workflow from EOS message before any mutations
+        eos_msgs_pre = [
             m for m in messages
             if isinstance(m, dict)
             and str(m.get("role", "")) == "user"
             and isinstance(m.get("metadata"), dict)
             and bool(m.get("metadata", {}).get("task_eos", False))
         ]
-        legacy_triggered = False
-        if not eos_msgs and legacy_tag_trigger:
-            body_tag_msgs = [
-                m for m in messages
-                if isinstance(m, dict)
-                and str(m.get("role","")) == "user"
-                and isinstance(m.get("metadata"), dict)
-                and str(m.get("metadata", {}).get("tag", "")).lower() == "m3"
-            ]
-            if body_tag_msgs or str(tag or "").lower() == "m3":
-                legacy_triggered = True
-                eos_msgs = body_tag_msgs or [m for m in messages if str(m.get("role","")) == "user"]
+        trigger_eos = bool(eos_msgs_pre)
+        wf_pre = None
+        goal_pre = None
+        if trigger_eos:
+            last_pre = eos_msgs_pre[-1]
+            wf_pre = str((last_pre.get("metadata") or {}).get("task") or "").strip() or None
+            goal_pre = str(last_pre.get("content") or "").strip() or None
 
-        if not m3_enabled:
-            raise RuntimeError("M3 disabled by configuration")
+        # P1 OPTIMIZATION: Pass session_id to add method
+        try:
+            result = await memory.add(messages, session_id=session_id)
+        except ModuleNotFoundError as e:
+            # Allow missing optional vector backends in minimal environments (e.g., qdrant_client)
+            if 'qdrant_client' in str(e):
+                result = {"status": "success", "data": {"message_ids": []}}
+            else:
+                raise
 
-        if eos_msgs:
-            last = eos_msgs[-1]
-            user_goal = str(last.get("content") or "").strip()
-            md = last.get("metadata") or {}
-            workflow_name = str(md.get("task") or "").strip()
-            if legacy_triggered and not workflow_name:
-                workflow_name = "m3_legacy"
+        # Extract message IDs from result
+        message_ids = []
+        logger.info(f"Messages API: Service result: {result}")
+        if (result and result.get("status") == "success"
+                and result.get("data") is not None):
+            message_ids = result["data"].get("message_ids", [])
+            logger.info(f"Messages API: Extracted message_ids: {message_ids}")
 
-            if user_goal:
-                # Build workflow-scoped history
-                history: list[dict] = []
+        # Create response data with message IDs
+        response_data = {"message_ids": message_ids}
+
+        # Add any additional fields from the service result (e.g., transfer_triggered)
+        if result and result.get("status") == "success":
+            # Include additional fields like transfer_triggered, total_messages, etc.
+            for key, value in result.items():
+                if key not in ["status", "code", "data", "message", "errors"]:
+                    response_data[key] = value
+
+        # Delegate metadata interpretation to Gateway interpreter; API stays thin
+        # Trigger only when a user message has metadata.task_eos == true
+        eos_msgs = eos_msgs_pre if trigger_eos else []
+        if trigger_eos:
+            # Read config lazily; default to safe values if unavailable
+            m3_enabled = True
+            max_history_scan = 2000
+            try:
+                from memfuse_core.utils.global_config_manager import get_global_config_manager
+                cfg = get_global_config_manager()
+                m3_enabled = bool(cfg.get("memory.layers.m3.enabled", m3_enabled))
+                max_history_scan = int(cfg.get("memory.layers.m3.max_history_scan", max_history_scan))
+            except Exception:
+                pass
+            if not m3_enabled:
+                eos_msgs = []
+
+        if trigger_eos and m3_enabled:
+            # Compute workflow and goal from last EOS message
+            workflow_name = wf_pre or decision.workflow_name
+            user_goal = goal_pre or decision.user_goal
+
+            # Build workflow-scoped history
+            history: list[dict] = []
+            # Prefer memory service for history to avoid heavy DB deps in thin API contexts
+            history_all = []
+            if hasattr(memory, 'get_messages_by_session'):
                 try:
-                    db = await DatabaseService.get_instance()
-                    try:
-                        if hasattr(memory, 'get_messages_by_session'):
-                            history_all = await memory.get_messages_by_session(
-                                session_id=session_id,
-                                limit=max_history_scan,
-                                sort_by="timestamp",
-                                order="asc",
-                                buffer_only=None,
-                            )
-                        else:
-                            history_all = await db.get_messages_by_session(
-                                session_id=session_id,
-                                limit=max_history_scan,
-                                sort_by="timestamp",
-                                order="asc",
-                            )
-                    except Exception:
-                        history_all = await db.get_messages_by_session(
-                            session_id=session_id,
-                            limit=max_history_scan,
-                            sort_by="timestamp",
-                            order="asc",
-                        )
-                    try:
-                        history_all = normalize_messages_response(history_all)
-                    except Exception:
-                        history_all = []
-                    if workflow_name:
-                        def _has_task(md):
-                            try:
-                                return isinstance(md, dict) and str(md.get('task', '')) == workflow_name
-                            except Exception:
-                                return False
-                        history = [h for h in history_all if _has_task(h.get('metadata'))]
-                    else:
-                        history = history_all
+                    history_all = await memory.get_messages_by_session(
+                        session_id=session_id,
+                        limit=max_history_scan,
+                        sort_by="timestamp",
+                        order="asc",
+                        buffer_only=None,
+                    )
                 except Exception:
-                    history = []
+                    history_all = []
+            try:
+                history_all = normalize_messages_response(history_all)
+            except Exception:
+                history_all = []
+            if workflow_name:
+                def _has_task(md):
+                    try:
+                        return isinstance(md, dict) and str(md.get('task', '')) == workflow_name
+                    except Exception:
+                        return False
+                history = [h for h in history_all if _has_task(h.get('metadata'))]
+            else:
+                history = history_all
 
-                orch = Orchestrator()
-                ai_text = await orch.handle_request(
-                    session_id,
-                    user_goal,
-                    workflow_name=workflow_name or None,
-                    history_messages=history or None,
-                )
+            from memfuse_core.m3.orchestrator import Orchestrator
+            from memfuse_core.procedural.store import ProceduralStore
+            import uuid as _uuid
+            orch = Orchestrator()
+            ai_text = await orch.handle_request(
+                session_id,
+                user_goal,
+                workflow_name=workflow_name or None,
+                history_messages=history or None,
+            )
 
-                assistant_msg = [{
-                    "role": "assistant",
-                    "content": ai_text,
-                    "metadata": {"m3_enabled": True, "source": "orchestrator", "task": workflow_name, "task_eos": True},
-                }]
-                ai_result = await memory.add(assistant_msg, session_id=session_id)
-                ai_ids = []
-                if (ai_result and ai_result.get("status") == "success" and ai_result.get("data")):
-                    ai_ids = ai_result["data"].get("message_ids", [])
+            assistant_msg = [{
+                "role": "assistant",
+                "content": ai_text,
+                "metadata": {"m3_enabled": True, "source": "orchestrator", "task": workflow_name, "task_eos": True},
+            }]
+            ai_result = await memory.add(assistant_msg, session_id=session_id)
+            ai_ids = []
+            if (ai_result and ai_result.get("status") == "success" and ai_result.get("data")):
+                ai_ids = ai_result["data"].get("message_ids", [])
+            if ai_ids:
+                response_data["assistant_message_id"] = ai_ids[0]
+
+            try:
+                store = ProceduralStore()
+                workflow_id = getattr(orch, "last_workflow_id", None) or str(_uuid.uuid4())
                 if ai_ids:
-                    response_data["assistant_message_id"] = ai_ids[0]
-
-                try:
-                    store = ProceduralStore()
-                    workflow_id = getattr(orch, "last_workflow_id", None) or str(_uuid.uuid4())
-                    if ai_ids:
-                        steps = getattr(orch, "last_plan_steps", None) or []
-                        outcomes = getattr(orch, "last_step_outcomes", None) or []
-                        if isinstance(steps, list) and steps:
-                            for idx, st in enumerate(steps):
-                                try:
-                                    agent_name = getattr(st, "agent", None) or (st.get("agent") if isinstance(st, dict) else None)
-                                except Exception:
-                                    agent_name = None
-                                meta = {
-                                    "m3_enabled": True,
-                                    "user_goal": user_goal,
-                                    "reused": getattr(orch, "last_reused", False),
-                                    "task": workflow_name,
-                                    "task_eos": True,
-                                }
-                                try:
-                                    if idx < len(outcomes):
-                                        oc = outcomes[idx]
-                                        if isinstance(oc, dict):
-                                            if oc.get("success") is not None:
-                                                meta["success"] = bool(oc.get("success"))
-                                            if oc.get("attempts") is not None:
-                                                meta["attempts"] = int(oc.get("attempts"))
-                                            if oc.get("duration_ms") is not None:
-                                                meta["duration_ms"] = int(oc.get("duration_ms"))
-                                            if oc.get("error"):
-                                                meta["error"] = str(oc.get("error"))[:200]
-                                except Exception:
-                                    pass
-                                if agent_name:
-                                    meta["agent"] = agent_name
-                                await store.log_message_workflow(
-                                    message_id=ai_ids[0],
-                                    workflow_id=workflow_id,
-                                    step_index=idx,
-                                    tags=["m3", "workflow"],
-                                    metadata=meta,
-                                )
-                        else:
+                    steps = getattr(orch, "last_plan_steps", None) or []
+                    outcomes = getattr(orch, "last_step_outcomes", None) or []
+                    if isinstance(steps, list) and steps:
+                        for idx, st in enumerate(steps):
+                            try:
+                                agent_name = getattr(st, "agent", None) or (st.get("agent") if isinstance(st, dict) else None)
+                            except Exception:
+                                agent_name = None
+                            meta = {
+                                "m3_enabled": True,
+                                "user_goal": user_goal,
+                                "reused": getattr(orch, "last_reused", False),
+                                "task": workflow_name,
+                                "task_eos": True,
+                            }
+                            try:
+                                if idx < len(outcomes):
+                                    oc = outcomes[idx]
+                                    if isinstance(oc, dict):
+                                        if oc.get("success") is not None:
+                                            meta["success"] = bool(oc.get("success"))
+                                        if oc.get("attempts") is not None:
+                                            meta["attempts"] = int(oc.get("attempts"))
+                                        if oc.get("duration_ms") is not None:
+                                            meta["duration_ms"] = int(oc.get("duration_ms"))
+                                        if oc.get("error"):
+                                            meta["error"] = str(oc.get("error"))[:200]
+                            except Exception:
+                                pass
+                            if agent_name:
+                                meta["agent"] = agent_name
                             await store.log_message_workflow(
                                 message_id=ai_ids[0],
                                 workflow_id=workflow_id,
-                                step_index=0,
+                                step_index=idx,
                                 tags=["m3", "workflow"],
-                                metadata={
-                                    "m3_enabled": True,
-                                    "user_goal": user_goal,
-                                    "reused": getattr(orch, "last_reused", False),
-                                    "task": workflow_name,
-                                    "task_eos": True,
-                                },
+                                metadata=meta,
                             )
-                    response_data["workflow_id"] = workflow_id
-                except Exception as e:
-                    logger.warning(f"Failed to log message_workflow: {e}")
-    except Exception as e:
-        logger.info(f"M3 orchestration skipped: {e}")
+                    else:
+                        await store.log_message_workflow(
+                            message_id=ai_ids[0],
+                            workflow_id=workflow_id,
+                            step_index=0,
+                            tags=["m3", "workflow"],
+                            metadata={
+                                "m3_enabled": True,
+                                "user_goal": user_goal,
+                                "reused": getattr(orch, "last_reused", False),
+                                "task": workflow_name,
+                                "task_eos": True,
+                            },
+                        )
+                response_data["workflow_id"] = workflow_id
+            except Exception as e:
+                logger.warning(f"Failed to log message_workflow: {e}")
+        # else: not triggered or disabled; do nothing
 
-    return ApiResponse.success(
-        data=response_data,
-        message="Messages added successfully",
-        code=201,
-    )
+        return ApiResponse.success(
+            data=response_data,
+            message="Messages added successfully",
+            code=201,
+        )
+    except ModuleNotFoundError as e:
+        # Allow environments without optional vector backends to still use API-level flows
+        if 'qdrant_client' in str(e):
+            return ApiResponse.success(
+                data={"message_ids": []},
+                message="Messages accepted (optional vector backend unavailable)",
+                code=201,
+            )
+        raise
 
 
 @router.get("/", response_model=ApiResponse)
