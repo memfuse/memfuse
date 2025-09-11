@@ -109,6 +109,7 @@ class Message(BaseModel):
         ..., description="Message role - must be 'user', 'assistant', or 'system'"
     )
     content: str = Field(..., min_length=1, description="Message content - cannot be empty")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional message metadata")
 
 
 class Chunk(BaseModel):
