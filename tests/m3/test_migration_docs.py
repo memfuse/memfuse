@@ -28,16 +28,15 @@ def test_api_integration_notes_exist():
     assert "metadata" in text and "message_workflows" in text
 
 
-def test_phaseA_sql_exists_and_defines_tables():
-    p = Path("migration/schemas/m3_phaseA.sql")
-    assert p.exists(), "migration/schemas/m3_phaseA.sql is missing"
+def test_phaseA_schema_doc_exists_and_defines_tables():
+    p = Path("docs/m3/schema_phaseA.md")
+    assert p.exists(), "docs/m3/schema_phaseA.md is missing"
     text = p.read_text(encoding="utf-8").lower()
     for tbl in ["message_workflows", "procedural_memory", "procedural_lessons"]:
-        assert tbl in text, f"Expected table name not found in schema: {tbl}"
+        assert tbl in text, f"Expected table name not found in schema doc: {tbl}"
 
 
 def test_docs_overview_and_api_exist():
     assert Path("docs/m3/overview.md").exists(), "docs/m3/overview.md missing"
     assert Path("docs/m3/api.md").exists(), "docs/m3/api.md missing"
     assert Path("docs/m3/getting_started.md").exists(), "docs/m3/getting_started.md missing"
-

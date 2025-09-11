@@ -73,7 +73,7 @@ class AppService(BaseService):
             Configured FastAPI application
         """
         # Import API routers here to avoid circular imports
-        from ..api import health, users, agents, sessions, messages, knowledge, api_keys, chunks
+        from ..api import health, users, agents, sessions, messages, knowledge, api_keys
         from ..utils.auth import RateLimitMiddleware
         
         # Get configuration from unified config manager
@@ -138,7 +138,7 @@ class AppService(BaseService):
         Args:
             app: FastAPI application to register routes with
         """
-        from ..api import health, users, agents, sessions, messages, knowledge, api_keys, chunks
+        from ..api import health, users, agents, sessions, messages, knowledge, api_keys
         
         # Register all API routers
         app.include_router(health.router, prefix="/api/v1/health", tags=["health"])
@@ -160,11 +160,7 @@ class AppService(BaseService):
             prefix="/api/v1/users/{user_id}/api-keys",
             tags=["api-keys"]
         )
-        app.include_router(
-            chunks.router,
-            prefix="/api/v1",
-            tags=["chunks"]
-        )
+        # Note: chunks API is currently not part of the public surface.
 
         # Note: M3-specific query behavior routes via existing users query endpoint
         # when request.metadata.tag == 'm3'.

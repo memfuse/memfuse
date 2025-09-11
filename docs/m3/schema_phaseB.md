@@ -1,3 +1,8 @@
+# M3 Phase B Consolidation Plan (Documentation)
+
+This document proposes how to consolidate Phase A auxiliary tables into the unified `m3_*` schemas. This is a reference plan and is not executed by the application.
+
+```sql
 -- Phase B: Consolidation of Phase A procedural tables into target m3_* schemas
 
 -- This script documents the intended transformation from Phase A auxiliary tables
@@ -50,4 +55,5 @@
 --    (Optional) Maintain a separate link table if needed for history.
 
 -- 4) After validation, update application read path to use m3_* tables and phase out Phase A tables.
+```
 

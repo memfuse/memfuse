@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-M3 Smoke Test Script (Phase A)
+M3 Smoke Test (Manual)
 
-Requires the MemFuse server to be running locally via:
-  poetry run python scripts/memfuse_launcher.py
+This script is intended for manual verification while a MemFuse server is running.
 
-This script will:
+It will:
 1) Create a user and agent
 2) Create a session
 3) Submit a user message with metadata.tag = "m3" to trigger orchestration
@@ -14,11 +13,10 @@ This script will:
 Environment:
 - MEMFUSE_API_BASE (default: http://localhost:8000/api/v1)
 
-Note: This script is best-effort and prints helpful diagnostics.
+Note: Not collected by pytest. Run with: python tests/manual/m3_smoke.py
 """
 
 import os
-import time
 import uuid
 import json
 import requests
@@ -36,14 +34,14 @@ def main() -> None:
     user_name = f"user_{str(uuid.uuid4())[:8]}"
     r = requests.post(f"{base}/users", json={"name": user_name})
     r.raise_for_status()
-    user_id = r.json()["data"]["user_id"]
+    user_id = r.json()["data"]["user"]["id"] if "user" in r.json().get("data", {}) else r.json()["data"].get("user_id")
     print(f"User created: {user_name} ({user_id})")
 
     # 2) Create agent
     agent_name = f"agent_{str(uuid.uuid4())[:8]}"
     r = requests.post(f"{base}/agents", json={"name": agent_name})
     r.raise_for_status()
-    agent_id = r.json()["data"]["agent_id"]
+    agent_id = r.json()["data"].get("agent")["id"] if "agent" in r.json().get("data", {}) else r.json()["data"].get("agent_id")
     print(f"Agent created: {agent_name} ({agent_id})")
 
     # 3) Create session
@@ -52,7 +50,7 @@ def main() -> None:
         json={"user_id": user_id, "agent_id": agent_id, "name": f"sess-{user_name}-{agent_name}"},
     )
     r.raise_for_status()
-    session_id = r.json()["data"]["session_id"]
+    session_id = r.json()["data"].get("session")["id"] if "session" in r.json().get("data", {}) else r.json()["data"].get("session_id")
     print(f"Session created: {session_id}")
 
     # 4) Submit M3 message

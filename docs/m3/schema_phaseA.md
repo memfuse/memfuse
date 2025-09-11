@@ -1,3 +1,8 @@
+# M3 Phase A Auxiliary Schemas (Documentation)
+
+This document captures the Phase A, non-destructive auxiliary tables used by the early M3 implementation. These statements are for reference only and are not executed automatically by the application.
+
+```sql
 -- Phase A: Non-destructive M3 schemas (do not alter existing tables)
 
 -- 1) message_workflows (auxiliary table referencing messages)
@@ -51,3 +56,5 @@ CREATE TABLE IF NOT EXISTS procedural_lessons (
 
 CREATE INDEX IF NOT EXISTS idx_procedural_lessons_trigger_embedding ON procedural_lessons USING diskann (trigger_embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_procedural_lessons_agent ON procedural_lessons (agent);
+```
+
