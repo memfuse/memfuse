@@ -178,6 +178,8 @@ def run_server(cfg: DictConfig):
     logger.info(f"Using data directory: {data_dir}")
 
     # 4. Initialize all services
+    # Lazy import to avoid heavy side-effects at module import time
+    from .services.service_initializer import get_service_initializer
     service_initializer = get_service_initializer()
 
     # Initialize services
