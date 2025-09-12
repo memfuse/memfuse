@@ -628,6 +628,14 @@ class SimplifiedEmbeddingGenerator:
 
         return self.model.encode(text)
 
+    def generate_embeddings(self, texts: List[str]) -> List[np.ndarray]:
+        """Generate embeddings for a list of texts in a single batch."""
+        if not self.model:
+            raise RuntimeError("Embedding model not initialized")
+        if not texts:
+            return []
+        return self.model.encode(texts)
+
 
 class SimplifiedMemoryService(MessageInterface):
     """Simplified Memory Service implementation based on MVP."""
@@ -836,22 +844,26 @@ class SimplifiedMemoryService(MessageInterface):
         # Configuration knobs with safe defaults
         batch_size: int = int(self.config.get("m2_batch_size", 5))
         interval_secs: float = float(self.config.get("m2_interval_secs", 5.0))
+        concurrency: int = int(self.config.get("m2_concurrency", 4))
 
         # For global processing, we do not scope by user when scanning/locking.
         # We'll look up the chunk's user_id per item to save facts with correct ownership.
         logger.opt(colors=True).info(
-            "<magenta>[M2]</magenta> Processor configured | batch_size=%s | interval=%ss",
+            "<magenta>[M2]</magenta> Processor configured | batch_size=%s | interval=%ss | concurrency=%s",
             batch_size,
             interval_secs,
+            concurrency,
         )
 
         # One-time visibility probe flag
         probe_logged = False
 
         try:
+            # Concurrency limiter for per-chunk tasks
+            semaphore = asyncio.Semaphore(max(1, concurrency))
             while self.m2_running:
                 try:
-                    import time
+                    import time, random
                     batch_started = time.monotonic()
 
                     # One-time probe: report total pending across DB for visibility
@@ -876,10 +888,22 @@ class SimplifiedMemoryService(MessageInterface):
                         finally:
                             probe_logged = True
 
-                    # Fetch pending chunks
-                    pending_ids = await self._get_pending_m2_chunks(
-                        batch_size=batch_size, user_id=None
-                    )
+                    # Claim pending chunks (atomic) using SKIP LOCKED; fallback to simple fetch for tests
+                    pending_ids = []
+                    claimed_mode = False
+                    try:
+                        pending_ids = await self._claim_pending_m2_chunks(
+                            batch_size=batch_size, user_id=None
+                        )
+                        claimed_mode = bool(pending_ids)
+                    except Exception as _claim_err:
+                        logger.warning(f"[M2] Claim via SKIP LOCKED failed, falling back: {_claim_err}")
+                        pending_ids = []
+                        claimed_mode = False
+                    if not pending_ids:
+                        pending_ids = await self._get_pending_m2_chunks(
+                            batch_size=batch_size, user_id=None
+                        )
 
                     if not pending_ids:
                         logger.opt(colors=True).info(
@@ -898,149 +922,185 @@ class SimplifiedMemoryService(MessageInterface):
                     succeeded = 0
                     failed = 0
 
-                    for chunk_id in pending_ids:
-                        if not self.m2_running:
-                            break
+                    async def _process_one_chunk(chunk_id: str) -> tuple[int, int, int]:
+                        local_processed = 0
+                        local_succeeded = 0
+                        local_failed = 0
+                        async with semaphore:
+                            if not self.m2_running:
+                                return (0, 0, 0)
 
-                        # Lock chunk for processing
-                        locked = await self._lock_chunk_for_m2_processing(
-                            chunk_id=chunk_id, user_id=None
-                        )
-                        if not locked:
-                            # Could be racing with another worker; skip
-                            short_id = str(chunk_id)[:8]
+                            # Lock chunk for processing if not already claimed
+                            if not claimed_mode:
+                                locked = await self._lock_chunk_for_m2_processing(
+                                    chunk_id=chunk_id, user_id=None
+                                )
+                                if not locked:
+                                    # Could be racing with another worker; skip
+                                    short_id2 = str(chunk_id)[:8]
+                                    logger.opt(colors=True).info(
+                                        "<magenta>[M2]</magenta> Skip chunk %s: could not acquire lock",
+                                        short_id2,
+                                    )
+                                    return (0, 0, 0)
+
+                            local_processed = 1
+                            short_id2 = str(chunk_id)[:8]
                             logger.opt(colors=True).info(
-                                "<magenta>[M2]</magenta> Skip chunk %s: could not "
-                                "acquire lock",
-                                short_id,
-                            )
-                            continue
-
-                        processed += 1
-                        short_id = str(chunk_id)[:8]
-                        logger.opt(colors=True).info(
-                            "<magenta>[M2]</magenta> Locked chunk %s for processing",
-                            short_id,
-                        )
-
-                        try:
-                            # Retrieve chunk to determine its user_id for saving facts
-                            chunk_data = await self._get_m1_chunk(chunk_id, user_id=None)
-                            chunk_user_id = None
-                            if isinstance(chunk_data, dict):
-                                chunk_user_id = chunk_data.get("user_id")
-                            # Extract structured facts (content + optional confidence)
-                            ext_started = time.monotonic()
-                            extracted_facts = await self._extract_list_of_structured_facts_from_chunk(
-                                chunk_id=chunk_id, user_id=chunk_user_id
-                            )
-                            ext_duration = time.monotonic() - ext_started
-                            logger.opt(colors=True).info(
-                                "<magenta>[M2]</magenta> Extracted %s fact strings "
-                                "for chunk %s in %.2fs",
-                                len(extracted_facts or []),
-                                short_id,
-                                ext_duration,
+                                "<magenta>[M2]</magenta> Locked chunk %s for processing",
+                                short_id2,
                             )
 
-                            # Convert to fact dicts for saving/marking completed
-                            fact_dicts: List[Dict[str, Any]] = []
-                            for item in extracted_facts or []:
-                                # Support both dicts (with confidence) and raw strings
-                                if isinstance(item, dict):
-                                    raw_text = item.get("text") or item.get("content")
-                                    conf = item.get("confidence")
-                                else:
-                                    raw_text = str(item)
-                                    conf = None
-
-                                if not isinstance(raw_text, str):
-                                    continue
-                                cleaned = raw_text.strip()
-                                if not cleaned:
-                                    continue
-
-                                fact_entry: Dict[str, Any] = {
-                                    "text": cleaned,
-                                    "chunk_ids": [chunk_id],
-                                    "user_id": chunk_user_id,
-                                    "metadata": {
-                                        "source": "m2-autonomous-processor",
-                                        "strategy": "m2-background",
-                                    },
-                                }
-                                # Only include confidence if LLM provided one; otherwise
-                                # allow downstream defaulting/clamping to apply
-                                if isinstance(conf, (int, float)):
-                                    fact_entry["confidence"] = float(conf)
-
-                                fact_dicts.append(fact_entry)
-
-                            # If nothing extracted, mark failed to avoid infinite retries
-                            if not fact_dicts:
-                                failed += 1
-                                logger.opt(colors=True).warning(
-                                    "<magenta>[M2]</magenta> No facts extracted for "
-                                    "chunk %s; marking failed",
-                                    short_id,
-                                )
-                                await self._mark_chunk_m2_failed(
-                                    chunk_id, "No facts extracted", user_id=user_id
-                                )
-                                continue
-
-                            # Mark completed (will also save facts via _save_m2_facts)
-                            completed = await self._mark_chunk_m2_completed(
-                                chunk_id, fact_dicts, user_id=chunk_user_id
-                            )
-                            if not completed:
-                                failed += 1
-                                logger.opt(colors=True).error(
-                                    "<magenta>[M2]</magenta> Failed to save/complete "
-                                    "for chunk %s; marking failed",
-                                    short_id,
-                                )
-                                await self._mark_chunk_m2_failed(
-                                    chunk_id, "Failed to complete/save facts", user_id=chunk_user_id
-                                )
-                            else:
-                                succeeded += 1
-                                logger.opt(colors=True).info(
-                                    "<magenta>[M2]</magenta> Completed chunk %s | "
-                                    "facts_saved=%s",
-                                    short_id,
-                                    len(fact_dicts),
-                                )
-
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as e:
-                            logger.error(
-                                f"Error processing chunk {chunk_id} in M2 autonomous processor: {e}"
-                            )
                             try:
-                                await self._mark_chunk_m2_failed(
-                                    chunk_id, f"Processing error: {e}", user_id=user_id
+                                # Retrieve chunk to determine its user_id for saving facts
+                                chunk_data = await self._get_m1_chunk(chunk_id, user_id=None)
+                                chunk_user_id = None
+                                if isinstance(chunk_data, dict):
+                                    chunk_user_id = chunk_data.get("user_id")
+
+                                # Extract structured facts (content + optional confidence)
+                                ext_started2 = time.monotonic()
+                                extracted_facts = await self._extract_list_of_structured_facts_from_chunk(
+                                    chunk_id=chunk_id, user_id=chunk_user_id
                                 )
-                            except Exception:
-                                # Ensure loop continues even if marking failed
-                                pass
+                                ext_duration2 = time.monotonic() - ext_started2
+                                logger.opt(colors=True).info(
+                                    "<magenta>[M2]</magenta> Extracted %s fact strings for chunk %s in %.2fs",
+                                    len(extracted_facts or []),
+                                    short_id2,
+                                    ext_duration2,
+                                )
+
+                                # Convert to fact dicts for saving/marking completed
+                                fact_dicts: List[Dict[str, Any]] = []
+                                for item in extracted_facts or []:
+                                    # Support both dicts (with confidence) and raw strings
+                                    if isinstance(item, dict):
+                                        raw_text = item.get("text") or item.get("content")
+                                        conf = item.get("confidence")
+                                    else:
+                                        raw_text = str(item)
+                                        conf = None
+
+                                    if not isinstance(raw_text, str):
+                                        continue
+                                    cleaned = raw_text.strip()
+                                    if not cleaned:
+                                        continue
+
+                                    fact_entry: Dict[str, Any] = {
+                                        "text": cleaned,
+                                        "chunk_ids": [chunk_id],
+                                        "user_id": chunk_user_id,
+                                        "metadata": {
+                                            "source": "m2-autonomous-processor",
+                                            "strategy": "m2-background",
+                                        },
+                                    }
+                                    # Only include confidence if LLM provided one; otherwise
+                                    # allow downstream defaulting/clamping to apply
+                                    if isinstance(conf, (int, float)):
+                                        fact_entry["confidence"] = float(conf)
+
+                                    fact_dicts.append(fact_entry)
+
+                                # If nothing extracted, mark failed to avoid infinite retries
+                                if not fact_dicts:
+                                    local_failed = 1
+                                    logger.opt(colors=True).warning(
+                                        "<magenta>[M2]</magenta> No facts extracted for chunk %s; marking failed",
+                                        short_id2,
+                                    )
+                                    try:
+                                        await self._mark_chunk_m2_failed(
+                                            chunk_id, "No facts extracted", user_id=chunk_user_id
+                                        )
+                                    except Exception:
+                                        pass
+                                    return (local_processed, 0, local_failed)
+
+                                # Mark completed (will also save facts via _save_m2_facts)
+                                completed2 = await self._mark_chunk_m2_completed(
+                                    chunk_id, fact_dicts, user_id=chunk_user_id
+                                )
+                                if not completed2:
+                                    local_failed = 1
+                                    logger.opt(colors=True).error(
+                                        "<magenta>[M2]</magenta> Failed to save/complete for chunk %s; marking failed",
+                                        short_id2,
+                                    )
+                                    try:
+                                        await self._mark_chunk_m2_failed(
+                                            chunk_id, "Failed to complete/save facts", user_id=chunk_user_id
+                                        )
+                                    except Exception:
+                                        pass
+                                else:
+                                    local_succeeded = 1
+                                    logger.opt(colors=True).info(
+                                        "<magenta>[M2]</magenta> Completed chunk %s | facts_saved=%s",
+                                        short_id2,
+                                        len(fact_dicts),
+                                    )
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as e:
+                                logger.error(
+                                    f"Error processing chunk {chunk_id} in M2 autonomous processor: {e}"
+                                )
+                                try:
+                                    await self._mark_chunk_m2_failed(
+                                        chunk_id, f"Processing error: {e}", user_id=chunk_user_id if 'chunk_user_id' in locals() else None
+                                    )
+                                except Exception:
+                                    # Ensure loop continues even if marking failed
+                                    pass
+
+                        return (local_processed, local_succeeded, local_failed)
+
+                    # Launch tasks with concurrency guard
+                    tasks = [asyncio.create_task(_process_one_chunk(cid)) for cid in pending_ids]
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    for res in results:
+                        if isinstance(res, Exception):
+                            # Unexpected leakage; count as failed scan without processing
+                            failed += 1
+                            continue
+                        p, s, f = res
+                        processed += p
+                        succeeded += s
+                        failed += f
 
                     batch_duration = time.monotonic() - batch_started
+                    # Compute paced sleep to avoid tight loops overwhelming DB
+                    sleep_base = max(0.0, interval_secs - batch_duration)
+                    jitter = random.uniform(0.0, min(0.25 * interval_secs, 0.25))
+                    sleep_actual = sleep_base + jitter
+                    # Safety backoff: increase sleep when failures occurred in this batch
+                    backoff_factor = 1.0
+                    if processed > 0:
+                        fail_ratio = failed / max(1, processed)
+                        if fail_ratio > 0:
+                            backoff_factor = 1.0 + min(fail_ratio, 1.0)
+                    else:
+                        # If nothing processed despite pending, apply conservative backoff
+                        backoff_factor = 1.5
+                    sleep_actual *= backoff_factor
                     logger.opt(colors=True).info(
                         "<magenta>[M2]</magenta> Batch summary | scanned=%s | "
                         "processed=%s | succeeded=%s | failed=%s | duration=%.2fs | "
-                        "sleep=%ss",
+                        "sleep=%.2fs | backoff=%.2fx",
                         len(pending_ids),
                         processed,
                         succeeded,
                         failed,
                         batch_duration,
-                        interval_secs,
+                        sleep_actual,
+                        backoff_factor,
                     )
 
-                    # Yield control between batches
-                    await asyncio.sleep(0)
+                    # Pace between batches to reduce DB pressure
+                    await asyncio.sleep(sleep_actual)
 
                 except asyncio.CancelledError:
                     break
@@ -1585,6 +1645,60 @@ class SimplifiedMemoryService(MessageInterface):
             logger.error(f"❌ Error fetching pending M2 chunk IDs: {e}")
             return []
 
+    async def _claim_pending_m2_chunks(self, batch_size: int = 10, user_id: Optional[str] = None) -> List[str]:
+        """
+        Atomically claim pending chunks for M2 processing using SKIP LOCKED.
+
+        Uses a single UPDATE ... FROM (SELECT ... FOR UPDATE SKIP LOCKED) pattern to
+        set m2_status to 'processing' and return the claimed chunk IDs, minimizing
+        races between multiple workers.
+
+        Args:
+            batch_size: Maximum number of chunks to claim
+            user_id: Deprecated; global scan across users
+
+        Returns:
+            List of claimed chunk IDs (strings). Empty list when none available.
+        """
+        try:
+            results: List[str] = []
+            with sync_connection_pool.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        WITH claim AS (
+                            SELECT chunk_id
+                            FROM m1_episodic
+                            WHERE m2_status = %s
+                            ORDER BY created_at ASC
+                            LIMIT %s
+                            FOR UPDATE SKIP LOCKED
+                        )
+                        UPDATE m1_episodic m
+                        SET m2_status = %s, m2_processing_started_at = NOW()
+                        FROM claim
+                        WHERE m.chunk_id = claim.chunk_id
+                        RETURNING m.chunk_id
+                        """,
+                        (M2Status.PENDING.value, batch_size, M2Status.PROCESSING.value),
+                    )
+                    rows = cur.fetchall()
+                    conn.commit()
+
+            for row in rows:
+                # row may be a tuple; index 0 holds chunk_id
+                results.append(str(row[0]))
+
+            if results:
+                logger.opt(colors=True).info(
+                    "<magenta>[M2]</magenta> Claimed %s pending chunk ID(s) via SKIP LOCKED",
+                    len(results),
+                )
+            return results
+        except Exception as e:
+            logger.error(f"❌ Error claiming pending M2 chunks: {e}")
+            return []
+
     async def _get_m1_chunk(self, chunk_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Retrieve a single M1 chunk by its ID from the m1_episodic table.
@@ -1942,6 +2056,21 @@ class SimplifiedMemoryService(MessageInterface):
             if not processed_facts:
                 return self._error_response("No valid facts to save after processing", 400)
             
+            # Batch-generate embeddings for facts missing embeddings
+            try:
+                missing_idx: List[int] = [i for i, f in enumerate(processed_facts) if f.get('embedding') is None]
+                if missing_idx:
+                    texts = [processed_facts[i]['text'] for i in missing_idx]
+                    embeddings = self.embedding_generator.generate_embeddings(texts)
+                    # Ensure iterable result
+                    if hasattr(embeddings, 'tolist'):
+                        embeddings = embeddings.tolist()  # type: ignore[assignment]
+                    for offset, emb in enumerate(embeddings):
+                        idx = missing_idx[offset]
+                        processed_facts[idx]['embedding'] = emb
+            except Exception as emb_err:
+                logger.warning(f"⚠️ Batch embedding generation failed, proceeding without embeddings: {emb_err}")
+
             # Save facts to database
             return await self._insert_facts_to_database(processed_facts, user_id)
             
@@ -2016,9 +2145,8 @@ class SimplifiedMemoryService(MessageInterface):
                 hash_content = fact_text + metadata_str
                 fact_dict['hash'] = hashlib.sha256(hash_content.encode('utf-8')).hexdigest()
             
-            # Generate embedding if not provided
-            if fact_dict.get('embedding') is None:
-                fact_dict['embedding'] = self.embedding_generator.generate_embedding(fact_text)
+            # Defer embedding generation to batch stage in _save_m2_facts
+            # (keep any pre-provided embedding, otherwise leave as None)
             
             # Validate and clamp confidence score
             confidence = float(fact_dict.get('confidence', 0.8))
@@ -2059,25 +2187,27 @@ class SimplifiedMemoryService(MessageInterface):
         facts_skipped = 0
         
         try:
+            from psycopg2.extras import execute_values
             with sync_connection_pool.get_connection() as conn:
                 with conn.cursor() as cur:
+                    values: List[tuple] = []
                     for fact in processed_facts:
                         try:
                             # Convert embedding to list format for PostgreSQL
                             embedding_list = None
-                            if fact['embedding'] is not None:
+                            if fact.get('embedding') is not None:
                                 if hasattr(fact['embedding'], 'tolist'):
                                     embedding_list = fact['embedding'].tolist()
                                 elif isinstance(fact['embedding'], list):
                                     embedding_list = fact['embedding']
                                 else:
                                     logger.warning(f"⚠️ Unknown embedding format: {type(fact['embedding'])}")
+                                    facts_skipped += 1
                                     continue
-                            
+
                             # Prepare chunk_ids as PostgreSQL UUID array
                             chunk_ids = fact.get('chunk_ids', [])
                             if chunk_ids:
-                                # Validate all chunk_ids are UUIDs
                                 valid_chunk_ids = []
                                 for chunk_id in chunk_ids:
                                     try:
@@ -2086,58 +2216,66 @@ class SimplifiedMemoryService(MessageInterface):
                                     except (ValueError, TypeError):
                                         logger.warning(f"⚠️ Invalid chunk_id format: {chunk_id}")
                                 chunk_ids = valid_chunk_ids
-                            
-                            # Insert fact with conflict resolution
-                            logger.debug(f"DEBUG: Inserting fact into DB: user_id={fact['user_id']}, text='{fact['text'][:50]}...'")
-                            cur.execute("""
-                                INSERT INTO m2_semantic 
-                                (text, hash, embedding, confidence, status, chunk_ids, user_id, 
-                                 policy_version, embedding_generated_at, metadata, embedding_model)
-                                VALUES (%s, %s, %s, %s, %s, %s::uuid[], %s, %s, NOW(), %s, %s)
-                                ON CONFLICT (hash) DO UPDATE SET
-                                    chunk_ids = array_append(m2_semantic.chunk_ids, %s::uuid),
-                                    updated_at = NOW(),
-                                    confidence = GREATEST(m2_semantic.confidence, %s),
-                                    status = CASE 
-                                        WHEN m2_semantic.status = 'deprecated' THEN EXCLUDED.status
-                                        ELSE m2_semantic.status 
-                                    END
-                            """, (
-                                fact['text'],
-                                fact['hash'],
-                                embedding_list,
-                                fact['confidence'],
-                                fact['status'],
-                                chunk_ids,  # PostgreSQL UUID array
-                                fact['user_id'],
-                                fact['policy_version'],
-                                json.dumps(fact['metadata']),
-                                'sentence-transformers/all-MiniLM-L6-v2',  # Default embedding model
-                                chunk_ids[0] if chunk_ids else None,  # For conflict resolution
-                                fact['confidence']  # For conflict resolution
-                            ))
-                            
-                            facts_saved += 1
-                            logger.debug(f"✅ Saved fact: {fact['hash'][:8]}...")
-                            
+
+                            values.append(
+                                (
+                                    fact['text'],
+                                    fact['hash'],
+                                    embedding_list,
+                                    fact['confidence'],
+                                    fact['status'],
+                                    chunk_ids,
+                                    fact['user_id'],
+                                    fact['policy_version'],
+                                    json.dumps(fact.get('metadata', {})),
+                                    'sentence-transformers/all-MiniLM-L6-v2',
+                                )
+                            )
                         except Exception as e:
-                            logger.error(f"❌ Error saving individual fact: {e}")
+                            logger.error(f"❌ Error preparing fact for insert: {e}")
                             facts_skipped += 1
                             continue
-                
-                # Commit all changes
+
+                    if values:
+                        insert_sql = (
+                            "INSERT INTO m2_semantic "
+                            "(text, hash, embedding, confidence, status, chunk_ids, user_id, "
+                            " policy_version, embedding_generated_at, metadata, embedding_model) "
+                            "VALUES %s "
+                            "ON CONFLICT (hash) DO UPDATE SET "
+                            "  chunk_ids = CASE "
+                            "    WHEN (EXCLUDED.chunk_ids IS NOT NULL) AND (array_length(EXCLUDED.chunk_ids,1) > 0) "
+                            "         AND array_position(m2_semantic.chunk_ids, (EXCLUDED.chunk_ids)[1]) IS NULL "
+                            "    THEN array_append(m2_semantic.chunk_ids, (EXCLUDED.chunk_ids)[1]) "
+                            "    ELSE m2_semantic.chunk_ids END, "
+                            "  updated_at = NOW(), "
+                            "  confidence = GREATEST(m2_semantic.confidence, EXCLUDED.confidence), "
+                            "  status = CASE WHEN m2_semantic.status = 'deprecated' THEN EXCLUDED.status ELSE m2_semantic.status END"
+                        )
+
+                        execute_values(
+                            cur,
+                            insert_sql,
+                            values,
+                            template=(
+                                "(%s, %s, %s, %s, %s, %s::uuid[], %s, %s, NOW(), %s, %s)"
+                            ),
+                            page_size=100,
+                        )
+                        facts_saved += len(values)
+
                 conn.commit()
-                
+
             success_message = f"Saved {facts_saved} M2 facts to database"
             if facts_skipped > 0:
                 success_message += f" ({facts_skipped} skipped due to errors)"
-            
+
             logger.info(f"✅ {success_message} (user_id={user_id})")
             return self._success_response(
                 {"facts_saved": facts_saved, "facts_skipped": facts_skipped},
-                success_message
+                success_message,
             )
-            
+
         except Exception as e:
             logger.error(f"❌ Error saving M2 facts: {e}")
             return self._error_response(f"Error saving M2 facts: {str(e)}")
