@@ -1185,7 +1185,7 @@ class SimplifiedMemoryService(MessageInterface):
                                     c.session_id,
                                     c.created_at
                                 FROM m1_episodic c
-                                JOIN sessions s ON c.session_id = s.id
+                                JOIN sessions s ON c.session_id::text = s.id
                                 JOIN users u ON s.user_id = u.id
                                 WHERE u.name = %s AND c.session_id = %s
                                 ORDER BY c.embedding <=> %s::vector ASC
@@ -1208,7 +1208,7 @@ class SimplifiedMemoryService(MessageInterface):
                                     c.session_id,
                                     c.created_at
                                 FROM m1_episodic c
-                                JOIN sessions s ON c.session_id = s.id
+                                JOIN sessions s ON c.session_id::text = s.id
                                 JOIN users u ON s.user_id = u.id
                                 WHERE u.name = %s
                                 ORDER BY c.embedding <=> %s::vector ASC
@@ -1286,6 +1286,75 @@ class SimplifiedMemoryService(MessageInterface):
                 results.append(result)
 
             logger.info(f"✅ Vector search returned {len(results)} results for query: '{query_text[:50]}...'")
+            # Fallback: if no results, return most recent chunks in-session (or user-level) with neutral scores
+            if not results:
+                try:
+                    with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        if session_id:
+                            cur.execute("""
+                                SELECT
+                                    chunk_id, content, array_length(m0_raw_ids, 1) as m0_message_count,
+                                    chunking_strategy, user_id, session_id, created_at
+                                FROM m1_episodic
+                                WHERE session_id = %s
+                                ORDER BY created_at DESC
+                                LIMIT %s
+                            """, (session_id, top_k))
+                        elif user_id:
+                            # Accept user name or UUID; if name, join via sessions
+                            try:
+                                import uuid as _uuid
+                                _uuid.UUID(user_id)
+                                cur.execute("""
+                                    SELECT
+                                        chunk_id, content, array_length(m0_raw_ids, 1) as m0_message_count,
+                                        chunking_strategy, user_id, session_id, created_at
+                                    FROM m1_episodic
+                                    WHERE user_id = %s
+                                    ORDER BY created_at DESC
+                                    LIMIT %s
+                                """, (user_id, top_k))
+                            except ValueError:
+                                cur.execute("""
+                                    SELECT
+                                        c.chunk_id, c.content, array_length(c.m0_raw_ids, 1) as m0_message_count,
+                                        c.chunking_strategy, c.user_id, c.session_id, c.created_at
+                                    FROM m1_episodic c
+                                    JOIN sessions s ON c.session_id::text = s.id
+                                    JOIN users u ON s.user_id = u.id
+                                    WHERE u.name = %s
+                                    ORDER BY c.created_at DESC
+                                    LIMIT %s
+                                """, (user_id, top_k))
+                        else:
+                            cur.execute("""
+                                SELECT
+                                    chunk_id, content, array_length(m0_raw_ids, 1) as m0_message_count,
+                                    chunking_strategy, user_id, session_id, created_at
+                                FROM m1_episodic
+                                ORDER BY created_at DESC
+                                LIMIT %s
+                            """, (top_k,))
+                        fallback_rows = cur.fetchall()
+                    for i, row in enumerate(fallback_rows or []):
+                        results.append({
+                            'id': str(row['chunk_id']),
+                            'content': row['content'],
+                            'score': max(0.0, 0.35 - i * 0.01),
+                            'distance': 1.0,
+                            'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                            'metadata': {
+                                'source': 'memory_database',
+                                'chunking_strategy': row['chunking_strategy'],
+                                'm0_message_count': row['m0_message_count'],
+                                'type': 'chunk',
+                                'user_id': str(row['user_id']) if row.get('user_id') is not None else None,
+                                'session_id': str(row['session_id']) if row.get('session_id') is not None else None,
+                            }
+                        })
+                    logger.info(f"✅ Fallback retrieval returned {len(results)} recent chunks")
+                except Exception as _e:
+                    logger.warning(f"Fallback retrieval failed: {_e}")
             return results
 
         except Exception as e:
@@ -2208,6 +2277,46 @@ class SimplifiedMemoryService(MessageInterface):
             results = all_results[:top_k]
 
             # Format response to match BufferService expectations
+            # Fallback: if no results, try simple keyword match over recent M0 messages in-session
+            if not results and session_id:
+                try:
+                    with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("""
+                            SELECT message_id, content, created_at
+                            FROM m0_raw
+                            WHERE session_id = %s
+                            ORDER BY created_at DESC
+                            LIMIT %s
+                        """, (session_id, max(top_k * 3, 30)))
+                        rows = cur.fetchall()
+                    # Simple token overlap scoring
+                    q_words = set((query or query_text or '').lower().split())
+                    stop = {'the','a','an','and','or','but','in','on','at','to','for','of','with','by'}
+                    q_words = {w for w in q_words if w and w not in stop}
+                    tmp = []
+                    for row in rows or []:
+                        content = (row['content'] or '')
+                        c_words = set(content.lower().split()) - stop
+                        overlap = len(q_words & c_words) if q_words else 0
+                        if overlap > 0:
+                            score = overlap / max(1, len(q_words))
+                            tmp.append({
+                                'id': str(row['message_id']),
+                                'content': content,
+                                'score': float(score),
+                                'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                                'metadata': {
+                                    'type': 'message',
+                                    'user_id': user_id,
+                                    'session_id': session_id,
+                                }
+                            })
+                    # Order by score desc
+                    tmp.sort(key=lambda x: x.get('score', 0.0), reverse=True)
+                    results = tmp[:top_k]
+                except Exception as _e:
+                    logger.warning(f"SimplifiedMemoryService.query: M0 keyword fallback failed: {_e}")
+
             response = {
                 "status": "success",
                 "code": 200,

@@ -483,6 +483,13 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 self.user_id = user_id
                 logger.debug(f"BufferService: Cached user_id from memory_service: {user_id}")
             return user_id
+        # Fallback: some services expose _user_id
+        if self.memory_service and hasattr(self.memory_service, '_user_id') and getattr(self.memory_service, '_user_id', None):
+            user_id = str(getattr(self.memory_service, '_user_id'))
+            if self.user_id != user_id:
+                self.user_id = user_id
+                logger.debug(f"BufferService: Cached user_id from memory_service._user_id: {user_id}")
+            return user_id
         else:
             # Fallback: try to get user_id by looking up the user name
             if self.user and self.memory_service:
@@ -691,6 +698,60 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     include_knowledge=include_knowledge,
                     include_chunks=include_chunks
                 )
+                # If empty, try M0 keyword fallback by session
+                try:
+                    data = (result or {}).get('data', {}) if isinstance(result, dict) else {}
+                    res = data.get('results') or []
+                    if (not res) and session_id:
+                        # Pull recent messages (prefer buffer_only to avoid flush delays)
+                        recent_msgs = await self.get_messages_by_session(
+                            session_id=session_id,
+                            limit=max(top_k * 3, 30),
+                            sort_by='timestamp',
+                            order='desc',
+                            buffer_only=True
+                        )
+                        if not recent_msgs:
+                            recent_msgs = await self.memory_service.get_messages_by_session(
+                                session_id=session_id,
+                                limit=max(top_k * 3, 30),
+                                sort_by='timestamp',
+                                order='desc'
+                            )
+                        # Simple keyword overlap scoring
+                        q_words = set((query or '').lower().split())
+                        stop = {'the','a','an','and','or','but','in','on','at','to','for','of','with','by','user:','assistant:'}
+                        q_words = {w for w in q_words if w and w not in stop}
+                        fallback = []
+                        for msg in recent_msgs or []:
+                            if isinstance(msg, dict):
+                                content = (msg.get('content') or '')
+                                c_words = set(content.lower().split()) - stop
+                                overlap = len(q_words & c_words) if q_words else 0
+                                if overlap > 0:
+                                    score = overlap / max(1, len(q_words))
+                                    fallback.append({
+                                        'id': msg.get('id') or msg.get('message_id') or str(hash(msg)),
+                                        'content': content,
+                                        'score': float(score),
+                                        'created_at': msg.get('created_at'),
+                                        'metadata': {
+                                            'type': 'message',
+                                            'user_id': actual_user_id,
+                                            'session_id': session_id,
+                                        }
+                                    })
+                        fallback.sort(key=lambda x: x.get('score', 0.0), reverse=True)
+                        res = fallback[:top_k]
+                        result = {
+                            'status': 'success',
+                            'code': 200,
+                            'data': {'results': res, 'total': len(res)},
+                            'message': f'Retrieved {len(res)} results via M0 fallback (bypass)',
+                            'errors': None
+                        }
+                except Exception as _e:
+                    logger.warning(f"BufferService: Bypass keyword fallback failed: {_e}")
 
                 return self._format_bypass_query_response(result)
             else:
@@ -716,7 +777,67 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
 
                 logger.info(f"BufferService.query: QueryBuffer returned {len(results) if results else 0} results")
 
+                # If empty, try a fast flush then direct storage query once
+                if (not results) and self.write_buffer:
+                    try:
+                        await self.write_buffer.flush_all()
+                        # Direct storage query with session/user context
+                        actual_user_id = self._get_actual_user_id() or self.user
+                        direct = await self.memory_service.query(
+                            query=query,
+                            top_k=top_k,
+                            session_id=session_id,
+                            user_id=actual_user_id,
+                            include_messages=True,
+                            include_knowledge=True,
+                            include_chunks=True
+                        )
+                        if isinstance(direct, dict) and direct.get('status') == 'success':
+                            results = direct.get('data', {}).get('results', []) or []
+                            logger.info(f"BufferService.query: Direct storage query after flush returned {len(results)} results")
+                    except Exception as _e:
+                        logger.warning(f"BufferService.query: Fast flush+direct query failed: {_e}")
+
                 # Format response to match MemoryService format
+                # Fallback: if no results, use recent session messages as episodic results
+                if (not results) and session_id:
+                    try:
+                        # Prefer buffer-only recent messages (RoundBuffer) to avoid flush latency
+                        recent_msgs = await self.get_messages_by_session(
+                            session_id=session_id,
+                            limit=top_k,
+                            sort_by='timestamp',
+                            order='desc',
+                            buffer_only=True
+                        )
+                        # If buffer is empty, fall back to storage
+                        if not recent_msgs:
+                            recent_msgs = await self.memory_service.get_messages_by_session(
+                                session_id=session_id,
+                                limit=top_k,
+                                sort_by='timestamp',
+                                order='desc'
+                            )
+                        fallback_results = []
+                        for i, msg in enumerate(recent_msgs or []):
+                            if isinstance(msg, dict):
+                                fallback_results.append({
+                                    "id": msg.get("id") or msg.get("message_id") or str(hash(msg)),
+                                    "content": msg.get("content", ""),
+                                    "score": max(0.0, 0.3 - i * 0.01),
+                                    "created_at": msg.get("created_at"),
+                                    "metadata": {
+                                        "type": "message",
+                                        "user_id": self._get_actual_user_id(),
+                                        "session_id": session_id,
+                                    }
+                                })
+                        if fallback_results:
+                            results = fallback_results
+                            logger.info(f"BufferService.query: Fallback returned {len(results)} recent messages")
+                    except Exception as _e:
+                        logger.warning(f"BufferService.query: Fallback messages retrieval failed: {_e}")
+
                 response = {
                     "status": "success",
                     "code": 200,
