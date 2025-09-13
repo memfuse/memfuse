@@ -108,6 +108,11 @@ class QueryResponseProcessor:
         if 'memory_type' not in transformed:
             transformed['memory_type'] = memory_type or 'episodic'
 
+        # Ensure updated_at field exists; allow null if unknown
+        if 'updated_at' not in transformed:
+            # Prefer to mirror created_at when available; otherwise null
+            transformed['updated_at'] = transformed.get('created_at') or None
+
         # Remove unused fields at top level (done early to ensure clean data)
         unused_top_level_fields = ['role', 'source', 'similarity_score', 'scope', 'distance']
         for field in unused_top_level_fields:
@@ -181,7 +186,7 @@ class MetadataEnricher:
 
         # Ensure presence of commonly expected metadata fields
         # If unavailable, keep them as None to satisfy schema presence without guessing
-        for key in ('agent_id', 'session_id', 'session_name'):
+        for key in ('agent_id', 'session_id', 'session_name', 'mode', 'task'):
             if key not in metadata:
                 metadata[key] = None
 
