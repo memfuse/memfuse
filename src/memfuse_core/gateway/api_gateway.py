@@ -57,7 +57,8 @@ class MemoryApiGateway(GatewayInterface):
 
         # Initialize processors
         self.response_processor = QueryResponseProcessor()
-        self.metadata_enricher = MetadataEnricher()
+        # Pass db_service for potential metadata enrichment needs
+        self.metadata_enricher = MetadataEnricher(db_service=self.db_service)
         self.scope_calculator = ScopeCalculator()
 
         # Remove unused fields (QueryResponseProcessor handles most top-level fields)
@@ -383,11 +384,14 @@ class MemoryApiGateway(GatewayInterface):
                 if agent:
                     context.agent_name = agent.get("name")
             
-            # Get session name if not provided
-            if not context.session_name and context.session_id:
+            # Get session info; fill session_name and missing agent_id from session
+            if context.session_id:
                 session = await self.db_service.get_session(context.session_id)
                 if session:
-                    context.session_name = session.get("name")
+                    if not context.session_name:
+                        context.session_name = session.get("name")
+                    if not context.agent_id:
+                        context.agent_id = session.get("agent_id")
             
         except Exception as e:
             logger.warning(f"Failed to enrich context: {e}")

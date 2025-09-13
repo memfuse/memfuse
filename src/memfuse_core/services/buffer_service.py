@@ -555,17 +555,16 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             result: MemoryService query result dictionary
 
         Returns:
-            Formatted service response
+            Formatted service response with unified schema (no bypass-specific wrappers)
         """
         if result.get("status") == "success":
+            data = result.get("data", {}) or {}
             return {
                 "status": "success",
                 "code": 200,
                 "data": {
-                    "mode": "bypass",
-                    "results": result.get("data", {}).get("results", []),
-                    "total": result.get("data", {}).get("total", 0),
-                    "memory_service_result": result.get("data", {})
+                    "results": data.get("results", []),
+                    "total": data.get("total", 0),
                 },
                 "message": "Query processed via MemoryService in bypass mode",
                 "errors": None

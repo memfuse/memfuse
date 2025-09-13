@@ -100,6 +100,10 @@ class QueryResponseProcessor:
             # Normalize memory_type to 'semantic'
             transformed['memory_type'] = 'semantic'
 
+        # Ensure memory_type field is present (default to 'episodic' when unknown)
+        if 'memory_type' not in transformed:
+            transformed['memory_type'] = memory_type or 'episodic'
+
         # Remove unused fields at top level (done early to ensure clean data)
         unused_top_level_fields = ['role', 'source', 'similarity_score', 'scope']
         for field in unused_top_level_fields:
@@ -165,6 +169,12 @@ class MetadataEnricher:
                 metadata['task'] = context.request_metadata['task']
             if 'mode' in context.request_metadata:
                 metadata['mode'] = context.request_metadata['mode']
+
+        # Ensure presence of commonly expected metadata fields
+        # If unavailable, keep them as None to satisfy schema presence without guessing
+        for key in ('agent_id', 'session_id', 'session_name'):
+            if key not in metadata:
+                metadata[key] = None
 
 
 class ScopeCalculator:
