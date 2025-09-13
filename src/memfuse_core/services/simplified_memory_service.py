@@ -1128,62 +1128,141 @@ class SimplifiedMemoryService(MessageInterface):
                         import uuid
                         uuid.UUID(user_id)
                         # It's a UUID, query directly by user_id
-                        cur.execute("""
-                            SELECT
-                                c.chunk_id,
-                                c.content,
-                                (1.0 - (c.embedding <=> %s::vector) / 2.0) as similarity_score,
-                                (c.embedding <=> %s::vector) as distance,
-                                array_length(c.m0_raw_ids, 1) as m0_message_count,
-                                c.chunking_strategy,
-                                c.user_id,
-                                c.created_at
-                            FROM m1_episodic c
-                            WHERE c.user_id = %s
-                            ORDER BY c.embedding <=> %s::vector ASC
-                            LIMIT %s
-                        """, (query_embedding.tolist(), query_embedding.tolist(), user_id,
-                              query_embedding.tolist(), top_k))
+                        if session_id:
+                            cur.execute("""
+                                SELECT
+                                    c.chunk_id,
+                                    c.content,
+                                    (1.0 - (c.embedding <=> %s::vector) / 2.0) as similarity_score,
+                                    (c.embedding <=> %s::vector) as distance,
+                                    array_length(c.m0_raw_ids, 1) as m0_message_count,
+                                    c.chunking_strategy,
+                                    c.user_id,
+                                    c.session_id,
+                                    c.created_at
+                                FROM m1_episodic c
+                                WHERE c.user_id = %s AND c.session_id = %s
+                                ORDER BY c.embedding <=> %s::vector ASC
+                                LIMIT %s
+                            """, (
+                                query_embedding.tolist(), query_embedding.tolist(),
+                                user_id, session_id,
+                                query_embedding.tolist(), top_k
+                            ))
+                        else:
+                            cur.execute("""
+                                SELECT
+                                    c.chunk_id,
+                                    c.content,
+                                    (1.0 - (c.embedding <=> %s::vector) / 2.0) as similarity_score,
+                                    (c.embedding <=> %s::vector) as distance,
+                                    array_length(c.m0_raw_ids, 1) as m0_message_count,
+                                    c.chunking_strategy,
+                                    c.user_id,
+                                    c.session_id,
+                                    c.created_at
+                                FROM m1_episodic c
+                                WHERE c.user_id = %s
+                                ORDER BY c.embedding <=> %s::vector ASC
+                                LIMIT %s
+                            """, (
+                                query_embedding.tolist(), query_embedding.tolist(),
+                                user_id,
+                                query_embedding.tolist(), top_k
+                            ))
                     except ValueError:
                         # It's a name, query by joining with users table
-                        cur.execute("""
-                            SELECT
-                                c.chunk_id,
-                                c.content,
-                                (1.0 - (c.embedding <=> %s::vector) / 2.0) as similarity_score,
-                                (c.embedding <=> %s::vector) as distance,
-                                array_length(c.m0_raw_ids, 1) as m0_message_count,
-                                c.chunking_strategy,
-                                c.user_id,
-                                c.created_at
-                            FROM m1_episodic c
-                            JOIN sessions s ON c.session_id::text = s.id
-                            JOIN users u ON s.user_id = u.id
-                            WHERE u.name = %s
-                            ORDER BY c.embedding <=> %s::vector ASC
-                            LIMIT %s
-                        """, (query_embedding.tolist(), query_embedding.tolist(), user_id,
-                              query_embedding.tolist(), top_k))
+                        if session_id:
+                            cur.execute("""
+                                SELECT
+                                    c.chunk_id,
+                                    c.content,
+                                    (1.0 - (c.embedding <=> %s::vector) / 2.0) as similarity_score,
+                                    (c.embedding <=> %s::vector) as distance,
+                                    array_length(c.m0_raw_ids, 1) as m0_message_count,
+                                    c.chunking_strategy,
+                                    c.user_id,
+                                    c.session_id,
+                                    c.created_at
+                                FROM m1_episodic c
+                                JOIN sessions s ON c.session_id = s.id
+                                JOIN users u ON s.user_id = u.id
+                                WHERE u.name = %s AND c.session_id = %s
+                                ORDER BY c.embedding <=> %s::vector ASC
+                                LIMIT %s
+                            """, (
+                                query_embedding.tolist(), query_embedding.tolist(),
+                                user_id, session_id,
+                                query_embedding.tolist(), top_k
+                            ))
+                        else:
+                            cur.execute("""
+                                SELECT
+                                    c.chunk_id,
+                                    c.content,
+                                    (1.0 - (c.embedding <=> %s::vector) / 2.0) as similarity_score,
+                                    (c.embedding <=> %s::vector) as distance,
+                                    array_length(c.m0_raw_ids, 1) as m0_message_count,
+                                    c.chunking_strategy,
+                                    c.user_id,
+                                    c.session_id,
+                                    c.created_at
+                                FROM m1_episodic c
+                                JOIN sessions s ON c.session_id = s.id
+                                JOIN users u ON s.user_id = u.id
+                                WHERE u.name = %s
+                                ORDER BY c.embedding <=> %s::vector ASC
+                                LIMIT %s
+                            """, (
+                                query_embedding.tolist(), query_embedding.tolist(),
+                                user_id,
+                                query_embedding.tolist(), top_k
+                            ))
                     rows = cur.fetchall()
             else:
                 # No user filtering (fallback) - NO similarity threshold
                 logger.warning("SimplifiedMemoryService: No user_id provided, querying all data (potential security issue)")
                 with self.db_manager.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("""
-                        SELECT
-                            chunk_id,
-                            content,
-                            (1.0 - (embedding <=> %s::vector) / 2.0) as similarity_score,
-                            (embedding <=> %s::vector) as distance,
-                            array_length(m0_raw_ids, 1) as m0_message_count,
-                            chunking_strategy,
-                            user_id,
-                            created_at
-                        FROM m1_episodic
-                        ORDER BY embedding <=> %s::vector ASC
-                        LIMIT %s
-                    """, (query_embedding.tolist(), query_embedding.tolist(),
-                          query_embedding.tolist(), top_k))
+                    if session_id:
+                        cur.execute("""
+                            SELECT
+                                chunk_id,
+                                content,
+                                (1.0 - (embedding <=> %s::vector) / 2.0) as similarity_score,
+                                (embedding <=> %s::vector) as distance,
+                                array_length(m0_raw_ids, 1) as m0_message_count,
+                                chunking_strategy,
+                                user_id,
+                                session_id,
+                                created_at
+                            FROM m1_episodic
+                            WHERE session_id = %s
+                            ORDER BY embedding <=> %s::vector ASC
+                            LIMIT %s
+                        """, (
+                            query_embedding.tolist(), query_embedding.tolist(),
+                            session_id,
+                            query_embedding.tolist(), top_k
+                        ))
+                    else:
+                        cur.execute("""
+                            SELECT
+                                chunk_id,
+                                content,
+                                (1.0 - (embedding <=> %s::vector) / 2.0) as similarity_score,
+                                (embedding <=> %s::vector) as distance,
+                                array_length(m0_raw_ids, 1) as m0_message_count,
+                                chunking_strategy,
+                                user_id,
+                                session_id,
+                                created_at
+                            FROM m1_episodic
+                            ORDER BY embedding <=> %s::vector ASC
+                            LIMIT %s
+                        """, (
+                            query_embedding.tolist(), query_embedding.tolist(),
+                            query_embedding.tolist(), top_k
+                        ))
                     rows = cur.fetchall()
 
             results = []
@@ -1199,7 +1278,9 @@ class SimplifiedMemoryService(MessageInterface):
                         'source': 'memory_database',
                         'chunking_strategy': row['chunking_strategy'],
                         'm0_message_count': row['m0_message_count'],
-                        'type': 'chunk'
+                        'type': 'chunk',
+                        'user_id': str(row['user_id']) if row.get('user_id') is not None else None,
+                        'session_id': str(row['session_id']) if row.get('session_id') is not None else None,
                     }
                 }
                 results.append(result)
