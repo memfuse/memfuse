@@ -79,6 +79,10 @@ class QueryResponseProcessor:
 
         # Handle different memory types
         memory_type = transformed.get('memory_type', 'episodic')  # Default to episodic
+        # Normalize memory_type for clarity: map 'chunk' and 'message' to 'episodic'
+        if memory_type in ['chunk', 'message']:
+            memory_type = 'episodic'
+            transformed['memory_type'] = 'episodic'
 
         # For M1 (episodic) memories - keep content field
         if memory_type in ['episodic', 'message', 'chunk']:
@@ -105,7 +109,7 @@ class QueryResponseProcessor:
             transformed['memory_type'] = memory_type or 'episodic'
 
         # Remove unused fields at top level (done early to ensure clean data)
-        unused_top_level_fields = ['role', 'source', 'similarity_score', 'scope']
+        unused_top_level_fields = ['role', 'source', 'similarity_score', 'scope', 'distance']
         for field in unused_top_level_fields:
             transformed.pop(field, None)
 
@@ -114,7 +118,7 @@ class QueryResponseProcessor:
             metadata = transformed['metadata']
 
             # Remove unused metadata fields
-            unused_metadata_fields = ['level', 'retrieval', 'source']
+            unused_metadata_fields = ['level', 'retrieval', 'source', 'type']
             for field in unused_metadata_fields:
                 metadata.pop(field, None)
 
