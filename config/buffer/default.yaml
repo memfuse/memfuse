@@ -1,4 +1,4 @@
-enabled: false
+enabled: true
 hybrid_buffer:
   chunk_strategy: message
   embedding_model: all-MiniLM-L6-v2

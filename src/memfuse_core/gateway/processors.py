@@ -97,12 +97,19 @@ class QueryResponseProcessor:
             content = transformed.get('content', '')
             transformed['fact'] = {
                 'text': content,
-                'triples': None  # Could be populated later if available
+                'triples': transformed.get('triples')  # Use existing triples if available
             }
             # Remove content field for semantic memories
             transformed.pop('content', None)
             # Normalize memory_type to 'semantic'
             transformed['memory_type'] = 'semantic'
+            
+            # Handle derived_from metadata for M2 memories
+            if 'metadata' in transformed and isinstance(transformed['metadata'], dict):
+                metadata = transformed['metadata']
+                # Move derived_from to correct location if it exists
+                if 'derived_from' not in metadata and 'derived_from' in transformed:
+                    metadata['derived_from'] = transformed.pop('derived_from')
 
         # Ensure updated_at field exists; allow null if unknown
         if 'updated_at' not in transformed:
