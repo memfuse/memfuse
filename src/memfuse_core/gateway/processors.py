@@ -92,7 +92,7 @@ class QueryResponseProcessor:
                 return None
 
         # For M2 (semantic) memories - use fact structure
-        elif memory_type in ['semantic', 'M2 Semantic']:
+        elif memory_type in ['semantic', 'M2 Semantic', 'knowledge']:
             # Transform to semantic format with fact structure
             content = transformed.get('content', '')
             transformed['fact'] = {
@@ -118,7 +118,7 @@ class QueryResponseProcessor:
             metadata = transformed['metadata']
 
             # Remove unused metadata fields
-            unused_metadata_fields = ['level', 'retrieval', 'source', 'type']
+            unused_metadata_fields = ['level', 'retrieval', 'source', 'type', 'chunking_strategy', 'm0_message_count']
             for field in unused_metadata_fields:
                 metadata.pop(field, None)
 
@@ -161,8 +161,8 @@ class MetadataEnricher:
         if 'agent_id' not in metadata and context.agent_id:
             metadata['agent_id'] = context.agent_id
 
-        if 'session_id' not in metadata and context.session_id:
-            metadata['session_id'] = context.session_id
+        # Do NOT infer result session_id from request context to avoid mislabeling scope
+        # Leave session_id as-is if not provided by upstream service
 
         if 'session_name' not in metadata and context.session_name:
             metadata['session_name'] = context.session_name

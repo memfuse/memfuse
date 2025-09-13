@@ -450,6 +450,13 @@ class MemoryApiGateway(GatewayInterface):
         # 4. Remove unwanted fields
         data = self.field_remover.transform(data, context)
 
+        # Optionally echo query back in response data for clarity
+        try:
+            if isinstance(data, dict) and request_data and request_data.get("query"):
+                data.setdefault("query", request_data.get("query"))
+        except Exception:
+            pass
+
         # Return transformed response with defaults to satisfy API contract
         status = service_response.get("status", "success")
         code = service_response.get("code") if service_response.get("code") is not None else 200
