@@ -132,7 +132,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         if self.buffer_enabled:
             logger.info(f"BufferService: Rerank enabled: {self.use_rerank}")
     
-    def _create_retrieval_handler(self, include_messages: bool = True, include_knowledge: bool = True, include_chunks: bool = True):
+    def _create_retrieval_handler(self, include_messages: bool = True, include_knowledge: bool = True, include_chunks: bool = True, task: Optional[str] = None):
         """Create retrieval handler for QueryBuffer."""
         async def retrieval_handler(query: str, max_results: int) -> List[Any]:
             """Handle retrieval from memory service."""
@@ -148,6 +148,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     query=query,
                     top_k=max_results,
                     user_id=actual_user_id,  # Pass user_id for filtering
+                    task=task,
                     include_messages=include_messages,
                     include_knowledge=include_knowledge,
                     include_chunks=include_chunks
@@ -556,14 +557,16 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             Formatted service response
         """
         if result.get("status") == "success":
+            data = result.get("data", {}) or {}
+            results = data.get("results", []) or []
+            # Normalize to latest schema
+            results = self._normalize_results_schema(results)
             return {
                 "status": "success",
                 "code": 200,
                 "data": {
-                    "mode": "bypass",
-                    "results": result.get("data", {}).get("results", []),
-                    "total": result.get("data", {}).get("total", 0),
-                    "memory_service_result": result.get("data", {})
+                    "results": results,
+                    "total": len(results),
                 },
                 "message": "Query processed via MemoryService in bypass mode",
                 "errors": None
@@ -598,6 +601,29 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
             total_messages=result.get('total_messages', 0),
             buffer_status="success"
         )
+
+    def _normalize_results_schema(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Normalize result items to the latest schema."""
+        normalized: List[Dict[str, Any]] = []
+        for r in results or []:
+            if not isinstance(r, dict):
+                continue
+            item = dict(r)
+            if 'relevance_score' not in item and 'score' in item:
+                item['relevance_score'] = item.pop('score')
+            if 'memory_type' not in item and 'type' in item:
+                item['memory_type'] = item.pop('type')
+            mt = item.get('memory_type')
+            if mt in ('chunk', 'message'):
+                item['memory_type'] = 'episodic'
+            elif mt in ('knowledge', 'M2 Semantic'):
+                item['memory_type'] = 'semantic'
+            item.pop('distance', None)
+            # Ensure updated_at exists
+            if 'updated_at' not in item:
+                item['updated_at'] = item.get('created_at') or None
+            normalized.append(item)
+        return normalized
 
     def _ensure_message_fields(self, message: Dict[str, Any]) -> None:
         """Ensure message has required fields (id, created_at, updated_at).
@@ -636,6 +662,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         top_k: int = 5,
         store_type: Optional[str] = None,
         session_id: Optional[str] = None,
+        task: Optional[str] = None,
         scope: str = "all",
         include_messages: bool = True,
         include_knowledge: bool = True,
@@ -685,6 +712,7 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     store_type=store_type,
                     session_id=session_id,
                     user_id=actual_user_id,  # Pass user_id for filtering
+                    task=task,
                     include_messages=include_messages,
                     include_knowledge=include_knowledge,
                     include_chunks=include_chunks
@@ -699,7 +727,8 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                 self.query_buffer.retrieval_handler = self._create_retrieval_handler(
                     include_messages=include_messages,
                     include_knowledge=include_knowledge,
-                    include_chunks=include_chunks
+                    include_chunks=include_chunks,
+                    task=task
                 )
 
                 # Delegate all query logic to QueryBuffer (with internal reranking)

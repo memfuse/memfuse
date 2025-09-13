@@ -79,6 +79,10 @@ class QueryResponseProcessor:
 
         # Handle different memory types
         memory_type = transformed.get('memory_type', 'episodic')  # Default to episodic
+        # Normalize memory_type: map granular to canonical
+        if memory_type in ['chunk', 'message']:
+            memory_type = 'episodic'
+            transformed['memory_type'] = 'episodic'
 
         # For M1 (episodic) memories - keep content field
         if memory_type in ['episodic', 'message', 'chunk']:
@@ -88,7 +92,7 @@ class QueryResponseProcessor:
                 return None
 
         # For M2 (semantic) memories - use fact structure
-        elif memory_type in ['semantic', 'M2 Semantic']:
+        elif memory_type in ['semantic', 'M2 Semantic', 'knowledge']:
             # Transform to semantic format with fact structure
             content = transformed.get('content', '')
             transformed['fact'] = {
@@ -100,8 +104,12 @@ class QueryResponseProcessor:
             # Normalize memory_type to 'semantic'
             transformed['memory_type'] = 'semantic'
 
+        # Ensure updated_at field exists; allow null if unknown
+        if 'updated_at' not in transformed:
+            transformed['updated_at'] = transformed.get('created_at') or None
+
         # Remove unused fields at top level (done early to ensure clean data)
-        unused_top_level_fields = ['role', 'source', 'similarity_score', 'scope']
+        unused_top_level_fields = ['role', 'source', 'similarity_score', 'scope', 'distance']
         for field in unused_top_level_fields:
             transformed.pop(field, None)
 

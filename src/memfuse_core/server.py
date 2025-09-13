@@ -14,7 +14,10 @@ from fastapi import FastAPI
 from loguru import logger
 from omegaconf import DictConfig
 import uvicorn
-import hydra
+try:
+    import hydra  # optional for unit tests that import server
+except Exception:
+    hydra = None
 
 # Load environment variables from .env file
 try:
@@ -403,15 +406,19 @@ def get_config_path():
     # Fallback: try relative path
     return "../../config"
 
-@hydra.main(version_base=None, config_path=get_config_path(), config_name="config")
-def main(cfg: DictConfig) -> None:
-    """Entry point for the memfuse-core command.
+if hydra is not None:
+    @hydra.main(version_base=None, config_path=get_config_path(), config_name="config")
+    def main(cfg: DictConfig) -> None:
+        """Entry point for the memfuse-core command.
 
-    This function is called when running:
-    - `poetry run memfuse-core`
-    - `python -m memfuse_core` (via __main__.py)
+        This function is called when running:
+        - `poetry run memfuse-core`
+        - `python -m memfuse_core` (via __main__.py)
 
-    Args:
-        cfg: Configuration from Hydra
-    """
-    run_server(cfg)
+        Args:
+            cfg: Configuration from Hydra
+        """
+        run_server(cfg)
+else:
+    def main(cfg: DictConfig | None = None) -> None:
+        raise RuntimeError("Hydra is not installed; main() unavailable in this context.")

@@ -165,10 +165,16 @@ class MemoryApiGateway(GatewayInterface):
         if not self.buffer_service:
             raise ValueError("Buffer service not available")
 
-        # Only pass session_id if available, let BufferService use its defaults for everything else
+        # Only pass session_id if available; also pass task from request metadata
         buffer_params = {}
         if service_params.get("session_id"):
             buffer_params["session_id"] = service_params["session_id"]
+        try:
+            req_task = (request_data.get("metadata") or {}).get("task")
+            if req_task is not None:
+                buffer_params["task"] = req_task
+        except Exception:
+            pass
 
         return await self.buffer_service.query(
             query=query,
@@ -194,14 +200,36 @@ class MemoryApiGateway(GatewayInterface):
 
         # 1. Transform response format (field renaming, memory type handling)
         data = self.response_processor.transform(data, context)
-        # 2. Enrich metadata
-        data = self.metadata_enricher.transform(data, context)
+        # 2. Enrich metadata (merge request_data metadata into context for this transform)
+        try:
+            req_meta = (request_data or {}).get("metadata") or {}
+            # Create a shallow copy context to avoid mutating original
+            ctx_for_meta = RequestContext(
+                user_id=context.user_id,
+                user_name=context.user_name,
+                agent_id=context.agent_id,
+                agent_name=context.agent_name,
+                session_id=context.session_id,
+                session_name=context.session_name,
+                operation_type=context.operation_type,
+                request_metadata={**(context.request_metadata or {}), **req_meta},
+            )
+        except Exception:
+            ctx_for_meta = context
+        data = self.metadata_enricher.transform(data, ctx_for_meta)
 
         # 3. Calculate scope
         data = self.scope_calculator.transform(data, context)
 
         # 4. Remove unwanted fields
         data = self.field_remover.transform(data, context)
+
+        # 5. Echo query back in response data for clarity
+        try:
+            if isinstance(data, dict) and request_data and request_data.get("query"):
+                data.setdefault("query", request_data.get("query"))
+        except Exception:
+            pass
 
         # Return transformed response with defaults to satisfy API contract
         status = service_response.get("status", "success")
