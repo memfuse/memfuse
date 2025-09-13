@@ -158,8 +158,13 @@ class MetadataEnricher:
         if 'user_id' not in metadata and context.user_id:
             metadata['user_id'] = context.user_id
 
-        if 'agent_id' not in metadata and context.agent_id:
-            metadata['agent_id'] = context.agent_id
+        # Only infer agent_id from context when the result's session matches request session
+        if 'agent_id' not in metadata:
+            if context.agent_id and (
+                (metadata.get('session_id') and context.session_id and metadata.get('session_id') == context.session_id)
+                or (not metadata.get('session_id') and not context.session_id)
+            ):
+                metadata['agent_id'] = context.agent_id
 
         # Do NOT infer result session_id from request context to avoid mislabeling scope
         # Leave session_id as-is if not provided by upstream service

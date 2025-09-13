@@ -447,7 +447,35 @@ class MemoryApiGateway(GatewayInterface):
         # 3. Calculate scope
         data = self.scope_calculator.transform(data, context)
 
-        # 4. Remove unwanted fields
+        # 4. DB-backed enrichment for missing agent/session fields when possible
+        try:
+            if self.db_service and isinstance(data, dict) and 'results' in data and isinstance(data['results'], list):
+                # Build a cache of session lookups to avoid duplicate queries
+                session_cache = {}
+                for item in data['results']:
+                    md = item.get('metadata') if isinstance(item, dict) else None
+                    if not isinstance(md, dict):
+                        continue
+                    sid = md.get('session_id')
+                    # Only enrich when a session_id exists but agent_id/session_name missing
+                    if sid and (md.get('agent_id') is None or md.get('session_name') is None):
+                        if sid not in session_cache:
+                            try:
+                                session = await self.db_service.get_session(sid)
+                            except Exception:
+                                session = None
+                            session_cache[sid] = session
+                        session = session_cache.get(sid)
+                        if isinstance(session, dict):
+                            if md.get('agent_id') is None:
+                                md['agent_id'] = session.get('agent_id')
+                            if md.get('session_name') is None:
+                                md['session_name'] = session.get('name')
+        except Exception as _e:
+            # Soft-fail enrichment
+            pass
+
+        # 5. Remove unwanted fields
         data = self.field_remover.transform(data, context)
 
         # Optionally echo query back in response data for clarity
