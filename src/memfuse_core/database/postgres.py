@@ -110,8 +110,9 @@ class PostgresDB(DBBase):
             async with conn.cursor(row_factory=dict_row) as cursor:
                 await cursor.execute(query, params)
 
-                # Fetch results if it's a SELECT query
-                if query.strip().upper().startswith('SELECT'):
+                # Fetch results for read queries (SELECT or CTE starting with WITH)
+                q_head = query.lstrip().upper()
+                if q_head.startswith('SELECT') or q_head.startswith('WITH'):
                     results = await cursor.fetchall()
                     return results
                 else:
@@ -511,4 +512,3 @@ class PostgresDB(DBBase):
                 return [data.get('id', '') for data in processed_data_list]
 
         return []
-

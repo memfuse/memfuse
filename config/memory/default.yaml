@@ -98,7 +98,7 @@ layers:
 
     # Phase A orchestration knobs
     procedural_top_k: 5
-    procedural_reuse_threshold: 0.9
+    procedural_reuse_threshold: 0.75
     planner_max_attempts: 3
     runs_base_dir: "runs"
     # Trigger migration (legacy tag -> task/task_eos)

@@ -470,11 +470,13 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
         Returns:
             The correct user_id (UUID) if available, None otherwise
         """
-        if (self.memory_service and
-            hasattr(self.memory_service, '_user_id') and
-            self.memory_service._user_id):
+        if (
+            self.memory_service and
+            hasattr(self.memory_service, 'user_id') and
+            self.memory_service.user_id
+        ):
             # Use the UUID from memory_service (this is always correct)
-            user_id = str(self.memory_service._user_id)
+            user_id = str(self.memory_service.user_id)
             # Cache it for future use
             if self.user_id != user_id:
                 self.user_id = user_id
@@ -488,13 +490,13 @@ class BufferService(MemoryInterface, ServiceInterface, MessageInterface):
                     if hasattr(self.memory_service, '_initialize_user_id'):
                         # Force initialization if not done yet
                         import asyncio
-                        if not hasattr(self.memory_service, '_user_id') or not self.memory_service._user_id:
+                        if not hasattr(self.memory_service, 'user_id') or not self.memory_service.user_id:
                             logger.debug(f"BufferService: Forcing user_id initialization for user: {self.user}")
                             # This is a sync method, but we need to handle it carefully
                             # We'll return None and let the caller handle the async initialization
                             return None
                         else:
-                            user_id = str(self.memory_service._user_id)
+                            user_id = str(self.memory_service.user_id)
                             self.user_id = user_id
                             return user_id
                 except Exception as e:
