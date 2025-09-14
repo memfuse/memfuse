@@ -1520,6 +1520,7 @@ class SimplifiedMemoryService(MessageInterface):
                                 array_length(c.m0_raw_ids, 1) as m0_message_count,
                                 c.chunking_strategy,
                                 c.user_id,
+                                c.session_id,
                                 c.created_at
                             FROM m1_episodic c
                             WHERE c.user_id = %s
@@ -1538,6 +1539,7 @@ class SimplifiedMemoryService(MessageInterface):
                                 array_length(c.m0_raw_ids, 1) as m0_message_count,
                                 c.chunking_strategy,
                                 c.user_id,
+                                c.session_id,
                                 c.created_at
                             FROM m1_episodic c
                             JOIN sessions s ON c.session_id::text = s.id
@@ -1561,6 +1563,7 @@ class SimplifiedMemoryService(MessageInterface):
                             array_length(m0_raw_ids, 1) as m0_message_count,
                             chunking_strategy,
                             user_id,
+                            session_id,
                             created_at
                         FROM m1_episodic
                         ORDER BY embedding <=> %s::vector ASC
@@ -1582,7 +1585,8 @@ class SimplifiedMemoryService(MessageInterface):
                         'source': 'memory_database',
                         'chunking_strategy': row['chunking_strategy'],
                         'm0_message_count': row['m0_message_count'],
-                        'type': 'chunk'
+                        'type': 'chunk',
+                        'session_id': str(row['session_id']) if row['session_id'] else None
                     }
                 }
                 results.append(result)
@@ -3264,15 +3268,45 @@ Please extract clear, factual statements that would be useful for future memory 
             all_results.sort(key=lambda x: x.get('relevance_score', x.get('similarity_score', 0)), reverse=True)
             results = all_results[:top_k]
 
-            # Format response to match BufferService expectations
+            # Transform results to M1 Schema format
+            transformed_results = []
+            for result in results:
+                # Calculate scope based on session_id presence
+                result_session_id = result.get('metadata', {}).get('session_id')
+                if result_session_id == session_id:
+                    scope = "in_session"
+                elif result_session_id and result_session_id != session_id:
+                    scope = "cross_session"
+                else:
+                    scope = None
+                
+                # Transform to M1 Schema format
+                transformed_result = {
+                    "id": result.get('id'),
+                    "content": result.get('content'),
+                    "relevance_score": result.get('score', result.get('relevance_score', 0)),
+                    "memory_type": "episodic",  # M1 chunks are episodic by default
+                    "scope": scope,
+                    "created_at": result.get('created_at'),  # Keep ISO format or None
+                    "updated_at": None,  # M1 Schema expects null for updated_at in episodic
+                    "metadata": {
+                        "task": None,
+                        "mode": None,
+                        **result.get('metadata', {})
+                    }
+                }
+                transformed_results.append(transformed_result)
+
+            # Format response to match M1 Schema expectations
             response = {
                 "status": "success",
                 "code": 200,
                 "data": {
-                    "results": results,
-                    "total": len(results)
+                    "query": actual_query,  # Include original query as required by M1 Schema
+                    "results": transformed_results,
+                    "total": len(transformed_results)
                 },
-                "message": f"Retrieved {len(results)} results from memory database (searched {len(all_results)} candidates)",
+                "message": f"Retrieved {len(transformed_results)} results from memory database (searched {len(all_results)} candidates)",
                 "errors": None
             }
 
