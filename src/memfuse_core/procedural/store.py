@@ -253,14 +253,22 @@ class ProceduralStore:
         
         params.append(top_k)
         
+        # Use simpler query like we fixed for procedural_similar
         q = (
-            "WITH q AS (SELECT %s::vector AS v) "
-            f"SELECT lesson_id, status, fix_summary, working_params, 1 - (trigger_embedding <=> q.v) AS cosine_similarity "
-            f"FROM procedural_lessons, q {where} ORDER BY trigger_embedding <=> q.v ASC LIMIT %s"
+            f"SELECT lesson_id, status, fix_summary, working_params, "
+            f"1 - (trigger_embedding <=> %s::vector) AS cosine_similarity "
+            f"FROM procedural_lessons {where} "
+            f"ORDER BY trigger_embedding <=> %s::vector ASC LIMIT %s"
         )
         
+        # Fix params: need embedding twice for the query
+        fixed_params = [trigger_embedding, trigger_embedding]
+        if agent:
+            fixed_params.insert(1, agent)  # Insert agent between the two embeddings
+        fixed_params.append(top_k)
+        
         try:
-            rows = await db.backend.execute(q, tuple(params))
+            rows = await db.backend.execute(q, tuple(fixed_params))
             out: List[Tuple[str, str, str, Dict[str, Any], float]] = []
             
             for r in rows:

@@ -242,30 +242,56 @@ class Orchestrator:
         
         try:
             vec = goal_vec
-            recs = await self.store.query_procedural_similar(
-                vec, max(1, self.procedural_top_k)
-            ) if vec is not None else []
+            # Use topk=3 strategy: direct SQL query to bypass ProceduralStore issues
+            recs = []
+            if vec is not None:
+                try:
+                    from ..services.database_service import DatabaseService
+                    db = await DatabaseService.get_instance()
+                    
+                    # Direct SQL query for top 3 similar workflows
+                    query = """
+                    SELECT workflow_id, successful_workflow, 
+                           1 - (trigger_embedding <=> %s::vector) AS cosine_similarity 
+                    FROM procedural_memory 
+                    ORDER BY trigger_embedding <=> %s::vector ASC 
+                    LIMIT 3
+                    """
+                    
+                    rows = await db.backend.execute(query, (vec, vec))
+                    recs = [
+                        (row["workflow_id"], row["successful_workflow"], row["cosine_similarity"])
+                        for row in rows
+                    ]
+                    logger.info(f"M3 workflow reuse: direct query found {len(recs)} similar workflows")
+                except Exception as e:
+                    logger.warning(f"M3 workflow reuse: direct query failed: {e}")
+                    recs = []
             
             if recs:
+                # Try the most similar workflow (first result)
                 wid, wf, score = recs[0]
-                if score >= self.procedural_reuse_threshold:
-                    plan_list = wf.get("plan", []) if isinstance(wf, dict) else []
-                    cand = [
-                        PlanStep(agent=str(s.get("agent", "")), input=s.get("input") or {})
-                        for s in plan_list
-                        if isinstance(s, dict) and str(s.get("agent", "")).strip()
-                    ]
-                    if cand:
-                        steps = cand
-                        wid_reused = wid
-                        self.last_reused = True
-                    else:
-                        steps = self.planner.plan(user_goal)
+                logger.info(f"M3 workflow reuse: found similar workflow {wid} with score {score:.4f}")
+                
+                plan_list = wf.get("plan", []) if isinstance(wf, dict) else []
+                cand = [
+                    PlanStep(agent=str(s.get("agent", "")), input=s.get("input") or {})
+                    for s in plan_list
+                    if isinstance(s, dict) and str(s.get("agent", "")).strip()
+                ]
+                if cand:
+                    steps = cand
+                    wid_reused = wid
+                    self.last_reused = True
+                    logger.info(f"M3 workflow reuse: reusing workflow {wid} with {len(cand)} steps")
                 else:
                     steps = self.planner.plan(user_goal)
+                    logger.info("M3 workflow reuse: found workflow but no valid steps, creating new plan")
             else:
                 steps = self.planner.plan(user_goal)
-        except Exception:
+                logger.info("M3 workflow reuse: no similar workflows found, creating new plan")
+        except Exception as e:
+            logger.warning(f"M3 workflow reuse failed: {e}")
             steps = self.planner.plan(user_goal)
 
         # Expose plan steps for external logging use
