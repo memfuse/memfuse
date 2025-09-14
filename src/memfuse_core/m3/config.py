@@ -12,7 +12,7 @@ class M3Config:
     """Configuration for M3 system."""
     
     # Workflow reuse settings
-    workflow_reuse_threshold: float = 0.9
+    workflow_reuse_threshold: float = 0.85
     max_workflow_reuse_candidates: int = 5
     
     # Agent settings

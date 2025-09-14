@@ -163,14 +163,16 @@ class ProceduralStore:
         await self._ensure_tables()
         db = self._db or await DatabaseService.get_instance()
         
+        # Use a simpler, more reliable query for pgvector
         query = (
-            "WITH q AS (SELECT %s::vector AS v) "
-            "SELECT workflow_id, successful_workflow, 1 - (trigger_embedding <=> q.v) AS cosine_similarity "
-            "FROM procedural_memory, q ORDER BY trigger_embedding <=> q.v ASC LIMIT %s"
+            "SELECT workflow_id, successful_workflow, "
+            "1 - (trigger_embedding <=> %s::vector) AS cosine_similarity "
+            "FROM procedural_memory "
+            "ORDER BY trigger_embedding <=> %s::vector ASC LIMIT %s"
         )
         
         try:
-            rows = await db.backend.execute(query, (query_embedding, top_k))
+            rows = await db.backend.execute(query, (query_embedding, query_embedding, top_k))
             results: List[Tuple[str, Dict[str, Any], float]] = []
             
             for r in rows:
@@ -179,10 +181,13 @@ class ProceduralStore:
                 score = float(r.get("cosine_similarity") or 0.0)
                 results.append((wid, wf, score))
             
+            logger.info(f"query_procedural_similar: found {len(results)} workflows")
             return results
             
         except Exception as e:
-            logger.warning(f"query_procedural_similar failed: {e}")
+            logger.error(f"query_procedural_similar failed: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
 
     async def bump_procedural_usage(self, workflow_id: str, by: int = 1) -> int:

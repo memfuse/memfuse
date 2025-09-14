@@ -2,7 +2,7 @@
 
 m3:
   # Workflow reuse settings
-  workflow_reuse_threshold: 0.9  # Similarity threshold for workflow reuse
+  workflow_reuse_threshold: 0.85  # Similarity threshold for workflow reuse
   max_workflow_reuse_candidates: 5  # Maximum candidates to consider for reuse
   
   # Agent settings
