@@ -345,12 +345,22 @@ class Orchestrator:
         else:
             final_text = json.dumps({"result": context}, ensure_ascii=False)
 
+        # Decide workflow id early so it's available even if persistence fails
+        try:
+            if wid_reused:
+                self.last_workflow_id = wid_reused
+                self.last_reused = True
+            else:
+                if not self.last_workflow_id:
+                    self.last_workflow_id = str(uuid.uuid4())
+        except Exception:
+            pass
+
         # Persist usage/workflow/lessons (soft-fail)
         try:
             vec = await create_embedding(user_goal)
             if self.last_reused and wid_reused:
                 await self.store.bump_procedural_usage(wid_reused, 1)
-                self.last_workflow_id = wid_reused
                 try:
                     (run_dir / "reused.json").write_text(json.dumps({"workflow_id": wid_reused}, ensure_ascii=False, indent=2))
                 except Exception:
@@ -362,7 +372,7 @@ class Orchestrator:
                     "plan": [{"agent": s.agent, "input": s.input} for (s, _o) in executed],
                     "result_keys": list(last_output.keys()),
                 }
-                wid_new = str(uuid.uuid4())
+                wid_new = self.last_workflow_id or str(uuid.uuid4())
                 await self.store.upsert_procedural_workflow(wid_new, vec, workflow)
                 self.last_workflow_id = wid_new
                 try:

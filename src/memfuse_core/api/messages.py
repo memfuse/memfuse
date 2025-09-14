@@ -234,65 +234,36 @@ async def add_messages(
         )
         raise_api_error(error_response)
 
-    # Convert messages and add them
+    # Convert messages first
     messages = convert_pydantic_to_dict(request.messages)
+
+    # Route ADD operation via Gateway to keep API thin
+    from ..gateway.api_gateway import create_memory_gateway
+    from ..interfaces.gateway_interface import OperationType
+    request_data = {
+        "messages": messages,
+        "session_id": session_id,
+        "user_id": session.get("user_id") if isinstance(session, dict) else None,
+        "agent_id": session.get("agent_id") if isinstance(session, dict) else None,
+        "metadata": {},
+    }
+    gateway = create_memory_gateway(buffer_service=memory, db_service=db)
+    gw_resp = await gateway.process_request(request_data, operation_type=OperationType.ADD)
     
-    # Check for M3 task_eos triggering
-    m3_result = None
-    for message in messages:
-        metadata = message.get("metadata", {})
-        if metadata.get("task_eos") is True:
-            task_name = metadata.get("task")
-            if task_name:
-                logger.info(f"M3 task_eos detected for task: {task_name}")
-                try:
-                    # Get task-scoped message history
-                    task_messages = await get_task_messages(db, session_id, task_name)
-                    task_messages.append(message)  # Include current message
-                    
-                    # Trigger M3 Orchestrator
-                    orchestrator = Orchestrator()
-                    m3_result = await orchestrator.handle_request(
-                        session_id=session_id,
-                        user_goal=message.get("content", ""),
-                        workflow_name=task_name,
-                        history_messages=task_messages
-                    )
-                    logger.info(f"M3 workflow completed: {m3_result}")
-                except Exception as e:
-                    logger.error(f"M3 workflow failed: {e}")
-                    # Continue with normal message processing
-    
-    # P1 OPTIMIZATION: Pass session_id to add method
-    result = await memory.add(messages, session_id=session_id)
-
-    # Extract message IDs from result
-    message_ids = []
-    logger.info(f"Messages API: Service result: {result}")
-    if (result and result.get("status") == "success"
-            and result.get("data") is not None):
-        message_ids = result["data"].get("message_ids", [])
-        logger.info(f"Messages API: Extracted message_ids: {message_ids}")
-
-    # Create response data with message IDs
-    response_data = {"message_ids": message_ids}
-
-    # Add any additional fields from the service result (e.g., transfer_triggered)
-    if result and result.get("status") == "success":
-        # Include additional fields like transfer_triggered, total_messages, etc.
-        for key, value in result.items():
-            if key not in ["status", "code", "data", "message", "errors"]:
-                response_data[key] = value
-    
-    # Add M3 result if available
-    if m3_result:
-        response_data["m3_workflow"] = m3_result
-
-    return ApiResponse.success(
-        data=response_data,
-        message="Messages added successfully",
-        code=201,
-    )
+    if isinstance(gw_resp, dict) and 'status' in gw_resp:
+        return ApiResponse(
+            status=gw_resp.get('status','success'),
+            code=gw_resp.get('code', 201),
+            data=gw_resp.get('data', {}),
+            message=gw_resp.get('message','Messages added successfully'),
+            errors=gw_resp.get('errors'),
+        )
+    else:
+        return ApiResponse.success(
+            data=gw_resp,
+            message="Messages added successfully",
+            code=201,
+        )
 
 
 @router.get("/", response_model=ApiResponse)

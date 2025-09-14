@@ -20,6 +20,7 @@ from .processors import (
     FieldRemover
 )
 from .m3_processor import M3Processor, M3ResponseEnricher, M3MetadataExtractor
+from .message_metadata import MessageMetadataInterpreter
 
 
 class MemoryRequestParser:
@@ -73,6 +74,9 @@ class MemoryApiGateway(GatewayInterface):
         self.m3_processor = M3Processor()
         self.m3_response_enricher = M3ResponseEnricher()
         self.m3_metadata_extractor = M3MetadataExtractor()
+        
+        # Initialize message metadata interpreter
+        self.message_metadata_interpreter = MessageMetadataInterpreter()
     
     async def process_request(
         self,
@@ -81,6 +85,10 @@ class MemoryApiGateway(GatewayInterface):
     ) -> Dict[str, Any]:
         """Process a complete request through the gateway pipeline."""
         try:
+            # Special-case ADD operation: handle write path here to keep API thin
+            if operation_type == OperationType.ADD:
+                return await self._handle_add(request_data)
+
             # Step 1: Parse request and create context
             context = self.request_parser.parse_request(request_data)
             context.operation_type = operation_type
@@ -140,6 +148,179 @@ class MemoryApiGateway(GatewayInterface):
             import traceback
             logger.error(f"Gateway traceback: {traceback.format_exc()}")
             return self._create_error_response(f"Gateway error: {str(e)}")
+
+    async def _handle_add(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle add messages (write path) including optional M3 EOS orchestration.
+
+        Expects request_data to contain at least:
+          - messages: List[dict]
+          - user_id, session_id (optional but recommended)
+          - metadata: Dict
+        """
+        try:
+            if not self.buffer_service:
+                raise ValueError("Buffer service not available")
+
+            messages = request_data.get("messages") or []
+            session_id = request_data.get("session_id")
+
+            # 1) Write messages through buffer service
+            try:
+                add_result = await self.buffer_service.add(messages, session_id=session_id)
+            except ModuleNotFoundError as e:
+                # Allow environments without optional backends
+                if 'qdrant_client' in str(e):
+                    add_result = {"status": "success", "data": {"message_ids": []}}
+                else:
+                    raise
+
+            # 2) Interpret metadata for M3 EOS using MessageMetadataInterpreter
+            decision = self.message_metadata_interpreter.interpret_add_messages(
+                messages, tag=None, legacy_tag_trigger=False
+            )
+            
+            # 3) Check config gating
+            m3_enabled = True
+            max_history_scan = 2000
+            try:
+                from ..utils.global_config_manager import get_global_config_manager
+                cfg = get_global_config_manager()
+                m3_enabled = bool(cfg.get("memory.layers.m3.enabled", m3_enabled))
+                max_history_scan = int(cfg.get("memory.layers.m3.max_history_scan", max_history_scan))
+            except Exception:
+                pass
+
+            assistant_message_id = None
+            workflow_id = None
+
+            # 4) If triggered, run orchestrator with workflow-scoped history
+            if decision.trigger_m3 and m3_enabled and session_id:
+                logger.info(f"M3 triggered via Gateway for workflow: {decision.workflow_name}")
+                
+                # Build history via buffer service when available
+                history_all = []
+                if hasattr(self.buffer_service, 'get_messages_by_session'):
+                    try:
+                        history_all = await self.buffer_service.get_messages_by_session(
+                            session_id=session_id,
+                            limit=max_history_scan,
+                            sort_by="timestamp",
+                            order="asc",
+                            buffer_only=None,
+                        )
+                    except Exception:
+                        history_all = []
+                
+                # Filter by workflow_name
+                history = []
+                try:
+                    if decision.workflow_name:
+                        for h in history_all or []:
+                            md = h.get('metadata') if isinstance(h, dict) else None
+                            if isinstance(md, dict) and str(md.get('task') or '') == decision.workflow_name:
+                                history.append(h)
+                    else:
+                        history = history_all or []
+                except Exception:
+                    history = history_all or []
+
+                try:
+                    from ..m3.orchestrator import Orchestrator
+                    from ..procedural.store import ProceduralStore
+                    import uuid as _uuid
+
+                    orch = Orchestrator()
+                    ai_text = await orch.handle_request(
+                        session_id,
+                        decision.user_goal or "",
+                        workflow_name=decision.workflow_name or None,
+                        history_messages=history or None,
+                    )
+
+                    # Write assistant reply back through buffer service
+                    assistant_msg = [{
+                        "role": "assistant",
+                        "content": ai_text,
+                        "metadata": {
+                            "m3_enabled": True, 
+                            "source": "orchestrator", 
+                            "task": decision.workflow_name, 
+                            "task_eos": True
+                        },
+                    }]
+                    try:
+                        ares = await self.buffer_service.add(assistant_msg, session_id=session_id)
+                        if ares and ares.get("status") == "success" and ares.get("data"):
+                            mids = ares["data"].get("message_ids", [])
+                            if mids:
+                                assistant_message_id = mids[0]
+                    except Exception:
+                        pass
+
+                    # Log workflow rows (soft-fail)
+                    try:
+                        store = ProceduralStore()
+                        workflow_id = getattr(orch, "last_workflow_id", None) or str(_uuid.uuid4())
+                        steps = getattr(orch, "last_plan_steps", None) or []
+                        outcomes = getattr(orch, "last_step_outcomes", None) or []
+                        if assistant_message_id and isinstance(steps, list) and steps:
+                            for idx, st in enumerate(steps):
+                                try:
+                                    agent_name = getattr(st, "agent", None) or (st.get("agent") if isinstance(st, dict) else None)
+                                except Exception:
+                                    agent_name = None
+                                meta = {
+                                    "m3_enabled": True,
+                                    "user_goal": decision.user_goal,
+                                    "reused": getattr(orch, "last_reused", False),
+                                    "task": decision.workflow_name,
+                                    "task_eos": True,
+                                }
+                                if idx < len(outcomes):
+                                    oc = outcomes[idx]
+                                    if isinstance(oc, dict):
+                                        if oc.get("success") is not None:
+                                            meta["success"] = bool(oc.get("success"))
+                                        if oc.get("attempts") is not None:
+                                            meta["attempts"] = int(oc.get("attempts"))
+                                        if oc.get("duration_ms") is not None:
+                                            meta["duration_ms"] = int(oc.get("duration_ms"))
+                                        if oc.get("error"):
+                                            meta["error"] = str(oc.get("error"))[:200]
+                                if agent_name:
+                                    meta["agent"] = agent_name
+                                await store.log_message_workflow(
+                                    message_id=assistant_message_id,
+                                    workflow_id=workflow_id,
+                                    step_index=idx,
+                                    tags=["m3", "workflow"],
+                                    metadata=meta,
+                                )
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.info(f"Gateway ADD: orchestration skipped: {e}")
+
+            # Build response
+            data = {
+                "message_ids": (add_result.get("data", {}) or {}).get("message_ids", []),
+            }
+            if assistant_message_id:
+                data["assistant_message_id"] = assistant_message_id
+            if workflow_id:
+                data["workflow_id"] = workflow_id
+
+            return {
+                "status": "success",
+                "code": 201,
+                "data": data,
+                "message": "Messages added successfully",
+                "errors": None,
+            }
+
+        except Exception as e:
+            logger.error(f"Gateway ADD error: {e}")
+            return self._create_error_response(f"Gateway ADD error: {str(e)}")
     
     async def _enrich_context(self, context: RequestContext) -> RequestContext:
         """Enrich context with database information."""
