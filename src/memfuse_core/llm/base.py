@@ -4,8 +4,15 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, AsyncGenerator, Union
+from typing import List, Dict, Any, Optional, AsyncGenerator, Union, Type
 from enum import Enum
+
+try:
+    from pydantic import BaseModel
+    PYDANTIC_AVAILABLE = True
+except ImportError:
+    PYDANTIC_AVAILABLE = False
+    BaseModel = object
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +44,7 @@ class LLMResponse:
     metadata: Dict[str, Any] = field(default_factory=dict)
     success: bool = True
     error: Optional[str] = None
+    parsed_data: Optional[Any] = None  # For structured outputs
 
 
 @dataclass
@@ -48,6 +56,7 @@ class LLMRequest:
     temperature: float = 0.3
     stream: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
+    response_format: Optional[Type[BaseModel]] = None  # For structured outputs
 
 
 class LLMProvider(ABC):
