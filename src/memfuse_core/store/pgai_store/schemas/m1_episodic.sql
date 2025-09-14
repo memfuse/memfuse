@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS m1_episodic (
     embedding_model VARCHAR(100) DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
     chunk_quality_score FLOAT DEFAULT 0.0,
 
+    -- Preserve request metadata across layers
+    metadata JSONB DEFAULT '{}'::jsonb,
+
     -- Constraints
     CONSTRAINT m1_chunks_embedding_not_null
         CHECK (embedding IS NOT NULL),
@@ -86,6 +89,10 @@ CREATE INDEX IF NOT EXISTS idx_m1_chunk_quality_score
 -- GIN index for M0 message ID arrays (lineage queries)
 CREATE INDEX IF NOT EXISTS idx_m1_m0_raw_ids_gin
     ON m1_episodic USING gin (m0_raw_ids);
+
+-- GIN index for metadata queries
+CREATE INDEX IF NOT EXISTS idx_m1_metadata_gin
+    ON m1_episodic USING gin (metadata);
 
 -- M2 processing status indexes
 CREATE INDEX IF NOT EXISTS idx_m1_m2_status

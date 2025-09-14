@@ -173,6 +173,9 @@ class MetadataEnricher:
 
         if 'session_name' not in metadata and context.session_name:
             metadata['session_name'] = context.session_name
+        if 'session_name' not in metadata:
+            # Ensure presence as empty string to satisfy schema type
+            metadata['session_name'] = ""
 
         # Add task and mode from request metadata if available
         if context.request_metadata:

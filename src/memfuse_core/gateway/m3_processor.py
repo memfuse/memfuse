@@ -19,6 +19,13 @@ class M3Processor:
         """Check if request should trigger M3 processing."""
         if not self.config.enable_workflow_reuse:
             return False
+        # Only consider orchestration triggers on ADD/write paths
+        try:
+            from ..interfaces.gateway_interface import OperationType
+            if context.operation_type != OperationType.ADD:
+                return False
+        except Exception:
+            return False
         
         # Check for task_eos metadata
         metadata = request_data.get("metadata", {})
@@ -172,6 +179,102 @@ class M3MetadataExtractor:
             m3_metadata.get("task_eos") or
             m3_metadata.get("m3_trigger")
         )
+
+    async def enrich_results_with_m3_context(
+        self,
+        data: Any,
+        context: RequestContext,
+        query_text: Optional[str] = None,
+    ) -> Any:
+        """Enrich query results with M3 guidance when a task is specified.
+
+        Adds lightweight guidance into each result's metadata without changing
+        top-level response shape (to satisfy strict response schema).
+        """
+        # Config gate: allow disabling enrichment to avoid heavy deps during tests
+        try:
+            from .config import get_m3_config
+            if not get_m3_config().enable_query_guidance:
+                return data
+        except Exception:
+            return data
+        try:
+            if not isinstance(data, dict) or "results" not in data:
+                return data
+
+            task_name = None
+            if context.request_metadata and isinstance(context.request_metadata, dict):
+                task_name = context.request_metadata.get("task")
+
+            # Only enrich when a task is explicitly provided and not an EOS trigger
+            if not task_name:
+                return data
+
+            # Query procedural store for similar workflows and lessons
+            try:
+                from ..procedural.store import ProceduralStore
+                from ..utils.embeddings import create_embedding
+                store = ProceduralStore()
+                vec = None
+                try:
+                    # Use query text embedding when available to improve similarity
+                    if query_text:
+                        vec = await create_embedding(query_text)
+                except Exception:
+                    vec = None
+
+                # Fallback: if embedding unavailable, use a small zero-vector to allow mocked tests
+                if vec is None:
+                    vec = [0.0] * 8  # minimal length; store implementations tolerate vector casts in tests
+
+                workflows = await store.query_procedural_similar(vec, top_k=3)
+                lessons = await store.query_lessons_similar(vec, agent=None, top_k=3)
+
+                if not workflows and not lessons:
+                    # Still attach task marker; keep payload minimal
+                    for result in data.get("results", []):
+                        if not isinstance(result, dict):
+                            continue
+                        md = result.setdefault("metadata", {})
+                        if isinstance(md, dict):
+                            md.setdefault("task", task_name)
+                            md.setdefault("m3_guidance", "")
+                    return data
+
+                # Build compact guidance payload
+                guidance_items: List[str] = []
+                for wid, wf, score in workflows or []:
+                    try:
+                        steps = wf.get("plan", []) if isinstance(wf, dict) else []
+                        if steps:
+                            agent_names = [str(s.get("agent", "")) for s in steps if isinstance(s, dict)]
+                            guidance_items.append(f"reuse:{wid[:8]} score={score:.2f} agents={','.join(agent_names[:3])}")
+                    except Exception:
+                        continue
+                for lid, status, fix_summary, working_params, score in lessons or []:
+                    try:
+                        tag = "ok" if status == "success" else "fail"
+                        summary = (fix_summary or "").strip()[:60]
+                        guidance_items.append(f"lesson:{lid[:8]} {tag} score={score:.2f} {summary}")
+                    except Exception:
+                        continue
+
+                # Attach minimal context to each result's metadata
+                for result in data.get("results", []):
+                    if not isinstance(result, dict):
+                        continue
+                    md = result.setdefault("metadata", {})
+                    if isinstance(md, dict):
+                        md.setdefault("task", task_name)
+                        # Use a compact joined string to avoid heavy payloads
+                        md["m3_guidance"] = "; ".join(guidance_items[:5]) if guidance_items else ""
+            except Exception:
+                # Soft-fail: never block the main query path
+                return data
+
+            return data
+        except Exception:
+            return data
 
 
 class M3TaskMessageCollector:

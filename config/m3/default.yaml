@@ -21,6 +21,7 @@ m3:
   enable_workflow_reuse: true  # Enable workflow reuse functionality
   enable_lesson_learning: true  # Enable lesson learning from failures
   enable_parallel_execution: true  # Enable parallel step execution (future)
+  enable_query_guidance: false  # Enable guidance enrichment on query (optional)
   
   # Agent-specific configurations
   agent_configs:

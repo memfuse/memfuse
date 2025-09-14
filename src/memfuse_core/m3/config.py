@@ -31,6 +31,8 @@ class M3Config:
     enable_workflow_reuse: bool = True
     enable_lesson_learning: bool = True
     enable_parallel_execution: bool = True
+    # Query-time guidance enrichment
+    enable_query_guidance: bool = False
     
     # Agent configurations
     agent_configs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -94,6 +96,7 @@ class M3Config:
             "enable_workflow_reuse": self.enable_workflow_reuse,
             "enable_lesson_learning": self.enable_lesson_learning,
             "enable_parallel_execution": self.enable_parallel_execution,
+            "enable_query_guidance": self.enable_query_guidance,
             "agent_configs": self.agent_configs,
         }
 
@@ -159,6 +162,7 @@ class M3ConfigManager:
             enable_workflow_reuse=env_config.enable_workflow_reuse if os.getenv("M3_ENABLE_WORKFLOW_REUSE") else config.enable_workflow_reuse,
             enable_lesson_learning=env_config.enable_lesson_learning if os.getenv("M3_ENABLE_LESSON_LEARNING") else config.enable_lesson_learning,
             enable_parallel_execution=config.enable_parallel_execution,
+            enable_query_guidance=config.enable_query_guidance,
             agent_configs=config.agent_configs,
         )
         

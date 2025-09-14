@@ -243,10 +243,19 @@ class MemoryApiGateway(GatewayInterface):
         # 4. Remove unwanted fields
         data = self.field_remover.transform(data, context)
         
-        # 5. Apply M3 enrichment if relevant
+        # 5. Apply M3 enrichment if relevant (sync metadata tags)
         data = self.m3_response_enricher.transform(data, context)
+        # 5b. Optionally enrich with guidance when task is present (async)
+        try:
+            data = await self.m3_response_enricher.enrich_results_with_m3_context(
+                data,
+                context,
+                (request_data or {}).get("query")
+            )
+        except Exception:
+            pass
 
-        # 6. Echo query back in response data for clarity
+        # 6. Echo query back in response data for clarity (API layer may strip it)
         try:
             if isinstance(data, dict) and request_data and request_data.get("query"):
                 data.setdefault("query", request_data.get("query"))

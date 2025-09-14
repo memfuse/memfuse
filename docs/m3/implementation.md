@@ -1,202 +1,35 @@
 # M3 Implementation Guide
 
-This document describes the complete M3 (Procedural Memory & Multi-Agent Orchestration) implementation that has been ported from the feat/134-m3 branch.
+This document summarizes the integrated M3 (Procedural Memory & Multi‑Agent Orchestration) design in this branch and its key changes versus the earlier feature branch docs.
 
-## Overview
+## Gateway Wiring
+- For ADD (write path): if a message carries `metadata.task` and `metadata.task_eos: true`, Gateway triggers `M3Processor` which invokes the Orchestrator and returns an M3‑shaped response. Regular message persistence proceeds and `message_workflows` gets logged.
+- For QUERY (read path): standard transform pipeline runs (normalize → enrich metadata → compute scope → remove forbidden fields). When `m3.enable_query_guidance: true` and the request includes `metadata.task`, Gateway attaches compact `metadata.m3_guidance` per result summarizing reusable workflows/lessons (no change to top‑level data shape, only metadata extension).
 
-M3 adds procedural memory and multi-agent orchestration capabilities to MemFuse, enabling:
+## DB Schema (direct change, no backward compatibility)
+- M0 `m0_raw`: now includes JSONB `metadata` to persist request metadata; GIN index added for metadata queries.
+- M1 `m1_episodic`: now includes JSONB `metadata`; GIN index added.
+- M2 `m2_semantic`: unchanged core fields (already had JSONB `metadata`).
+- M3 tables: created lazily by `ProceduralStore` (`procedural_memory`, `procedural_lessons`, `message_workflows`).
 
-1. **Task-based workflow orchestration** - Automatic decomposition of complex tasks into agent steps
-2. **Procedural memory reuse** - Learning from successful workflows and reusing them for similar tasks  
-3. **Lesson learning** - Capturing and applying lessons from both successful and failed executions
-4. **Task-specific experience retrieval** - Querying experiences and lessons for specific tasks
-
-## Architecture
-
-### Core Components
-
-#### 1. ProceduralStore (`src/memfuse_core/procedural/store.py`)
-- Manages three main tables:
-  - `message_workflows`: Links messages to M3 workflows
-  - `procedural_memory`: Stores successful workflows for reuse
-  - `procedural_lessons`: Stores lessons learned from executions
-- Provides vector similarity search for workflow and lesson matching
-- Handles workflow usage tracking and statistics
-
-#### 2. Orchestrator (`src/memfuse_core/m3/orchestrator.py`)
-- Main M3 workflow handler
-- Implements workflow reuse logic with similarity thresholds
-- Coordinates between Planner, AgentExecutor, and ProceduralStore
-- Handles planning, execution, and lesson storage
-
-#### 3. AgentExecutor (`src/memfuse_core/m3/executor.py`) 
-- Executes workflow steps using available agents
-- Manages context passing between steps
-- Handles error recovery and logging
-
-#### 4. Available Agents
-- **RAGQueryAgent**: Uses RAG service to answer queries
-- **ReportGenerationAgent**: Generates reports from data using LLM
-
-### Database Schema
-
-The M3 system uses three main tables:
-
-```sql
--- Links messages to M3 workflows
-CREATE TABLE message_workflows (
-    id TEXT PRIMARY KEY,
-    message_id TEXT NOT NULL,
-    workflow_id TEXT,
-    step_index INT,
-    tags TEXT[],
-    metadata JSONB,
-    created_at TIMESTAMP WITH TIME ZONE,
-    updated_at TIMESTAMP WITH TIME ZONE
-);
-
--- Stores successful workflows for reuse
-CREATE TABLE procedural_memory (
-    workflow_id TEXT PRIMARY KEY,
-    trigger_embedding VECTOR(384),
-    trigger_pattern TEXT,
-    successful_workflow JSONB NOT NULL,
-    usage_count INT DEFAULT 1,
-    created_at TIMESTAMP WITH TIME ZONE,
-    updated_at TIMESTAMP WITH TIME ZONE
-);
-
--- Stores lessons learned from executions
-CREATE TABLE procedural_lessons (
-    lesson_id TEXT PRIMARY KEY,
-    trigger_embedding VECTOR(384),
-    goal_text TEXT,
-    agent TEXT,
-    status TEXT CHECK (status IN ('success', 'fail')),
-    error TEXT,
-    fix_summary TEXT,
-    working_params JSONB,
-    created_at TIMESTAMP WITH TIME ZONE,
-    updated_at TIMESTAMP WITH TIME ZONE
-);
-```
-
-## API Integration
-
-### 1. Message API Integration
-
-The M3 system integrates with the message API to detect `task_eos` metadata:
-
-```python
-# Example message that triggers M3
-{
-    "role": "user",
-    "content": "Complete the research analysis",
-    "metadata": {
-        "task": "research_analysis", 
-        "task_eos": true
-    }
-}
-```
-
-When `task_eos: true` is detected:
-1. System retrieves all messages for that task
-2. Triggers M3 Orchestrator with task-scoped message history
-3. Returns M3 workflow result in the response
-
-### 2. Query API for Task-Specific Retrieval
-
-New query endpoints for M3 functionality:
-
-- `POST /query/experiences` - Query task-specific experiences and lessons
-- `POST /query/workflows` - Query similar workflows for reuse  
-- `GET /query/tasks` - List all tasks with experience statistics
-
-### 3. Gateway Integration
-
-The API Gateway includes M3 processing in the request pipeline:
-
-1. **M3 Trigger Detection**: Checks for M3 metadata (`task_eos`, `workflow_name`, etc.)
-2. **M3 Processing**: Routes M3 requests to the Orchestrator
-3. **Response Enrichment**: Adds M3 metadata to regular query responses
+## Response Contract
+- `status`, `code`, `data`, `message`, `errors` are always present.
+- `data` has only `results` and `total` (API layer strips internal echoes). Each result has required fields:
+  - `id`, `relevance_score`, `memory_type`, `created_at`, `updated_at`, `metadata`.
+  - Episodic: `content` exists, `fact` absent. Semantic: `fact={text, triples}` exists, `content` absent.
+  - `metadata` contains `user_id`, `agent_id`, `session_id`, `session_name`, `scope`; `scope` derived from request `session_id`.
+  - Forbidden: `level`, `retrieval`, `source`.
+  - Renames: `score → relevance_score`, `type → memory_type`. `derived_from` is nested under metadata for M2.
 
 ## Configuration
+See `config/m3/default.yaml`. In addition to reuse/learning toggles, this branch adds:
+- `enable_query_guidance` (default false): guard query‑time guidance enrichment.
 
-M3 behavior is controlled through configuration files and environment variables:
+## Differences vs `feat/134-m3`
+- Converged triggers: Orchestration only on write path (`task_eos`), optional guidance on read path.
+- Schema tightened: mandatory metadata fields with scope logic; forbidden fields removed; renames enforced.
+- M0/M1 persist request metadata, enabling lineage and future analysis.
 
-### Configuration File (`config/m3/default.yaml`)
-
-```yaml
-m3:
-  workflow_reuse_threshold: 0.9
-  max_workflow_reuse_candidates: 5
-  default_agent_timeout: 300
-  max_agent_retries: 3
-  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-  enable_workflow_reuse: true
-  enable_lesson_learning: true
-```
-
-### Environment Variables
-
-- `M3_WORKFLOW_REUSE_THRESHOLD`: Similarity threshold for workflow reuse
-- `M3_AGENT_TIMEOUT`: Default timeout for agent execution
-- `M3_EMBEDDING_MODEL`: Model used for embeddings
-- `M3_ENABLE_WORKFLOW_REUSE`: Enable/disable workflow reuse
-- `M3_ENABLE_LESSON_LEARNING`: Enable/disable lesson learning
-
-## Usage Examples
-
-### 1. Triggering M3 Workflows
-
-```python
-# Via message API with task_eos
-await add_messages(
-    session_id="session123",
-    messages=[{
-        "role": "user",
-        "content": "Analyze market trends and create report",
-        "metadata": {
-            "task": "market_analysis", 
-            "task_eos": True
-        }
-    }]
-)
-
-# Via gateway with workflow_name
-await gateway.process_request({
-    "user_id": "user123",
-    "query": "Generate quarterly report",
-    "metadata": {
-        "workflow_name": "quarterly_reporting"
-    }
-})
-```
-
-### 2. Querying Task Experiences
-
-```python
-# Query experiences for a specific task
-response = await query_task_experiences(
-    session_id="session123",
-    request={
-        "task_name": "market_analysis",
-        "query_text": "quarterly trends",
-        "limit": 10
-    }
-)
-
-# Response includes experiences and lessons
-{
-    "task_name": "market_analysis",
-    "experiences": [...],
-    "lessons": [...]
-}
-```
-
-### 3. Workflow Reuse
-
-When a similar task is encountered:
 
 1. System computes embedding for the new task
 2. Searches `procedural_memory` for similar workflows
