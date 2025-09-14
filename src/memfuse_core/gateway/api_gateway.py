@@ -19,6 +19,7 @@ from .processors import (
     ScopeCalculator,
     FieldRemover
 )
+from .m3_processor import M3Processor, M3ResponseEnricher, M3MetadataExtractor
 
 
 class MemoryRequestParser:
@@ -67,6 +68,11 @@ class MemoryApiGateway(GatewayInterface):
             'metadata.source'
         ]
         self.field_remover = FieldRemover(fields_to_remove=unused_fields)
+        
+        # Initialize M3 processors
+        self.m3_processor = M3Processor()
+        self.m3_response_enricher = M3ResponseEnricher()
+        self.m3_metadata_extractor = M3MetadataExtractor()
     
     async def process_request(
         self,
@@ -86,6 +92,19 @@ class MemoryApiGateway(GatewayInterface):
             context = await self._enrich_context(context)
             
             logger.info(f"Processing request for user {context.user_id}, operation: {operation_type}")
+            
+            # Check if this should trigger M3 workflow
+            if self.m3_processor.should_trigger_m3(request_data, context):
+                logger.info("Request triggers M3 workflow processing")
+                m3_response = await self.m3_processor.process_m3_request(request_data, context)
+                
+                # Apply minimal guardrails to M3 response
+                if not self.guardrail.validate_response(m3_response, context):
+                    logger.error("M3 response failed validation")
+                    return self._create_error_response("M3 response validation failed")
+                
+                self.guardrail.audit_response(m3_response, context)
+                return m3_response
             
             # Step 2: Route request to appropriate service
             routing_decision = self.router.route_request(context)
@@ -223,8 +242,11 @@ class MemoryApiGateway(GatewayInterface):
 
         # 4. Remove unwanted fields
         data = self.field_remover.transform(data, context)
+        
+        # 5. Apply M3 enrichment if relevant
+        data = self.m3_response_enricher.transform(data, context)
 
-        # 5. Echo query back in response data for clarity
+        # 6. Echo query back in response data for clarity
         try:
             if isinstance(data, dict) and request_data and request_data.get("query"):
                 data.setdefault("query", request_data.get("query"))

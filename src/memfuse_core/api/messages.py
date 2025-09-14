@@ -21,6 +21,7 @@ from ..utils import (
 )
 from ..services.database_service import DatabaseService
 from ..services.service_factory import ServiceFactory
+from ..m3.orchestrator import Orchestrator
 
 
 router = APIRouter()
@@ -104,6 +105,39 @@ def convert_pydantic_to_dict(
         else:
             result.append(cast(Dict[str, Any], message))
     return result
+
+
+async def get_task_messages(db: DatabaseService, session_id: str, task_name: str) -> List[Dict[str, Any]]:
+    """Get all messages for a specific task in a session.
+    
+    Args:
+        db: Database service instance
+        session_id: Session ID
+        task_name: Task name to filter by
+        
+    Returns:
+        List of messages with matching task metadata
+    """
+    try:
+        # Get all messages for the session
+        all_messages = await db.get_messages_by_session(
+            session_id=session_id,
+            limit=1000,  # Large limit to get all task messages
+            sort_by="timestamp",
+            order="asc"
+        )
+        
+        # Filter messages that belong to this task
+        task_messages = []
+        for msg in all_messages:
+            metadata = msg.get("metadata", {})
+            if metadata.get("task") == task_name:
+                task_messages.append(msg)
+        
+        return task_messages
+    except Exception as e:
+        logger.error(f"Failed to get task messages: {e}")
+        return []
 
 
 def normalize_messages_response(messages: Any) -> List[Dict[str, Any]]:
@@ -202,6 +236,33 @@ async def add_messages(
 
     # Convert messages and add them
     messages = convert_pydantic_to_dict(request.messages)
+    
+    # Check for M3 task_eos triggering
+    m3_result = None
+    for message in messages:
+        metadata = message.get("metadata", {})
+        if metadata.get("task_eos") is True:
+            task_name = metadata.get("task")
+            if task_name:
+                logger.info(f"M3 task_eos detected for task: {task_name}")
+                try:
+                    # Get task-scoped message history
+                    task_messages = await get_task_messages(db, session_id, task_name)
+                    task_messages.append(message)  # Include current message
+                    
+                    # Trigger M3 Orchestrator
+                    orchestrator = Orchestrator()
+                    m3_result = await orchestrator.handle_request(
+                        session_id=session_id,
+                        user_goal=message.get("content", ""),
+                        workflow_name=task_name,
+                        history_messages=task_messages
+                    )
+                    logger.info(f"M3 workflow completed: {m3_result}")
+                except Exception as e:
+                    logger.error(f"M3 workflow failed: {e}")
+                    # Continue with normal message processing
+    
     # P1 OPTIMIZATION: Pass session_id to add method
     result = await memory.add(messages, session_id=session_id)
 
@@ -222,6 +283,10 @@ async def add_messages(
         for key, value in result.items():
             if key not in ["status", "code", "data", "message", "errors"]:
                 response_data[key] = value
+    
+    # Add M3 result if available
+    if m3_result:
+        response_data["m3_workflow"] = m3_result
 
     return ApiResponse.success(
         data=response_data,

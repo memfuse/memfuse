@@ -1,0 +1,32 @@
+# M3 (Procedural Memory & Multi-Agent Orchestration) Configuration
+
+m3:
+  # Workflow reuse settings
+  workflow_reuse_threshold: 0.9  # Similarity threshold for workflow reuse
+  max_workflow_reuse_candidates: 5  # Maximum candidates to consider for reuse
+  
+  # Agent settings
+  default_agent_timeout: 300  # Default timeout in seconds for agent execution
+  max_agent_retries: 3  # Maximum retries for failed agent steps
+  
+  # Embedding settings
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  embedding_dim: 384
+  
+  # Database settings
+  max_workflow_history: 1000  # Maximum workflows to keep in history
+  max_lesson_history: 1000  # Maximum lessons to keep in history
+  
+  # Orchestrator settings
+  enable_workflow_reuse: true  # Enable workflow reuse functionality
+  enable_lesson_learning: true  # Enable lesson learning from failures
+  enable_parallel_execution: true  # Enable parallel step execution (future)
+  
+  # Agent-specific configurations
+  agent_configs:
+    RAGQueryAgent:
+      timeout: 60
+      max_results: 10
+    ReportGenerationAgent:
+      timeout: 120
+      max_length: 2000
