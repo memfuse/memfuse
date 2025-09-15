@@ -43,6 +43,10 @@ try:
 except Exception:  # pragma: no cover - fallback for environments without prompts
     PromptManager = None  # type: ignore
 
+# Global M2 processor lock to prevent multiple instances
+_m2_processor_lock = asyncio.Lock()
+_m2_processor_running = False
+
 
 class SimplifiedDatabaseManager:
     """Simplified database connection and management."""
@@ -782,8 +786,7 @@ class SimplifiedMemoryService(MessageInterface):
             v1 = cfg.get("m2_enabled") if hasattr(cfg, 'get') else None
             if isinstance(v1, bool):
                 logger.opt(colors=True).debug(
-                    "<magenta>[M2]</magenta> Config resolved: top-level m2_enabled=%s",
-                    v1,
+                    f"<magenta>[M2]</magenta> Config resolved: top-level m2_enabled={v1}"
                 )
                 return v1
 
@@ -792,8 +795,7 @@ class SimplifiedMemoryService(MessageInterface):
             v2 = ms.get("m2_enabled") if hasattr(ms, 'get') else None
             if isinstance(v2, bool):
                 logger.opt(colors=True).debug(
-                    "<magenta>[M2]</magenta> Config resolved: memory_service.m2_enabled=%s",
-                    v2,
+                    f"<magenta>[M2]</magenta> Config resolved: memory_service.m2_enabled={v2}"
                 )
                 return v2
 
@@ -802,8 +804,7 @@ class SimplifiedMemoryService(MessageInterface):
             v3 = memory.get("m2_enabled") if hasattr(memory, 'get') else None
             if isinstance(v3, bool):
                 logger.opt(colors=True).debug(
-                    "<magenta>[M2]</magenta> Config resolved: memory.m2_enabled=%s",
-                    v3,
+                    f"<magenta>[M2]</magenta> Config resolved: memory.m2_enabled={v3}"
                 )
                 return v3
 
@@ -812,8 +813,7 @@ class SimplifiedMemoryService(MessageInterface):
             v4 = memory_ms.get("m2_enabled") if hasattr(memory_ms, 'get') else None
             if isinstance(v4, bool):
                 logger.opt(colors=True).debug(
-                    "<magenta>[M2]</magenta> Config resolved: memory.memory_service.m2_enabled=%s",
-                    v4,
+                    f"<magenta>[M2]</magenta> Config resolved: memory.memory_service.m2_enabled={v4}"
                 )
                 return v4
 
@@ -828,16 +828,26 @@ class SimplifiedMemoryService(MessageInterface):
 
     async def _start_m2_background_processing(self):
         """Start autonomous M2 fact extraction background tasks."""
-        if self.m2_running and self.m2_processor_task and not self.m2_processor_task.done():
-            logger.debug("M2 autonomous background processing already running")
-            return
+        global _m2_processor_running
+        
+        async with _m2_processor_lock:
+            if _m2_processor_running:
+                logger.opt(colors=True).debug(
+                    "<magenta>[M2]</magenta> Background processor already running globally, skipping"
+                )
+                return
+                
+            if self.m2_running and self.m2_processor_task and not self.m2_processor_task.done():
+                logger.debug("M2 autonomous background processing already running for this instance")
+                return
 
-        self.m2_running = True
-        # M2 processor - completely independent of other operations
-        self.m2_processor_task = asyncio.create_task(self._m2_autonomous_processor())
-        logger.opt(colors=True).info(
-            "<magenta>[M2]</magenta> Autonomous background processing started"
-        )
+            _m2_processor_running = True
+            self.m2_running = True
+            # M2 processor - completely independent of other operations
+            self.m2_processor_task = asyncio.create_task(self._m2_autonomous_processor())
+            logger.opt(colors=True).info(
+                "<magenta>[M2]</magenta> Autonomous background processing started"
+            )
 
     async def _m2_autonomous_processor(self):
         """Main loop that autonomously processes pending M2 chunks in batches."""
@@ -849,10 +859,7 @@ class SimplifiedMemoryService(MessageInterface):
         # For global processing, we do not scope by user when scanning/locking.
         # We'll look up the chunk's user_id per item to save facts with correct ownership.
         logger.opt(colors=True).info(
-            "<magenta>[M2]</magenta> Processor configured | batch_size=%s | interval=%ss | concurrency=%s",
-            batch_size,
-            interval_secs,
-            concurrency,
+            f"<magenta>[M2]</magenta> Processor configured | batch_size={batch_size} | interval={interval_secs}s | concurrency={concurrency}"
         )
 
         # One-time visibility probe flag
@@ -877,13 +884,11 @@ class SimplifiedMemoryService(MessageInterface):
                                     )
                                     total_pending = cur.fetchone()[0]
                                     logger.opt(colors=True).info(
-                                        "<magenta>[M2]</magenta> Probe: total pending chunks in DB = %s",
-                                        total_pending,
+                                        f"<magenta>[M2]</magenta> Probe: total pending chunks in DB = {total_pending}"
                                     )
                         except Exception as probe_err:
                             logger.opt(colors=True).warning(
-                                "<magenta>[M2]</magenta> Probe failed: %s",
-                                probe_err,
+                                f"<magenta>[M2]</magenta> Probe failed: {probe_err}"
                             )
                         finally:
                             probe_logged = True
@@ -906,16 +911,14 @@ class SimplifiedMemoryService(MessageInterface):
                         )
 
                     if not pending_ids:
-                        logger.opt(colors=True).info(
-                            "<magenta>[M2]</magenta> No pending chunks. Sleeping %ss",
-                            interval_secs,
+                        logger.opt(colors=True).debug(
+                            f"<magenta>[M2]</magenta> No pending chunks. Sleeping {interval_secs}s"
                         )
                         await asyncio.sleep(interval_secs)
                         continue
 
                     logger.opt(colors=True).info(
-                        "<magenta>[M2]</magenta> Found %s pending chunk(s)",
-                        len(pending_ids),
+                        f"<magenta>[M2]</magenta> Found {len(pending_ids)} pending chunk(s)"
                     )
 
                     processed = 0
@@ -939,16 +942,14 @@ class SimplifiedMemoryService(MessageInterface):
                                     # Could be racing with another worker; skip
                                     short_id2 = str(chunk_id)[:8]
                                     logger.opt(colors=True).info(
-                                        "<magenta>[M2]</magenta> Skip chunk %s: could not acquire lock",
-                                        short_id2,
+                                        f"<magenta>[M2]</magenta> Skip chunk {short_id2}: could not acquire lock"
                                     )
                                     return (0, 0, 0)
 
                             local_processed = 1
                             short_id2 = str(chunk_id)[:8]
                             logger.opt(colors=True).info(
-                                "<magenta>[M2]</magenta> Locked chunk %s for processing",
-                                short_id2,
+                                f"<magenta>[M2]</magenta> Locked chunk {short_id2} for processing"
                             )
 
                             try:
@@ -965,10 +966,7 @@ class SimplifiedMemoryService(MessageInterface):
                                 )
                                 ext_duration2 = time.monotonic() - ext_started2
                                 logger.opt(colors=True).info(
-                                    "<magenta>[M2]</magenta> Extracted %s fact strings for chunk %s in %.2fs",
-                                    len(extracted_facts or []),
-                                    short_id2,
-                                    ext_duration2,
+                                    f"<magenta>[M2]</magenta> Extracted {len(extracted_facts or [])} fact strings for chunk {short_id2} in {ext_duration2:.2f}s"
                                 )
 
                                 # Convert to fact dicts for saving/marking completed
@@ -1008,8 +1006,7 @@ class SimplifiedMemoryService(MessageInterface):
                                 if not fact_dicts:
                                     local_failed = 1
                                     logger.opt(colors=True).warning(
-                                        "<magenta>[M2]</magenta> No facts extracted for chunk %s; marking failed",
-                                        short_id2,
+                                        f"<magenta>[M2]</magenta> No facts extracted for chunk {short_id2}; marking failed"
                                     )
                                     try:
                                         await self._mark_chunk_m2_failed(
@@ -1026,8 +1023,7 @@ class SimplifiedMemoryService(MessageInterface):
                                 if not completed2:
                                     local_failed = 1
                                     logger.opt(colors=True).error(
-                                        "<magenta>[M2]</magenta> Failed to save/complete for chunk %s; marking failed",
-                                        short_id2,
+                                        f"<magenta>[M2]</magenta> Failed to save/complete for chunk {short_id2}; marking failed"
                                     )
                                     try:
                                         await self._mark_chunk_m2_failed(
@@ -1038,9 +1034,7 @@ class SimplifiedMemoryService(MessageInterface):
                                 else:
                                     local_succeeded = 1
                                     logger.opt(colors=True).info(
-                                        "<magenta>[M2]</magenta> Completed chunk %s | facts_saved=%s",
-                                        short_id2,
-                                        len(fact_dicts),
+                                        f"<magenta>[M2]</magenta> Completed chunk {short_id2} | facts_saved={len(fact_dicts)}"
                                     )
                             except asyncio.CancelledError:
                                 raise
@@ -1087,16 +1081,9 @@ class SimplifiedMemoryService(MessageInterface):
                         backoff_factor = 1.5
                     sleep_actual *= backoff_factor
                     logger.opt(colors=True).info(
-                        "<magenta>[M2]</magenta> Batch summary | scanned=%s | "
-                        "processed=%s | succeeded=%s | failed=%s | duration=%.2fs | "
-                        "sleep=%.2fs | backoff=%.2fx",
-                        len(pending_ids),
-                        processed,
-                        succeeded,
-                        failed,
-                        batch_duration,
-                        sleep_actual,
-                        backoff_factor,
+                        f"<magenta>[M2]</magenta> Batch summary | scanned={len(pending_ids)} | "
+                        f"processed={processed} | succeeded={succeeded} | failed={failed} | duration={batch_duration:.2f}s | "
+                        f"sleep={sleep_actual:.2f}s | backoff={backoff_factor:.2f}x"
                     )
 
                     # Pace between batches to reduce DB pressure
@@ -1109,6 +1096,9 @@ class SimplifiedMemoryService(MessageInterface):
                     # Backoff before next iteration to avoid tight error loops
                     await asyncio.sleep(interval_secs)
         finally:
+            global _m2_processor_running
+            _m2_processor_running = False
+            self.m2_running = False
             logger.opt(colors=True).info(
                 "<magenta>[M2]</magenta> Autonomous background processing stopped"
             )
@@ -1631,10 +1621,8 @@ class SimplifiedMemoryService(MessageInterface):
                     for row in rows:
                         results.append(str(row[0]))
             
-            logger.opt(colors=True).info(
-                "<magenta>[M2]</magenta> Found %s pending chunk ID(s) (batch_size=%s)",
-                len(results),
-                batch_size,
+            logger.opt(colors=True).debug(
+                f"<magenta>[M2]</magenta> Found {len(results)} pending chunk ID(s) (batch_size={batch_size})"
             )
             if results:
                 sample = ", ".join([rid[:8] for rid in results[: min(5, len(results))]])
@@ -1695,8 +1683,7 @@ class SimplifiedMemoryService(MessageInterface):
 
             if results:
                 logger.opt(colors=True).info(
-                    "<magenta>[M2]</magenta> Claimed %s pending chunk ID(s) via SKIP LOCKED",
-                    len(results),
+                    f"<magenta>[M2]</magenta> Claimed {len(results)} pending chunk ID(s) via SKIP LOCKED"
                 )
             return results
         except Exception as e:
@@ -1747,7 +1734,7 @@ class SimplifiedMemoryService(MessageInterface):
                         """, (chunk_id, user_id))
                     else:
                         # No user filtering (fallback)
-                        logger.warning("_get_m1_chunk: No user_id provided, querying without user filter")
+                        logger.debug("_get_m1_chunk: No user_id provided, querying without user filter")
                         cur.execute("""
                             SELECT 
                                 chunk_id,
@@ -2320,7 +2307,7 @@ class SimplifiedMemoryService(MessageInterface):
                             WHERE chunk_id = %s AND user_id = %s
                         """, (chunk_id, user_id))
                     else:
-                        logger.warning("_get_session_context_for_chunk: No user_id provided, querying without user filter")
+                        logger.debug("_get_session_context_for_chunk: No user_id provided, querying without user filter")
                         cur.execute("""
                             SELECT session_id, created_at 
                             FROM m1_episodic 
