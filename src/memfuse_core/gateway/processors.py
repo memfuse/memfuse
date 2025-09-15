@@ -79,6 +79,10 @@ class QueryResponseProcessor:
 
         # Handle different memory types
         memory_type = transformed.get('memory_type', 'episodic')  # Default to episodic
+        # Normalize memory_type: map granular to canonical
+        if memory_type in ['chunk', 'message']:
+            memory_type = 'episodic'
+            transformed['memory_type'] = 'episodic'
 
         # For M1 (episodic) memories - keep content field
         if memory_type in ['episodic', 'message', 'chunk']:
@@ -88,20 +92,31 @@ class QueryResponseProcessor:
                 return None
 
         # For M2 (semantic) memories - use fact structure
-        elif memory_type in ['semantic', 'M2 Semantic']:
+        elif memory_type in ['semantic', 'M2 Semantic', 'knowledge']:
             # Transform to semantic format with fact structure
             content = transformed.get('content', '')
             transformed['fact'] = {
                 'text': content,
-                'triples': None  # Could be populated later if available
+                'triples': transformed.get('triples')  # Use existing triples if available
             }
             # Remove content field for semantic memories
             transformed.pop('content', None)
             # Normalize memory_type to 'semantic'
             transformed['memory_type'] = 'semantic'
+            
+            # Handle derived_from metadata for M2 memories
+            if 'metadata' in transformed and isinstance(transformed['metadata'], dict):
+                metadata = transformed['metadata']
+                # Move derived_from to correct location if it exists
+                if 'derived_from' not in metadata and 'derived_from' in transformed:
+                    metadata['derived_from'] = transformed.pop('derived_from')
+
+        # Ensure updated_at field exists; allow null if unknown
+        if 'updated_at' not in transformed:
+            transformed['updated_at'] = transformed.get('created_at') or None
 
         # Remove unused fields at top level (done early to ensure clean data)
-        unused_top_level_fields = ['role', 'source', 'similarity_score', 'scope']
+        unused_top_level_fields = ['role', 'source', 'similarity_score', 'scope', 'distance']
         for field in unused_top_level_fields:
             transformed.pop(field, None)
 
@@ -158,6 +173,9 @@ class MetadataEnricher:
 
         if 'session_name' not in metadata and context.session_name:
             metadata['session_name'] = context.session_name
+        if 'session_name' not in metadata:
+            # Ensure presence as empty string to satisfy schema type
+            metadata['session_name'] = ""
 
         # Add task and mode from request metadata if available
         if context.request_metadata:

@@ -307,6 +307,13 @@ async def query_memory(
         operation_type=OperationType.QUERY
     )
 
+    # Strip gateway-only extras to satisfy API contract (no extra keys in data)
+    try:
+        if isinstance(response, dict) and isinstance(response.get('data'), dict):
+            response['data'].pop('query', None)
+    except Exception:
+        pass
+
     # Return the gateway response directly (it's already in ApiResponse format)
     if isinstance(response, dict) and 'status' in response:
         return ApiResponse(**response)

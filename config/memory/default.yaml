@@ -170,6 +170,16 @@ memory_service:
   timeout_per_layer: 30.0 # Timeout per layer (seconds)
   max_retries: 3 # Maximum retry attempts
 
+# -----------------------------------------------------------------------------
+# Autonomous M2 Background Worker (SimplifiedMemoryService)
+# -----------------------------------------------------------------------------
+# Flat keys read directly by SimplifiedMemoryService
+# These duplicate some intent from nested sections but are used explicitly by
+# the simplified service to gate and tune autonomous background processing.
+m2_enabled: true           # Gate for starting M2 background worker
+m2_batch_size: 5           # Number of chunks processed per batch
+m2_interval_secs: 5.0      # Sleep interval between batch scans (seconds)
+
 # =============================================================================
 # PERFORMANCE AND MONITORING
 # =============================================================================

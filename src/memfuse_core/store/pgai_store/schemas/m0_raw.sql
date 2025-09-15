@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS m0_raw (
     -- Content and metadata
     content TEXT NOT NULL,
     role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    -- Preserve original request metadata (e.g., task/mode) for lineage
+    metadata JSONB DEFAULT '{}'::jsonb,
 
     -- User and session context
     user_id TEXT NOT NULL,
@@ -62,6 +64,10 @@ CREATE INDEX IF NOT EXISTS idx_m0_role
 
 CREATE INDEX IF NOT EXISTS idx_m0_token_count
     ON m0_raw (token_count);
+
+-- GIN index for metadata queries
+CREATE INDEX IF NOT EXISTS idx_m0_metadata_gin
+    ON m0_raw USING gin (metadata);
 
 -- GIN index for chunk assignments (lineage queries)
 CREATE INDEX IF NOT EXISTS idx_m0_chunk_assignments_gin
@@ -120,6 +126,7 @@ COMMENT ON TABLE m0_raw IS 'M0 Raw Messages Layer - Stores original streaming me
 COMMENT ON COLUMN m0_raw.message_id IS 'Unique identifier for the raw message';
 COMMENT ON COLUMN m0_raw.content IS 'Original message content without any processing';
 COMMENT ON COLUMN m0_raw.role IS 'Message role: user, assistant, or system';
+COMMENT ON COLUMN m0_raw.metadata IS 'Original request metadata (task/mode/etc)';
 COMMENT ON COLUMN m0_raw.session_id IS 'Session context identifier';
 COMMENT ON COLUMN m0_raw.sequence_number IS 'Message sequence number within session';
 COMMENT ON COLUMN m0_raw.token_count IS 'Token count for chunking decisions';

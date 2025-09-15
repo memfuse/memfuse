@@ -17,7 +17,6 @@ from ..rag.base import BaseRetrieval
 
 
 # Export specific implementations
-from .vector_store.qdrant_store import QdrantVectorStore
 from .vector_store.numpy_store import NumpyVectorStore
 from .vector_store.sqlite_store import SQLiteVectorStore
 from .graph_store.graphml_store import GraphMLStore
@@ -46,7 +45,6 @@ __all__ = [
 
     # Vector store implementations
     'NumpyVectorStore',
-    'QdrantVectorStore',
     'SQLiteVectorStore',
 
     # Graph store implementations

@@ -977,20 +977,26 @@ class PgaiStore(ChunkStoreInterface):
                         if self.table_name == 'm0_raw':
                             await cur.execute(f"""
                                 INSERT INTO {self.table_name}
-                                (message_id, content, session_id, user_id, round_id, needs_embedding)
-                                VALUES (%s, %s, %s, %s, %s, TRUE)
+                                (message_id, content, session_id, user_id, round_id, sequence_number, token_count, metadata, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)
                                 ON CONFLICT (message_id) DO UPDATE SET
                                     content = EXCLUDED.content,
                                     session_id = EXCLUDED.session_id,
                                     user_id = EXCLUDED.user_id,
                                     round_id = EXCLUDED.round_id,
+                                    sequence_number = EXCLUDED.sequence_number,
+                                    token_count = EXCLUDED.token_count,
+                                    metadata = EXCLUDED.metadata,
                                     needs_embedding = TRUE
                             """, (
                                 chunk.chunk_id,
                                 chunk.content,
                                 session_id,
                                 user_id,
-                                round_id
+                                round_id,
+                                (chunk.metadata or {}).get('sequence_number', 0),
+                                (chunk.metadata or {}).get('token_count', len((chunk.content or '').split())),
+                                metadata_json,
                             ))
                         elif self.table_name == 'm1_episodic':
                             # M1 table uses chunk_id as primary key and has conversation_id
@@ -1005,8 +1011,8 @@ class PgaiStore(ChunkStoreInterface):
                             await cur.execute(f"""
                                 INSERT INTO {self.table_name}
                                 (chunk_id, content, conversation_id, chunking_strategy, token_count,
-                                 chunk_quality_score, m0_raw_ids, needs_embedding)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+                                 chunk_quality_score, m0_raw_ids, metadata, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)
                                 ON CONFLICT (chunk_id) DO UPDATE SET
                                     content = EXCLUDED.content,
                                     conversation_id = EXCLUDED.conversation_id,
@@ -1014,6 +1020,7 @@ class PgaiStore(ChunkStoreInterface):
                                     token_count = EXCLUDED.token_count,
                                     chunk_quality_score = EXCLUDED.chunk_quality_score,
                                     m0_raw_ids = EXCLUDED.m0_raw_ids,
+                                    metadata = EXCLUDED.metadata,
                                     needs_embedding = TRUE
                             """, (
                                 chunk.chunk_id,
@@ -1022,7 +1029,8 @@ class PgaiStore(ChunkStoreInterface):
                                 chunking_strategy,
                                 token_count,
                                 chunk_quality_score,
-                                m0_raw_ids
+                                m0_raw_ids,
+                                metadata_json
                             ))
                         else:
                             await cur.execute(f"""
@@ -1094,8 +1102,8 @@ class PgaiStore(ChunkStoreInterface):
                             await cur.execute(f"""
                                 INSERT INTO {self.table_name}
                                 (chunk_id, content, conversation_id, chunking_strategy, token_count,
-                                 chunk_quality_score, m0_raw_ids, embedding, needs_embedding)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+                                 chunk_quality_score, m0_raw_ids, metadata, embedding, needs_embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
                                 ON CONFLICT (chunk_id) DO UPDATE SET
                                     content = EXCLUDED.content,
                                     conversation_id = EXCLUDED.conversation_id,
@@ -1103,6 +1111,7 @@ class PgaiStore(ChunkStoreInterface):
                                     token_count = EXCLUDED.token_count,
                                     chunk_quality_score = EXCLUDED.chunk_quality_score,
                                     m0_raw_ids = EXCLUDED.m0_raw_ids,
+                                    metadata = EXCLUDED.metadata,
                                     embedding = EXCLUDED.embedding,
                                     needs_embedding = FALSE
                             """, (
@@ -1113,6 +1122,7 @@ class PgaiStore(ChunkStoreInterface):
                                 token_count,
                                 chunk_quality_score,
                                 m0_raw_ids,
+                                metadata_json,
                                 embedding
                             ))
                         else:

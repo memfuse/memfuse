@@ -11,9 +11,11 @@ import uuid
 import pytest
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
+from unittest.mock import patch
 
 from src.memfuse_core.services.simplified_memory_service import SimplifiedMemoryService
 from src.memfuse_core.models.core import M2Status
+from src.memfuse_core.models.m2_extraction import FactExtractionResponse
 
 
 @pytest.mark.unit
@@ -2173,6 +2175,864 @@ class TestSimplifiedMemoryServiceM2:
             assert final_chunk_data['m2_status'] == M2Status.FAILED.value
             assert final_chunk_data['m2_processing_started_at'] is not None
             assert final_chunk_data['m2_processing_ended_at'] is not None
+
+
+class TestBuildFactExtractionPrompt:
+    """Test cases for _build_fact_extraction_prompt method."""
+    
+    @pytest.fixture
+    async def service(self):
+        """Create and initialize a SimplifiedMemoryService for testing."""
+        service = SimplifiedMemoryService(
+            user="test_user_prompt",
+            agent="test_agent"
+        )
+        await service.initialize()
+        yield service
+        await service.close()
+    
+    @pytest.fixture
+    def sample_target_chunk(self):
+        """Create a sample target chunk for testing."""
+        return {
+            'chunk_id': str(uuid.uuid4()),
+            'content': 'This is the target chunk about machine learning algorithms and neural networks.',
+            'user_id': str(uuid.uuid4()),
+            'session_id': str(uuid.uuid4()),
+            'token_count': 20,
+            'created_at': datetime.now(),
+            'metadata': {'source': 'test'}
+        }
+    
+    @pytest.fixture
+    def sample_context_chunks(self):
+        """Create sample context chunks for testing."""
+        from src.memfuse_core.models.core import Chunk, M2Status
+        
+        base_time = datetime.now() - timedelta(hours=2)
+        chunks = []
+        
+        for i in range(3):
+            chunk = Chunk(
+                chunk_id=str(uuid.uuid4()),
+                content=f'Context chunk {i+1}: This discusses related concepts to the main topic.',
+                token_count=15 + i * 5,
+                user_id=str(uuid.uuid4()),
+                session_id=str(uuid.uuid4()),
+                created_at=base_time + timedelta(minutes=i * 15),
+                m2_status=M2Status.PENDING,
+                chunking_strategy='token_based',
+                m0_raw_ids=[str(uuid.uuid4())],
+                metadata={'context_index': i}
+            )
+            chunks.append(chunk)
+        
+        return chunks
+    
+    # Happy Path Tests
+    
+    def test_build_prompt_with_normal_context(self, service, sample_target_chunk, sample_context_chunks):
+        """Test _build_fact_extraction_prompt with normal context chunks."""
+        result = service._build_fact_extraction_prompt(sample_target_chunk, sample_context_chunks)
+        
+        # Validate output structure
+        assert isinstance(result, list)
+        assert len(result) == 2  # System and user messages
+        
+        # Validate message structure
+        system_msg = result[0]
+        user_msg = result[1]
+        
+        assert isinstance(system_msg, dict)
+        assert isinstance(user_msg, dict)
+        assert 'role' in system_msg and 'content' in system_msg
+        assert 'role' in user_msg and 'content' in user_msg
+        assert system_msg['role'] == 'system'
+        assert user_msg['role'] == 'user'
+        
+        # Validate content is not empty
+        assert len(system_msg['content']) > 0
+        assert len(user_msg['content']) > 0
+        
+        # Validate target chunk content is in user message
+        assert sample_target_chunk['content'] in user_msg['content']
+    
+    def test_build_prompt_context_formatting(self, service, sample_target_chunk, sample_context_chunks):
+        """Test that context chunks are properly formatted chronologically."""
+        result = service._build_fact_extraction_prompt(sample_target_chunk, sample_context_chunks)
+        
+        system_content = result[0]['content']
+        
+        # Should contain context chunk content
+        for i, chunk in enumerate(sample_context_chunks):
+            assert f'Context chunk {i+1}' in chunk.content
+            assert chunk.content in system_content
+        
+        # Check for timestamp information
+        for chunk in sample_context_chunks:
+            # Should contain timestamp info
+            assert str(chunk.created_at) in system_content
+    
+    def test_build_prompt_with_single_context_chunk(self, service, sample_target_chunk):
+        """Test _build_fact_extraction_prompt with single context chunk."""
+        from src.memfuse_core.models.core import Chunk, M2Status
+        
+        single_chunk = [Chunk(
+            chunk_id=str(uuid.uuid4()),
+            content='Single context chunk with relevant information.',
+            token_count=10,
+            user_id=str(uuid.uuid4()),
+            session_id=str(uuid.uuid4()),
+            created_at=datetime.now() - timedelta(minutes=30),
+            m2_status=M2Status.PENDING
+        )]
+        
+        result = service._build_fact_extraction_prompt(sample_target_chunk, single_chunk)
+        
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert 'Single context chunk with relevant information' in result[0]['content']
+    
+    # Edge Case Tests
+    
+    def test_build_prompt_with_empty_context(self, service, sample_target_chunk):
+        """Test _build_fact_extraction_prompt with empty context chunks."""
+        result = service._build_fact_extraction_prompt(sample_target_chunk, [])
+        
+        assert isinstance(result, list)
+        assert len(result) == 2
+        
+        # Should contain "No additional context" message
+        system_content = result[0]['content']
+        assert 'No additional context chunks available' in system_content or 'no context' in system_content.lower()
+        
+        # Target chunk content should still be present
+        assert sample_target_chunk['content'] in result[1]['content']
+    
+    def test_build_prompt_with_empty_target_content(self, service, sample_context_chunks):
+        """Test _build_fact_extraction_prompt with empty target chunk content."""
+        empty_target_chunk = {
+            'chunk_id': str(uuid.uuid4()),
+            'content': '',
+            'user_id': str(uuid.uuid4()),
+            'session_id': str(uuid.uuid4()),
+            'token_count': 0,
+            'created_at': datetime.now()
+        }
+        
+        result = service._build_fact_extraction_prompt(empty_target_chunk, sample_context_chunks)
+        
+        assert isinstance(result, list)
+        assert len(result) == 2
+        # Should handle empty content gracefully
+        assert isinstance(result[1]['content'], str)
+    
+    def test_build_prompt_with_missing_content_field(self, service, sample_context_chunks):
+        """Test _build_fact_extraction_prompt with missing content field in target chunk."""
+        target_chunk_no_content = {
+            'chunk_id': str(uuid.uuid4()),
+            'user_id': str(uuid.uuid4()),
+            'session_id': str(uuid.uuid4()),
+            'token_count': 0,
+            'created_at': datetime.now()
+            # Missing 'content' field
+        }
+        
+        result = service._build_fact_extraction_prompt(target_chunk_no_content, sample_context_chunks)
+        
+        assert isinstance(result, list)
+        assert len(result) == 2
+        # Should handle missing content field gracefully (empty string fallback)
+        assert isinstance(result[1]['content'], str)
+    
+    def test_build_prompt_with_none_inputs(self, service):
+        """Test _build_fact_extraction_prompt with None inputs."""
+        # Should handle None gracefully without crashing
+        result = service._build_fact_extraction_prompt(None, None)
+        
+        assert isinstance(result, list)
+        assert len(result) == 2
+        # Should fall back to basic prompt structure
+        assert all('role' in msg and 'content' in msg for msg in result)
+    
+    def test_build_prompt_with_large_context_set(self, service, sample_target_chunk):
+        """Test _build_fact_extraction_prompt with many context chunks."""
+        from src.memfuse_core.models.core import Chunk, M2Status
+        
+        # Create 10 context chunks
+        large_context = []
+        base_time = datetime.now() - timedelta(hours=5)
+        
+        for i in range(10):
+            chunk = Chunk(
+                chunk_id=str(uuid.uuid4()),
+                content=f'Large context chunk {i+1} with detailed information about various topics.',
+                token_count=25,
+                user_id=str(uuid.uuid4()),
+                session_id=str(uuid.uuid4()),
+                created_at=base_time + timedelta(minutes=i * 10),
+                m2_status=M2Status.PENDING
+            )
+            large_context.append(chunk)
+        
+        result = service._build_fact_extraction_prompt(sample_target_chunk, large_context)
+        
+        assert isinstance(result, list)
+        assert len(result) == 2
+        
+        # Should handle large context set gracefully
+        system_content = result[0]['content']
+        assert 'Context Chunk 1' in system_content
+        assert 'Context Chunk 10' in system_content
+    
+    # Error Handling Tests
+    
+    @pytest.mark.asyncio
+    async def test_build_prompt_prompt_manager_import_error(self, service, sample_target_chunk, sample_context_chunks):
+        """Test _build_fact_extraction_prompt when PromptManager import fails."""
+        from unittest.mock import patch
+        
+        # Mock import failure
+        with patch('src.memfuse_core.services.simplified_memory_service.PromptManager', side_effect=ImportError("PromptManager not available")):
+            result = service._build_fact_extraction_prompt(sample_target_chunk, sample_context_chunks)
+        
+        # Should fall back to basic prompt
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert result[0]['role'] == 'system'
+        assert result[1]['role'] == 'user'
+        
+        # Should contain fallback content
+        assert 'Extract semantic facts' in result[1]['content']
+        assert sample_target_chunk['content'] in result[1]['content']
+    
+    @pytest.mark.asyncio
+    async def test_build_prompt_prompt_manager_get_prompt_error(self, service, sample_target_chunk, sample_context_chunks):
+        """Test _build_fact_extraction_prompt when PromptManager.get_prompt fails."""
+        from unittest.mock import patch, MagicMock
+        
+        # Mock PromptManager.get_prompt to raise exception
+        mock_prompt_manager = MagicMock()
+        mock_prompt_manager.get_prompt.side_effect = Exception("Template not found")
+        
+        with patch('src.memfuse_core.services.simplified_memory_service.PromptManager') as mock_pm_class:
+            mock_pm_class.get_prompt = mock_prompt_manager.get_prompt
+            result = service._build_fact_extraction_prompt(sample_target_chunk, sample_context_chunks)
+        
+        # Should fall back to basic prompt
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert 'Extract semantic facts' in result[1]['content']
+    
+    # Output Validation Tests
+    
+    def test_build_prompt_output_message_structure(self, service, sample_target_chunk, sample_context_chunks):
+        """Test that output messages have proper structure."""
+        result = service._build_fact_extraction_prompt(sample_target_chunk, sample_context_chunks)
+        
+        # Validate each message structure
+        for i, message in enumerate(result):
+            assert isinstance(message, dict), f"Message {i} should be a dictionary"
+            assert 'role' in message, f"Message {i} should have 'role' field"
+            assert 'content' in message, f"Message {i} should have 'content' field"
+            assert isinstance(message['role'], str), f"Message {i} role should be string"
+            assert isinstance(message['content'], str), f"Message {i} content should be string"
+            assert len(message['content']) > 0, f"Message {i} content should not be empty"
+        
+        # Validate roles
+        assert result[0]['role'] == 'system'
+        assert result[1]['role'] == 'user'
+    
+    def test_build_prompt_system_message_content(self, service, sample_target_chunk, sample_context_chunks):
+        """Test system message contains expected template elements."""
+        result = service._build_fact_extraction_prompt(sample_target_chunk, sample_context_chunks)
+        
+        system_content = result[0]['content']
+        
+        # Should contain context information
+        for chunk in sample_context_chunks:
+            assert chunk.content in system_content
+        
+        # Should contain formatting markers
+        assert 'Context Chunk' in system_content
+        assert 'timestamp:' in system_content
+    
+    def test_build_prompt_user_message_content(self, service, sample_target_chunk, sample_context_chunks):
+        """Test user message contains target chunk content."""
+        result = service._build_fact_extraction_prompt(sample_target_chunk, sample_context_chunks)
+        
+        user_content = result[1]['content']
+        
+        # Should contain target chunk content
+        assert sample_target_chunk['content'] in user_content
+        
+        # Should have some structure for fact extraction
+        assert len(user_content) > len(sample_target_chunk['content'])
+    
+    # Data Structure Tests
+    
+    def test_build_prompt_context_chronological_ordering(self, service, sample_target_chunk):
+        """Test that context chunks are ordered chronologically."""
+        from src.memfuse_core.models.core import Chunk, M2Status
+        
+        # Create chunks with specific timestamps in reverse order
+        base_time = datetime.now()
+        chunks = []
+        
+        for i in [2, 0, 1]:  # Intentionally out of order
+            chunk = Chunk(
+                chunk_id=str(uuid.uuid4()),
+                content=f'Chunk with timestamp order {i}',
+                token_count=10,
+                user_id=str(uuid.uuid4()),
+                session_id=str(uuid.uuid4()),
+                created_at=base_time - timedelta(hours=i),
+                m2_status=M2Status.PENDING
+            )
+            chunks.append(chunk)
+        
+        result = service._build_fact_extraction_prompt(sample_target_chunk, chunks)
+        system_content = result[0]['content']
+        
+        # Find positions of chunks in the formatted content
+        pos_0 = system_content.find('timestamp order 0')
+        pos_1 = system_content.find('timestamp order 1') 
+        pos_2 = system_content.find('timestamp order 2')
+        
+        # Should be in chronological order (0 hours ago, 1 hour ago, 2 hours ago)
+        # Which means reverse order from creation (2, 1, 0)
+        assert pos_2 < pos_1 < pos_0, "Context chunks should be ordered chronologically"
+    
+    def test_build_prompt_with_chunks_missing_timestamps(self, service, sample_target_chunk):
+        """Test _build_fact_extraction_prompt with context chunks missing created_at."""
+        from src.memfuse_core.models.core import Chunk, M2Status
+        
+        # Create chunk without proper timestamp (will default to now)
+        chunk_no_timestamp = Chunk(
+            chunk_id=str(uuid.uuid4()),
+            content='Chunk without specific timestamp',
+            token_count=10,
+            user_id=str(uuid.uuid4()),
+            session_id=str(uuid.uuid4()),
+            created_at=datetime.now(),  # This will be set to current time
+            m2_status=M2Status.PENDING
+        )
+        
+        result = service._build_fact_extraction_prompt(sample_target_chunk, [chunk_no_timestamp])
+        
+        # Should handle gracefully
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert 'Chunk without specific timestamp' in result[0]['content']
+    
+    def test_build_prompt_preserves_chunk_metadata(self, service, sample_target_chunk):
+        """Test that method properly accesses chunk content and metadata."""
+        from src.memfuse_core.models.core import Chunk, M2Status
+        
+        chunk_with_metadata = Chunk(
+            chunk_id=str(uuid.uuid4()),
+            content='Chunk with important metadata information',
+            token_count=10,
+            user_id=str(uuid.uuid4()),
+            session_id=str(uuid.uuid4()),
+            created_at=datetime.now() - timedelta(minutes=30),
+            m2_status=M2Status.PENDING,
+            metadata={'importance': 'high', 'category': 'technical'}
+        )
+        
+        result = service._build_fact_extraction_prompt(sample_target_chunk, [chunk_with_metadata])
+        
+        # Should access chunk content properly
+        assert 'important metadata information' in result[0]['content']
+    
+    def test_build_prompt_handles_various_content_lengths(self, service, sample_context_chunks):
+        """Test _build_fact_extraction_prompt with various target chunk content lengths."""
+        # Test with very short content
+        short_target = {
+            'content': 'Short.',
+            'chunk_id': str(uuid.uuid4()),
+            'user_id': str(uuid.uuid4()),
+            'created_at': datetime.now()
+        }
+        
+        result_short = service._build_fact_extraction_prompt(short_target, sample_context_chunks)
+        assert 'Short.' in result_short[1]['content']
+        
+        # Test with very long content
+        long_content = 'Very long content. ' * 100  # 2000+ characters
+        long_target = {
+            'content': long_content,
+            'chunk_id': str(uuid.uuid4()),
+            'user_id': str(uuid.uuid4()),
+            'created_at': datetime.now()
+        }
+        
+        result_long = service._build_fact_extraction_prompt(long_target, sample_context_chunks)
+        assert long_content in result_long[1]['content']
+
+
+class TestExtractFactsWithRetry:
+    """Test cases for _extract_facts_with_retry method and related helper methods."""
+    
+    @pytest.fixture
+    async def service(self):
+        """Create and initialize a SimplifiedMemoryService for testing."""
+        service = SimplifiedMemoryService(
+            user="test_user_extract",
+            agent="test_agent"
+        )
+        await service.initialize()
+        yield service
+        await service.close()
+    
+    @pytest.fixture
+    def mock_llm_request(self):
+        """Create a sample LLM request for testing."""
+        from src.memfuse_core.llm.base import LLMRequest
+        return LLMRequest(
+            messages=[
+                {"role": "system", "content": "Extract facts from the chunk."},
+                {"role": "user", "content": "User discussed Python programming with the assistant."}
+            ],
+            model="gpt-4o-2024-08-06",
+            temperature=0.3,
+            max_tokens=1500
+        )
+    
+    @pytest.fixture
+    def sample_facts_response(self):
+        """Create a sample FactExtractionResponse for testing."""
+        from src.memfuse_core.models.m2_extraction import FactExtractionResponse, ExtractedFact
+        
+        facts = [
+            ExtractedFact(
+                content="User asked about Python programming",
+                source_chunk_ids=["test-chunk-123"]
+            ),
+            ExtractedFact(
+                content="Assistant explained list comprehensions",
+                source_chunk_ids=["test-chunk-123"]
+            ),
+            ExtractedFact(
+                content="Python is a popular programming language",
+                source_chunk_ids=["test-chunk-123"]
+            )
+        ]
+        
+        return FactExtractionResponse(
+            facts=facts,
+            processing_notes="Successfully extracted 3 facts"
+        )
+    
+    # Tests for _get_preferred_extraction_model method
+    
+    @patch.dict('os.environ', {'OPENAI_COMPATIBLE_MODEL': 'custom-model-v1'})
+    def test_get_preferred_extraction_model_env_var_priority(self, service):
+        """Test that OPENAI_COMPATIBLE_MODEL env var takes priority."""
+        model = service._get_preferred_extraction_model()
+        assert model == "custom-model-v1"
+    
+    @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-openai-key'}, clear=True)
+    def test_get_preferred_extraction_model_openai_fallback(self, service):
+        """Test fallback to OpenAI model when OPENAI_API_KEY is present."""
+        model = service._get_preferred_extraction_model()
+        assert model == "gpt-4o-2024-08-06"
+    
+    @patch.dict('os.environ', {'XAI_API_KEY': 'test-xai-key'}, clear=True)
+    def test_get_preferred_extraction_model_xai_fallback(self, service):
+        """Test fallback to XAI model when XAI_API_KEY is present."""
+        model = service._get_preferred_extraction_model()
+        assert model == "grok-3-mini"
+    
+    @patch.dict('os.environ', {}, clear=True)
+    def test_get_preferred_extraction_model_default_fallback(self, service):
+        """Test default fallback when no API keys are present."""
+        model = service._get_preferred_extraction_model()
+        assert model == "gpt-4o"
+    
+    # Tests for _parse_fact_extraction_response method
+    
+    def test_parse_fact_extraction_response_json_success(self, service):
+        """Test parsing valid JSON response."""
+        json_response = '''
+        {
+            "facts": [
+                {"content": "User is learning Python programming"},
+                {"content": "Assistant provided helpful explanations"},
+                {"content": "List comprehensions improve code readability"}
+            ]
+        }
+        '''
+        
+        facts = service._parse_fact_extraction_response(json_response)
+        
+        assert len(facts) == 3
+        assert "User is learning Python programming" in facts
+        assert "Assistant provided helpful explanations" in facts
+        assert "List comprehensions improve code readability" in facts
+    
+    def test_parse_fact_extraction_response_json_with_markdown(self, service):
+        """Test parsing JSON wrapped in markdown code blocks."""
+        markdown_response = '''
+        ```json
+        {
+            "facts": [
+                {"content": "Python supports object-oriented programming"},
+                {"content": "Functions are first-class objects in Python"}
+            ]
+        }
+        ```
+        '''
+        
+        facts = service._parse_fact_extraction_response(markdown_response)
+        
+        assert len(facts) == 2
+        assert "Python supports object-oriented programming" in facts
+        assert "Functions are first-class objects in Python" in facts
+    
+    def test_parse_fact_extraction_response_simple_string_facts(self, service):
+        """Test parsing JSON with simple string facts."""
+        json_response = '''
+        {
+            "facts": [
+                "User asked about data structures",
+                "Assistant explained dictionaries and lists",
+                "Python has built-in data types"
+            ]
+        }
+        '''
+        
+        facts = service._parse_fact_extraction_response(json_response)
+        
+        assert len(facts) == 3
+        assert "User asked about data structures" in facts
+        assert "Assistant explained dictionaries and lists" in facts
+        assert "Python has built-in data types" in facts
+    
+    def test_parse_fact_extraction_response_text_fallback(self, service):
+        """Test text parsing fallback for unstructured responses."""
+        text_response = '''
+        Here are the extracted facts:
+        - User is new to programming
+        - Assistant provided beginner-friendly examples
+        - Python syntax is relatively simple
+        - Interactive coding sessions are helpful
+        '''
+        
+        facts = service._parse_fact_extraction_response(text_response)
+        
+        assert len(facts) >= 3
+        assert any("User is new to programming" in fact for fact in facts)
+        assert any("beginner-friendly examples" in fact for fact in facts)
+        assert any("Python syntax is relatively simple" in fact for fact in facts)
+    
+    def test_parse_fact_extraction_response_numbered_list(self, service):
+        """Test parsing numbered list format."""
+        numbered_response = '''
+        1. User expressed interest in learning Python
+        2. Assistant recommended starting with basics
+        3. Practice is essential for skill development
+        4. Python has extensive library ecosystem
+        '''
+        
+        facts = service._parse_fact_extraction_response(numbered_response)
+        
+        assert len(facts) >= 3
+        assert any("expressed interest in learning Python" in fact for fact in facts)
+        assert any("recommended starting with basics" in fact for fact in facts)
+        assert any("Practice is essential" in fact for fact in facts)
+    
+    def test_parse_fact_extraction_response_empty_input(self, service):
+        """Test handling of empty or None input."""
+        assert service._parse_fact_extraction_response("") == []
+        assert service._parse_fact_extraction_response("   ") == []
+        assert service._parse_fact_extraction_response(None) == []
+    
+    def test_parse_fact_extraction_response_malformed_json(self, service):
+        """Test handling of malformed JSON with text fallback."""
+        malformed_response = '''
+        {
+            "facts": [
+                {"content": "Valid fact"},
+                invalid json here
+        This should still extract some facts:
+        - Python is interpreted language
+        - Dynamic typing is supported
+        '''
+        
+        facts = service._parse_fact_extraction_response(malformed_response)
+        
+        # Should fall back to text parsing
+        assert len(facts) >= 1
+        assert any("interpreted language" in fact or "Dynamic typing" in fact for fact in facts)
+    
+    def test_parse_fact_extraction_response_deduplication(self, service):
+        """Test that duplicate facts are removed."""
+        duplicate_response = '''
+        - Python is easy to learn
+        - Python is easy to learn  
+        - Dynamic typing in Python
+        - python is easy to learn
+        - Different fact about variables
+        '''
+        
+        facts = service._parse_fact_extraction_response(duplicate_response)
+        
+        # Should remove case-insensitive duplicates
+        python_easy_count = sum(1 for fact in facts if "easy to learn" in fact.lower())
+        assert python_easy_count == 1
+    
+    # Tests for _extract_facts_with_retry method
+    
+    @pytest.mark.asyncio
+    async def test_extract_facts_with_retry_structured_success(self, service, mock_llm_request, sample_facts_response):
+        """Test successful structured fact extraction."""
+        from src.memfuse_core.llm.base import LLMResponse, LLMUsage
+        from unittest.mock import AsyncMock
+        
+        # Mock LLM provider with structured output support
+        mock_provider = AsyncMock()
+        mock_provider.generate_structured = AsyncMock()
+        
+        mock_llm_response = LLMResponse(
+            content='{"facts": [...]}',
+            model="gpt-4o-2024-08-06",
+            usage=LLMUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+            success=True,
+            parsed_data=sample_facts_response
+        )
+        
+        mock_provider.generate_structured.return_value = mock_llm_response
+        
+        facts = await service._extract_facts_with_retry(mock_provider, mock_llm_request)
+        
+        assert len(facts) == 3
+        assert "User asked about Python programming" in facts
+        assert "Assistant explained list comprehensions" in facts
+        assert "Python is a popular programming language" in facts
+        
+        mock_provider.generate_structured.assert_called_once_with(
+            mock_llm_request, 
+            FactExtractionResponse
+        )
+    
+    @pytest.mark.asyncio
+    async def test_extract_facts_with_retry_json_fallback(self, service, mock_llm_request):
+        """Test JSON fallback when structured extraction fails."""
+        from src.memfuse_core.llm.base import LLMResponse, LLMUsage
+        from unittest.mock import AsyncMock
+        
+        # Mock LLM provider
+        mock_provider = AsyncMock()
+        mock_provider.generate_structured = AsyncMock(side_effect=Exception("Structured parsing failed"))
+        mock_provider.generate = AsyncMock()
+        
+        # Mock JSON response
+        json_content = '''
+        {
+            "facts": [
+                {"content": "User asked about Python"},
+                {"content": "Assistant provided help"},
+                {"content": "Learning resources were shared"}
+            ]
+        }
+        '''
+        
+        mock_response = LLMResponse(
+            content=json_content,
+            model="gpt-4o",
+            usage=LLMUsage(),
+            success=True
+        )
+        mock_provider.generate.return_value = mock_response
+        
+        facts = await service._extract_facts_with_retry(mock_provider, mock_llm_request)
+        
+        assert len(facts) == 3
+        assert "User asked about Python" in facts
+        assert "Assistant provided help" in facts
+        assert "Learning resources were shared" in facts
+        
+        mock_provider.generate_structured.assert_called_once()
+        mock_provider.generate.assert_called_once_with(mock_llm_request)
+    
+    @pytest.mark.asyncio
+    async def test_extract_facts_with_retry_all_failures(self, service, mock_llm_request):
+        """Test handling when all retry attempts fail."""
+        from src.memfuse_core.llm.base import LLMResponse, LLMUsage
+        from unittest.mock import AsyncMock
+        
+        # Mock LLM provider that always fails
+        mock_provider = AsyncMock()
+        mock_provider.generate_structured = AsyncMock(side_effect=Exception("API Error"))
+        mock_provider.generate = AsyncMock(side_effect=Exception("API Error"))
+        
+        facts = await service._extract_facts_with_retry(mock_provider, mock_llm_request, max_retries=2)
+        
+        assert facts == []
+        
+        # Should have tried both structured and regular generation for each retry
+        assert mock_provider.generate_structured.call_count == 2
+        assert mock_provider.generate.call_count == 2
+    
+    @pytest.mark.asyncio
+    async def test_extract_facts_with_retry_provider_without_structured_support(self, service, mock_llm_request):
+        """Test with LLM provider that doesn't support structured output."""
+        from src.memfuse_core.llm.base import LLMResponse, LLMUsage
+        from unittest.mock import AsyncMock
+        
+        # Mock LLM provider without generate_structured method
+        mock_provider = AsyncMock()
+        delattr(mock_provider, 'generate_structured')  # Remove the method
+        mock_provider.generate = AsyncMock()
+        
+        json_content = '''
+        {
+            "facts": [
+                {"content": "Fallback fact extraction worked"},
+                {"content": "No structured output needed"}
+            ]
+        }
+        '''
+        
+        mock_response = LLMResponse(
+            content=json_content,
+            model="basic-model",
+            usage=LLMUsage(),
+            success=True
+        )
+        mock_provider.generate.return_value = mock_response
+        
+        facts = await service._extract_facts_with_retry(mock_provider, mock_llm_request)
+        
+        assert len(facts) == 2
+        assert "Fallback fact extraction worked" in facts
+        assert "No structured output needed" in facts
+        
+        # Should only call generate, not generate_structured
+        mock_provider.generate.assert_called_once_with(mock_llm_request)
+    
+    @pytest.mark.asyncio
+    async def test_extract_facts_with_retry_exponential_backoff(self, service, mock_llm_request):
+        """Test exponential backoff timing in retry logic."""
+        from src.memfuse_core.llm.base import LLMResponse, LLMUsage
+        from unittest.mock import AsyncMock, patch
+        import asyncio
+        
+        # Mock LLM provider that fails twice then succeeds
+        mock_provider = AsyncMock()
+        mock_provider.generate_structured = AsyncMock(side_effect=[
+            Exception("First failure"),
+            Exception("Second failure"),
+            LLMResponse(
+                content='{"facts": [{"content": "Third time success"}]}',
+                model="gpt-4o",
+                usage=LLMUsage(),
+                success=True
+            )
+        ])
+        mock_provider.generate = AsyncMock(return_value=LLMResponse(
+            content='{"facts": [{"content": "Fallback success"}]}',
+            model="gpt-4o",
+            usage=LLMUsage(),
+            success=True
+        ))
+        
+        # Track sleep calls to verify exponential backoff
+        with patch('asyncio.sleep') as mock_sleep:
+            facts = await service._extract_facts_with_retry(mock_provider, mock_llm_request, max_retries=3)
+            
+            # Should have called sleep with exponential backoff: 1.0, 2.0
+            expected_sleep_calls = [1.0, 2.0]
+            actual_sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
+            assert actual_sleep_calls == expected_sleep_calls
+        
+        assert len(facts) == 1
+        assert "Fallback success" in facts
+    
+    @pytest.mark.asyncio
+    async def test_extract_facts_with_retry_success_after_partial_failures(self, service, mock_llm_request):
+        """Test successful extraction after some failures."""
+        from src.memfuse_core.llm.base import LLMResponse, LLMUsage
+        from unittest.mock import AsyncMock
+        
+        mock_provider = AsyncMock()
+        
+        # First attempt: structured fails, but regular succeeds
+        mock_provider.generate_structured = AsyncMock(side_effect=Exception("Structured failed"))
+        mock_provider.generate = AsyncMock(return_value=LLMResponse(
+            content='{"facts": [{"content": "Regular generation worked"}]}',
+            model="gpt-4o",
+            usage=LLMUsage(),
+            success=True
+        ))
+        
+        facts = await service._extract_facts_with_retry(mock_provider, mock_llm_request, max_retries=3)
+        
+        assert len(facts) == 1
+        assert "Regular generation worked" in facts
+        
+        # Should only make one attempt since regular generation succeeded
+        mock_provider.generate_structured.assert_called_once()
+        mock_provider.generate.assert_called_once()
+    
+    @pytest.mark.asyncio 
+    async def test_extract_facts_with_retry_with_openai_compatible_model(self, service):
+        """Test that the method uses OPENAI_COMPATIBLE_MODEL env var in requests."""
+        from src.memfuse_core.llm.base import LLMRequest, LLMResponse, LLMUsage
+        from unittest.mock import AsyncMock, patch
+        
+        # Mock environment variable
+        with patch.dict('os.environ', {'OPENAI_COMPATIBLE_MODEL': 'custom-extraction-model'}):
+            # Create request that should use the custom model
+            request = LLMRequest(
+                messages=[{"role": "user", "content": "Extract facts"}],
+                model=service._get_preferred_extraction_model(),  # Should use env var
+                temperature=0.3
+            )
+            
+            # Verify the model from env var is used
+            assert request.model == "custom-extraction-model"
+            
+            # Mock successful response
+            mock_provider = AsyncMock()
+            mock_provider.generate_structured = AsyncMock(return_value=LLMResponse(
+                content='{"facts": [{"content": "Fact extracted with custom model"}]}',
+                model="custom-extraction-model",
+                usage=LLMUsage(),
+                success=True
+            ))
+            
+            facts = await service._extract_facts_with_retry(mock_provider, request)
+            
+            # Verify the custom model was used
+            mock_provider.generate_structured.assert_called_once()
+            call_args = mock_provider.generate_structured.call_args
+            assert call_args[0][0].model == "custom-extraction-model"
+    
+    @pytest.mark.asyncio
+    async def test_extract_facts_with_retry_max_retries_respected(self, service, mock_llm_request):
+        """Test that max_retries parameter is properly respected."""
+        from unittest.mock import AsyncMock
+        
+        # Mock provider that always fails
+        mock_provider = AsyncMock()
+        mock_provider.generate_structured = AsyncMock(side_effect=Exception("Always fails"))
+        mock_provider.generate = AsyncMock(side_effect=Exception("Always fails"))
+        
+        # Test with different max_retries values
+        facts = await service._extract_facts_with_retry(mock_provider, mock_llm_request, max_retries=1)
+        assert facts == []
+        assert mock_provider.generate_structured.call_count == 1
+        assert mock_provider.generate.call_count == 1
+        
+        # Reset mocks
+        mock_provider.reset_mock()
+        
+        facts = await service._extract_facts_with_retry(mock_provider, mock_llm_request, max_retries=5)
+        assert facts == []
+        assert mock_provider.generate_structured.call_count == 5
+        assert mock_provider.generate.call_count == 5
 
 
 if __name__ == '__main__':

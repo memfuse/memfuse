@@ -9,7 +9,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from memfuse_core.utils.config import config_manager
-import hydra
+try:
+    import hydra
+except ModuleNotFoundError:  # pragma: no cover
+    import pytest
+    pytest.skip("hydra not installed; skipping config loading test", allow_module_level=True)
 from omegaconf import DictConfig, OmegaConf
 
 # Load environment variables

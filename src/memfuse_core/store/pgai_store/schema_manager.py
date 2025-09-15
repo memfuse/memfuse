@@ -112,16 +112,19 @@ class SchemaManager:
                         message_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                         content TEXT NOT NULL,
                         role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
-                        conversation_id UUID NOT NULL,
+                        conversation_id UUID,
+                        session_id UUID,
+                        user_id UUID,
+                        round_id UUID,
                         sequence_number INTEGER NOT NULL,
                         token_count INTEGER NOT NULL DEFAULT 0,
+                        metadata JSONB DEFAULT '{}'::jsonb,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                         processed_at TIMESTAMP WITH TIME ZONE,
                         processing_status VARCHAR(20) DEFAULT 'pending'
                             CHECK (processing_status IN ('pending', 'processing', 'completed', 'failed')),
                         chunk_assignments UUID[] DEFAULT '{}',
-                        CONSTRAINT unique_conversation_sequence
-                            UNIQUE (conversation_id, sequence_number)
+                        CONSTRAINT unique_session_sequence UNIQUE (session_id, sequence_number)
                     );
                 """)
                 
@@ -129,6 +132,10 @@ class SchemaManager:
                 await conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_m0_conversation_sequence
                         ON m0_raw (conversation_id, sequence_number);
+                    CREATE INDEX IF NOT EXISTS idx_m0_session_sequence
+                        ON m0_raw (session_id, sequence_number);
+                    CREATE INDEX IF NOT EXISTS idx_m0_user_id
+                        ON m0_raw (user_id);
                     CREATE INDEX IF NOT EXISTS idx_m0_processing_status
                         ON m0_raw (processing_status)
                         WHERE processing_status != 'completed';
@@ -140,6 +147,8 @@ class SchemaManager:
                         ON m0_raw (token_count);
                     CREATE INDEX IF NOT EXISTS idx_m0_chunk_assignments_gin
                         ON m0_raw USING gin (chunk_assignments);
+                    CREATE INDEX IF NOT EXISTS idx_m0_metadata_gin
+                        ON m0_raw USING gin (metadata);
                 """)
 
                 # Create M1 processing trigger (M0 -> M1 pipeline)

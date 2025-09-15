@@ -21,6 +21,7 @@ from ..utils import (
 )
 from ..services.database_service import DatabaseService
 from ..services.service_factory import ServiceFactory
+from ..m3.orchestrator import Orchestrator
 
 
 router = APIRouter()
@@ -104,6 +105,39 @@ def convert_pydantic_to_dict(
         else:
             result.append(cast(Dict[str, Any], message))
     return result
+
+
+async def get_task_messages(db: DatabaseService, session_id: str, task_name: str) -> List[Dict[str, Any]]:
+    """Get all messages for a specific task in a session.
+    
+    Args:
+        db: Database service instance
+        session_id: Session ID
+        task_name: Task name to filter by
+        
+    Returns:
+        List of messages with matching task metadata
+    """
+    try:
+        # Get all messages for the session
+        all_messages = await db.get_messages_by_session(
+            session_id=session_id,
+            limit=1000,  # Large limit to get all task messages
+            sort_by="timestamp",
+            order="asc"
+        )
+        
+        # Filter messages that belong to this task
+        task_messages = []
+        for msg in all_messages:
+            metadata = msg.get("metadata", {})
+            if metadata.get("task") == task_name:
+                task_messages.append(msg)
+        
+        return task_messages
+    except Exception as e:
+        logger.error(f"Failed to get task messages: {e}")
+        return []
 
 
 def normalize_messages_response(messages: Any) -> List[Dict[str, Any]]:
@@ -200,34 +234,36 @@ async def add_messages(
         )
         raise_api_error(error_response)
 
-    # Convert messages and add them
+    # Convert messages first
     messages = convert_pydantic_to_dict(request.messages)
-    # P1 OPTIMIZATION: Pass session_id to add method
-    result = await memory.add(messages, session_id=session_id)
 
-    # Extract message IDs from result
-    message_ids = []
-    logger.info(f"Messages API: Service result: {result}")
-    if (result and result.get("status") == "success"
-            and result.get("data") is not None):
-        message_ids = result["data"].get("message_ids", [])
-        logger.info(f"Messages API: Extracted message_ids: {message_ids}")
-
-    # Create response data with message IDs
-    response_data = {"message_ids": message_ids}
-
-    # Add any additional fields from the service result (e.g., transfer_triggered)
-    if result and result.get("status") == "success":
-        # Include additional fields like transfer_triggered, total_messages, etc.
-        for key, value in result.items():
-            if key not in ["status", "code", "data", "message", "errors"]:
-                response_data[key] = value
-
-    return ApiResponse.success(
-        data=response_data,
-        message="Messages added successfully",
-        code=201,
-    )
+    # Route ADD operation via Gateway to keep API thin
+    from ..gateway.api_gateway import create_memory_gateway
+    from ..interfaces.gateway_interface import OperationType
+    request_data = {
+        "messages": messages,
+        "session_id": session_id,
+        "user_id": session.get("user_id") if isinstance(session, dict) else None,
+        "agent_id": session.get("agent_id") if isinstance(session, dict) else None,
+        "metadata": {},
+    }
+    gateway = create_memory_gateway(buffer_service=memory, db_service=db)
+    gw_resp = await gateway.process_request(request_data, operation_type=OperationType.ADD)
+    
+    if isinstance(gw_resp, dict) and 'status' in gw_resp:
+        return ApiResponse(
+            status=gw_resp.get('status','success'),
+            code=gw_resp.get('code', 201),
+            data=gw_resp.get('data', {}),
+            message=gw_resp.get('message','Messages added successfully'),
+            errors=gw_resp.get('errors'),
+        )
+    else:
+        return ApiResponse.success(
+            data=gw_resp,
+            message="Messages added successfully",
+            code=201,
+        )
 
 
 @router.get("/", response_model=ApiResponse)
