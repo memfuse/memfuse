@@ -287,12 +287,24 @@ async def query_memory(
         db_service=db
     )
 
+    # Set default agent_id if not provided
+    effective_agent_id = request.agent_id
+    if not effective_agent_id:
+        # Try to get or create default agent
+        default_agent = await db.get_agent_by_name("agent_default")
+        if not default_agent:
+            # Create default agent if it doesn't exist
+            from ..models import AgentCreate
+            agent_create = AgentCreate(name="agent_default", description="Default agent for MemFuse")
+            default_agent = await db.create_agent(agent_create.dict())
+        effective_agent_id = default_agent["id"]
+
     # Prepare request data for gateway
     request_data = {
         "query": request.query,
         "user_id": actual_user_id,
         "user_name": user.get("name") if user else None,
-        "agent_id": request.agent_id,
+        "agent_id": effective_agent_id,
         "session_id": request.session_id,
         "top_k": request.top_k,
         "store_type": request.store_type,

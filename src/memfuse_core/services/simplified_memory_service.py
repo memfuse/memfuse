@@ -1576,7 +1576,11 @@ class SimplifiedMemoryService(MessageInterface):
                         'chunking_strategy': row['chunking_strategy'],
                         'm0_message_count': row['m0_message_count'],
                         'type': 'chunk',
-                        'session_id': str(row['session_id']) if row['session_id'] else None
+                        'user_id': str(row['user_id']) if row['user_id'] else user_id,
+                        'session_id': str(row['session_id']) if row['session_id'] else session_id,
+                        'agent_id': None,  # Will be populated by MetadataEnricher if available
+                        'session_name': None,  # Will be populated by MetadataEnricher if available
+                        'scope': None  # Will be calculated by ScopeCalculator
                     }
                 }
                 results.append(result)
