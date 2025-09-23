@@ -82,6 +82,7 @@ tqdm = "^4.66.2"
 typeguard = ">=4.4.0"
 xdoctest = { extras = ["colors"], version = ">=1.2.0" }
 omegaconf = "^2.3.0"
+locust = "^2.40.5"
 
 [tool.poetry.scripts]
 memfuse-core = "memfuse_core.server:main"

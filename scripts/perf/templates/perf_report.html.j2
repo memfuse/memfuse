@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MemFuse Performance Report</title>
+  <style>
+    body{font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 20px; color: #222}
+    h1,h2,h3{margin: 0.6em 0 0.3em}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:20px}
+    .card{border:1px solid #e5e7eb;border-radius:8px;padding:14px}
+    .muted{color:#666}
+    table{border-collapse:collapse;width:100%;font-size: 14px}
+    th,td{border-bottom:1px solid #eee;padding:6px 8px;text-align:left}
+    th{background:#fafafa}
+    code{background:#f6f8fa;padding:2px 4px;border-radius:4px}
+    .kpi{display:flex;gap:18px;flex-wrap:wrap}
+    .kpi .item{padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;min-width: 120px}
+    .kpi .item .v{font-weight:600;font-size: 18px}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h1>Performance Summary</h1>
+  <div class="muted">Generated {{ generated_at }}</div>
+
+  <h2>Run Metadata</h2>
+  <ul>
+    {% if meta.profile and meta.profile.name %}<li>Profile: <code>{{ meta.profile.name }}</code></li>{% endif %}
+    {% if meta.host %}<li>Host: <code>{{ meta.host }}</code></li>{% endif %}
+    {% if meta.git and meta.git.commit %}<li>Git: <code>{{ meta.git.commit }}</code> ({{ meta.git.branch }})</li>{% endif %}
+    <li>Run Dir: <code>{{ run_dir }}</code></li>
+  </ul>
+
+  <div class="kpi">
+    <div class="item"><div class="v">{{ (agg.requests or 0) | int }}</div><div class="l">Requests</div></div>
+    <div class="item"><div class="v">{{ ('%.2f' % (((agg.failures or 0)/(agg.requests or 1))*100)) }}%</div><div class="l">Fail Rate</div></div>
+    <div class="item"><div class="v">{{ ('%.2f' % (agg.rps or 0)) }}</div><div class="l">RPS</div></div>
+    <div class="item"><div class="v">p50 {{ ('%.1f' % (agg.p50_ms or 0)) }} ms</div><div class="l">Latency</div></div>
+    <div class="item"><div class="v">p95 {{ ('%.1f' % (agg.p95_ms or 0)) }} ms</div><div class="l">Latency</div></div>
+    <div class="item"><div class="v">p99 {{ ('%.1f' % (agg.p99_ms or 0)) }} ms</div><div class="l">Latency</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Throughput & Fail Ratio</h3>
+      <canvas id="locust_rps"></canvas>
+    </div>
+    <div class="card">
+      <h3>DB Connections by State</h3>
+      <canvas id="db_states"></canvas>
+    </div>
+    <div class="card">
+      <h3>Idle-in-Transaction</h3>
+      <canvas id="db_idle"></canvas>
+    </div>
+    <div class="card">
+      <h3>Top Endpoints (Requests & p95)</h3>
+      <canvas id="top_endpoints"></canvas>
+    </div>
+  </div>
+
+  <h2>Top Endpoints</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th><th>Requests</th><th>Fail%</th><th>p50</th><th>p95</th><th>p99</th><th>Avg</th><th>RPS</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in endpoints[:20] %}
+      {% set req = (e.requests or 0)|int %}
+      {% set fr = ((e.failures or 0)/(e.requests or 1))*100 %}
+      <tr>
+        <td>{{ e.name }}</td>
+        <td>{{ req }}</td>
+        <td>{{ '%.2f' % fr }}%</td>
+        <td>{{ '%.1f' % (e.p50_ms or 0) }}</td>
+        <td>{{ '%.1f' % (e.p95_ms or 0) }}</td>
+        <td>{{ '%.1f' % (e.p99_ms or 0) }}</td>
+        <td>{{ '%.1f' % (e.avg_ms or 0) }}</td>
+        <td>{{ '%.2f' % (e.rps or 0) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Database</h2>
+  {% if db.samples == 0 %}
+    <div class="muted">No DB metrics available.</div>
+  {% else %}
+    <h3>Top Wait Events</h3>
+    <table>
+      <thead><tr><th>Type</th><th>Event</th><th>Count</th></tr></thead>
+      <tbody>
+      {% for w in db_top_waits %}
+        <tr><td>{{ w.type }}</td><td>{{ w.event }}</td><td>{{ w.count }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <h3>Top Queries</h3>
+    <table>
+      <thead><tr><th>QueryID</th><th>Calls</th><th>Total ms</th><th>Mean ms</th><th>Rows</th></tr></thead>
+      <tbody>
+      {% for d in db_top_queries %}
+        <tr><td>{{ d.queryid }}</td><td>{{ d.calls }}</td><td>{{ '%.1f' % d.total_ms }}</td><td>{{ '%.2f' % d.mean_ms }}</td><td>{{ d.rows }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <script>
+  const REPORT = {{ {
+    'charts': charts,
+    'endpoints': endpoints,
+  } | tojson }};
+
+  // Locust RPS & fail ratio
+  (function(){
+    const el = document.getElementById('locust_rps');
+    if (!el || !REPORT.charts.locust) return;
+    const labels = REPORT.charts.locust.map(p => p.ts);
+    const rps = REPORT.charts.locust.map(p => p.rps);
+    const fail = REPORT.charts.locust.map(p => (p.fail_ratio || 0) * 100);
+    new Chart(el, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {label: 'RPS', data: rps, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.2)', yAxisID: 'y1'},
+          {label: 'Fail %', data: fail, borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.2)', yAxisID: 'y2'},
+        ]
+      },
+      options: {responsive: true, interaction: {mode: 'index', intersect: false},
+        scales: { y1: {type: 'linear', position: 'left'}, y2: {type: 'linear', position: 'right', grid: {drawOnChartArea:false}} }
+      }
+    });
+  })();
+
+  // DB connections by state (stacked)
+  (function(){
+    const el = document.getElementById('db_states');
+    const data = REPORT.charts.db;
+    if (!el || !data || !data.timeline) return;
+    const labels = data.timeline.map(p => p.ts);
+    const states = data.states || [];
+    const colors = ['#2563eb','#10b981','#f59e0b','#ef4444','#6366f1','#14b8a6','#84cc16'];
+    const ds = states.map((s, i) => ({
+      label: s,
+      data: data.timeline.map(p => (p.states && (p.states[s] || p.states[''] || 0)) || 0),
+      backgroundColor: colors[i % colors.length],
+      stack: 'conn'
+    }));
+    new Chart(el, {
+      type: 'bar', data: { labels, datasets: ds },
+      options: { responsive: true, scales: { x: {stacked:true}, y: {stacked:true} } }
+    });
+  })();
+
+  // Idle-in-transaction
+  (function(){
+    const el = document.getElementById('db_idle');
+    const data = REPORT.charts.db;
+    if (!el || !data || !data.timeline) return;
+    const labels = data.timeline.map(p => p.ts);
+    const idle = data.timeline.map(p => p.idle_in_tx || 0);
+    new Chart(el, { type: 'line', data: { labels, datasets: [{label:'Idle in TX', data: idle, borderColor:'#ef4444'}] } });
+  })();
+
+  // Top endpoints requests with p95 overlay
+  (function(){
+    const el = document.getElementById('top_endpoints');
+    const eps = (REPORT.endpoints || []).slice(0, 10);
+    if (!el || eps.length === 0) return;
+    const labels = eps.map(e => e.name);
+    const reqs = eps.map(e => e.requests || 0);
+    const p95 = eps.map(e => e.p95_ms || 0);
+    new Chart(el, {
+      type: 'bar',
+      data: { labels, datasets: [
+        {type:'bar', label:'Requests', data:reqs, backgroundColor:'#3b82f6'},
+        {type:'line', label:'p95 (ms)', data:p95, borderColor:'#f59e0b'}
+      ] },
+      options: {responsive:true, interaction:{mode:'index',intersect:false}}
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -224,6 +224,7 @@ For detailed database management, see the [Scripts Documentation](scripts/README
 - **[Getting Started](https://memfuse.vercel.app/docs/quickstart)**: Step-by-step guide to integrating MemFuse into your projects
 - **[Examples](https://github.com/memfuse/memfuse-python/tree/main/examples)**: Sample implementations for chatbots, autonomous agents, customer support, LangChain integration, and more
 - **[Testing Guide](tests/TEST.md)**: Practical guide for running tests with different configurations
+- **[Performance & Load Testing Runbook](docs/performance-testing.md)**: How to seed data, run scenarios, generate reports, and compare runs
 
 ---
 
