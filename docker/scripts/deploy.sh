@@ -178,7 +178,7 @@ case $ACTION in
         echo ""
         echo -e "${BLUE}🔍 Health Status:${NC}"
         $COMPOSE_CMD exec postgres pg_isready -U postgres || echo "PostgreSQL not ready"
-        $COMPOSE_CMD exec memfuse curl -f http://localhost:8000/api/v1/health || echo "MemFuse not ready"
+        $COMPOSE_CMD exec memfuse curl -f http://localhost:8765/api/v1/health || echo "MemFuse not ready"
         ;;
 esac
 

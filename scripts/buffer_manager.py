@@ -33,7 +33,7 @@ Usage:
 
 Operating Modes:
     Online Mode (default):
-        - Connects to running MemFuse server (localhost:8000)
+        - Connects to running MemFuse server (localhost:8765)
         - Provides real-time buffer statistics and live session data
         - Shows current buffer contents and transfer activities
         - Requires server to be running with API access
@@ -51,7 +51,7 @@ Important Notes:
        - Use --limit parameter to control result size
 
     2. Server Requirements:
-       - Online mode requires MemFuse server running on localhost:8000
+       - Online mode requires MemFuse server running on localhost:8765
        - Uses API key authentication: "memfuse-test-api-key"
        - Health check endpoint: /api/v1/health/
        - Sessions endpoint: /api/v1/sessions
@@ -152,7 +152,7 @@ class BufferEntry:
 class BufferManager:
     """Comprehensive Buffer management for MemFuse."""
 
-    def __init__(self, config_path: Optional[str] = None, server_url: str = "http://localhost:8000", api_key: str = "memfuse-test-api-key", offline_mode: bool = False):
+    def __init__(self, config_path: Optional[str] = None, server_url: str = "http://localhost:8765", api_key: str = "memfuse-test-api-key", offline_mode: bool = False):
         """Initialize BufferManager with configuration."""
         self.config_path = config_path or "config/config.yaml"
         self.server_url = server_url

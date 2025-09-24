@@ -21,7 +21,7 @@ async def test_basic_functionality():
     sample_config = {
         "server": {
             "host": "localhost",
-            "port": 8000,
+            "port": 8765,
             "reload": False
         },
         "database": {
@@ -53,7 +53,7 @@ async def test_basic_functionality():
     pool_size = global_config.get("database.postgres.pool_size")
     
     assert host == "localhost", f"Expected 'localhost', got '{host}'"
-    assert port == 8000, f"Expected 8000, got {port}"
+    assert port == 8765, f"Expected 8765, got {port}"
     assert pool_size == 20, f"Expected 20, got {pool_size}"
     
     print("✓ Basic configuration access working")
@@ -70,7 +70,7 @@ async def test_performance_comparison():
     print("\nTesting performance comparison...")
     
     sample_config = {
-        "server": {"host": "localhost", "port": 8000},
+        "server": {"host": "localhost", "port": 8765},
         "database": {"postgres": {"pool_size": 20}},
         "buffer": {"enabled": True},
         "store": {"top_k": 5}

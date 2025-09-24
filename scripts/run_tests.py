@@ -51,7 +51,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # MemFuse service configuration
 MEMFUSE_API_HOST = "localhost"
-MEMFUSE_API_PORT = 8000
+MEMFUSE_API_PORT = 8765
 MEMFUSE_HEALTH_ENDPOINT = f"http://{MEMFUSE_API_HOST}:{MEMFUSE_API_PORT}/api/v1/health"
 MEMFUSE_HEALTH_CHECK_TIMEOUT = 5  # seconds
 MEMFUSE_HEALTH_CHECK_RETRIES = 3

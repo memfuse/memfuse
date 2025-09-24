@@ -227,7 +227,7 @@ test_pgai() {
     docker exec memfuse-pgai-postgres psql -U postgres -d memfuse -c "SELECT * FROM get_trigger_system_status();"
     
     print_status "Testing MemFuse API health..."
-    if curl -f http://localhost:8000/api/v1/health >/dev/null 2>&1; then
+    if curl -f http://localhost:8765/api/v1/health >/dev/null 2>&1; then
         print_success "MemFuse API is healthy!"
     else
         print_warning "MemFuse API health check failed. Check logs with: $0 logs"

@@ -6,7 +6,7 @@ import json
 import time
 
 # Test configuration
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8765"
 API_KEY = "test-key"  # Default test API key
 
 def test_health():

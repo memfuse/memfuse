@@ -141,7 +141,7 @@ Monitor service health:
   - Source code mounting for live changes
   - Debug logging enabled
   - PostgreSQL on port 5432
-  - MemFuse on port 8000
+  - MemFuse on port 8765
 
 ### Production (`docker-compose.prod.yml`)
 - **Purpose**: Production deployment
@@ -182,11 +182,11 @@ Monitor service health:
 
 | Environment | PostgreSQL | MemFuse | Additional |
 |-------------|------------|---------|------------|
-| Development | 5432       | 8000    | -          |
-| Production  | 5432       | 8000    | 80, 443 (Nginx) |
-| Testing     | 5432       | 8000    | -          |
-| Local       | 5432       | 8000    | 8080 (pgAdmin) |
-| PgAI        | 5432       | 8000    | 8080 (pgAdmin), 6379 (Redis) |
+| Development | 5432       | 8765    | -          |
+| Production  | 5432       | 8765    | 80, 443 (Nginx) |
+| Testing     | 5432       | 8765    | -          |
+| Local       | 5432       | 8765    | 8080 (pgAdmin) |
+| PgAI        | 5432       | 8765    | 8080 (pgAdmin), 6379 (Redis) |
 
 ## 🔐 Environment Variables
 
@@ -204,7 +204,7 @@ POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 OPENAI_MODEL=gpt-4o-mini
 LOG_LEVEL=INFO
-MEMFUSE_PORT=8000
+MEMFUSE_PORT=8765
 ```
 
 ## 🛠️ Makefile Integration

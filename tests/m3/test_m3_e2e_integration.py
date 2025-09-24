@@ -29,7 +29,7 @@ logger.add(sys.stdout, level="INFO", format="<green>{time:HH:mm:ss}</green> | <l
 class M3EndToEndTester:
     """M3 system end-to-end tester"""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8765"):
         self.base_url = base_url
         self.client = httpx.AsyncClient(timeout=30.0)
         self.test_user_id = None  # Will be set during setup
@@ -608,7 +608,7 @@ async def main():
     # Check if server is running
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get("http://localhost:8000/api/v1/health")
+            response = await client.get("http://localhost:8765/api/v1/health")
             if response.status_code != 200:
                 logger.error("❌ MemFuse server is not running or not healthy")
                 logger.info("Please start the server with: poetry run python scripts/memfuse_launcher.py")

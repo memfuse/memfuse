@@ -83,19 +83,19 @@ COMPOSE_FILE="docker/compose/docker-compose.${ENVIRONMENT}.yml"
 case $ENVIRONMENT in
     dev)
         POSTGRES_PORT=5432
-        MEMFUSE_PORT=8000
+        MEMFUSE_PORT=8765
         ;;
     prod)
         POSTGRES_PORT=5432
-        MEMFUSE_PORT=8000
+        MEMFUSE_PORT=8765
         ;;
     test)
         POSTGRES_PORT=5432
-        MEMFUSE_PORT=8000
+        MEMFUSE_PORT=8765
         ;;
     local)
         POSTGRES_PORT=5432
-        MEMFUSE_PORT=8000
+        MEMFUSE_PORT=8765
         ;;
 esac
 

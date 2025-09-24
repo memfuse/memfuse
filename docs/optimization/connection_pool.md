@@ -285,11 +285,11 @@ poetry run python scripts/memfuse_launcher.py --background
 
 ```bash
 # Basic health check
-curl --noproxy localhost http://localhost:8000/api/v1/health
+curl --noproxy localhost http://localhost:8765/api/v1/health
 
 # Streaming load test
 for i in {1..50}; do 
-  curl -s --noproxy localhost http://localhost:8000/api/v1/health > /dev/null
+  curl -s --noproxy localhost http://localhost:8765/api/v1/health > /dev/null
   echo -n "✓"
   sleep 0.1
 done
@@ -301,11 +301,11 @@ done
 
 #### Issue: "Connection refused" errors
 
-**Symptoms**: `curl: (7) Failed to connect to localhost port 8000`
+**Symptoms**: `curl: (7) Failed to connect to localhost port 8765`
 
 **Solution**:
 1. Check if server is running: `poetry run python scripts/memfuse_launcher.py --background`
-2. Verify port availability: `lsof -i :8000`
+2. Verify port availability: `lsof -i :8765`
 3. Check server logs: `tail -f logs/memfuse_core.log`
 
 #### Issue: Rate limiting under load

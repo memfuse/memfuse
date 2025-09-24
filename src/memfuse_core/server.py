@@ -173,7 +173,7 @@ def run_server(cfg: DictConfig):
     # 3. Log server configuration
     server_config = cfg.get("server", {})
     host = server_config.get("host", "localhost")
-    port = server_config.get("port", 8000)
+    port = server_config.get("port", 8765)
     logger.info(f"Starting MemFuse server on {host}:{port}")
     logger.info(f"Using data directory: {data_dir}")
 

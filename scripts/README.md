@@ -119,4 +119,4 @@ poetry run python scripts/run_tests.py smoke              # Validate
 **Troubleshooting**:
 - Connection issues: Check container status, use `--recreate-db`
 - Schema issues: Run `validate` first, `recreate` as last resort
-- Test failures: Ensure database running, reset data, check port 8000
+- Test failures: Ensure database running, reset data, check port 8765

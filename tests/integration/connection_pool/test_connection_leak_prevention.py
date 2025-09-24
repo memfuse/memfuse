@@ -23,7 +23,7 @@ from memfuse_core.services.global_connection_manager import get_global_connectio
 from memfuse_core.store.pgai_store.pgai_store import PgaiStore
 
 # Test configuration
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = "http://localhost:8765"
 API_KEY = os.getenv("MEMFUSE_API_KEY", "test-api-key")
 POSTGRES_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/memfuse")
 

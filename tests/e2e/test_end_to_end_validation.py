@@ -21,7 +21,7 @@ async def check_server_health(max_retries=10, delay=2):
     for i in range(max_retries):
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get('http://localhost:8000/api/v1/health') as resp:
+                async with session.get('http://localhost:8765/api/v1/health') as resp:
                     if resp.status == 200:
                         print(f"✅ Server is healthy (attempt {i+1})")
                         return True
@@ -108,7 +108,7 @@ async def test_buffer_enabled_write():
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post('http://localhost:8000/api/v1/messages', 
+            async with session.post('http://localhost:8765/api/v1/messages', 
                                    json=test_data,
                                    headers={'Content-Type': 'application/json'}) as resp:
                 if resp.status == 200:
@@ -152,7 +152,7 @@ async def test_buffer_disabled_write():
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post('http://localhost:8000/api/v1/messages',
+            async with session.post('http://localhost:8765/api/v1/messages',
                                    json=test_data,
                                    headers={'Content-Type': 'application/json'}) as resp:
                 if resp.status == 200:
@@ -264,7 +264,7 @@ async def test_vector_retrieval():
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post('http://localhost:8000/api/v1/query',
+            async with session.post('http://localhost:8765/api/v1/query',
                                    json=test_query,
                                    headers={'Content-Type': 'application/json'}) as resp:
                 if resp.status == 200:

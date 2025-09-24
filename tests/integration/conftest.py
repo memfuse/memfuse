@@ -160,10 +160,10 @@ def client():
     
     if client_type == "server":
         # Create real HTTP client for testing against running server
-        print(f"🔗 Using real HTTP client against server at http://localhost:8000")
+        print(f"🔗 Using real HTTP client against server at http://localhost:8765")
         
         class RealHTTPClient:
-            def __init__(self, base_url="http://localhost:8000"):
+            def __init__(self, base_url="http://localhost:8765"):
                 self.base_url = base_url
                 self.session = requests.Session()
                 

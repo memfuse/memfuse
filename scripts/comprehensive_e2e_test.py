@@ -7,7 +7,7 @@ Run after starting the server and DB:
   poetry run memfuse-core
 
 Then run this script:
-  MEMFUSE_API_BASE=http://localhost:8000/api/v1 poetry run python scripts/comprehensive_e2e_test.py
+  MEMFUSE_API_BASE=http://localhost:8765/api/v1 poetry run python scripts/comprehensive_e2e_test.py
 
 This comprehensive test validates:
 1) M1 Schema compliance (episodic memory structure)
@@ -40,7 +40,7 @@ API_KEY = os.getenv("MEMFUSE_API_KEY", "test-api-key")
 
 
 def api_base() -> str:
-    return os.getenv("MEMFUSE_API_BASE", "http://localhost:8000/api/v1").rstrip("/")
+    return os.getenv("MEMFUSE_API_BASE", "http://localhost:8765/api/v1").rstrip("/")
 
 
 def pretty(obj):

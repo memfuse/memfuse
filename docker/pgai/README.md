@@ -8,7 +8,7 @@ This directory contains Docker configurations for running MemFuse with PostgreSQ
 ┌─────────────────────────────────────────────────────────────┐
 │                    MemFuse PgAI Stack                      │
 ├─────────────────────────────────────────────────────────────┤
-│  MemFuse App (Port 8000)                                   │
+│  MemFuse App (Port 8765)                                   │
 │  ├── EventDrivenPgaiStore                                  │
 │  ├── Immediate Trigger System                              │
 │  └── all-MiniLM-L6-v2 Embedding Model                     │
@@ -54,8 +54,8 @@ This directory contains Docker configurations for running MemFuse with PostgreSQ
 ```
 
 ### 3. Access Services
-- **MemFuse API**: http://localhost:8000
-- **API Health**: http://localhost:8000/api/v1/health
+- **MemFuse API**: http://localhost:8765
+- **API Health**: http://localhost:8765/api/v1/health
 - **pgAdmin** (optional): http://localhost:8080
 - **PostgreSQL**: localhost:5432
 
@@ -118,7 +118,7 @@ docker exec memfuse-pgai-postgres psql -U postgres -d memfuse -c "
 SELECT * FROM get_trigger_system_status();"
 
 # 4. Test MemFuse API
-curl http://localhost:8000/api/v1/health
+curl http://localhost:8765/api/v1/health
 ```
 
 ### Automated Testing

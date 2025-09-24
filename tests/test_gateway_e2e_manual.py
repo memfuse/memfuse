@@ -6,7 +6,7 @@ import httpx
 import json
 
 # Test configuration
-TEST_BASE_URL = "http://localhost:8000"
+TEST_BASE_URL = "http://localhost:8765"
 TEST_API_KEY = "test-key"
 
 async def test_gateway_e2e():

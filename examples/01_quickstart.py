@@ -26,7 +26,7 @@ load_dotenv(override=True)
 
 # Configuration
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-DEFAULT_BASE_URL = "http://localhost:8000"
+DEFAULT_BASE_URL = "http://localhost:8765"
 DEFAULT_TIMEOUT = 10
 MAX_RETRIES = 3
 RETRY_DELAY = 1.0

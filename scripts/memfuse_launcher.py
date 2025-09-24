@@ -34,7 +34,7 @@ DOCKER_COMPOSE_FILE = "docker/compose/docker-compose.pgai.yml"
 POSTGRES_CONTAINER_NAME = "memfuse-pgai-postgres"
 POSTGRES_PORT = 5432
 MEMFUSE_CORE_COMMAND = ["poetry", "run", "memfuse-core"]
-MEMFUSE_API_PORT = 8000
+MEMFUSE_API_PORT = 8765
 MEMFUSE_API_HOST = "localhost"
 MEMFUSE_HEALTH_ENDPOINT = f"http://{MEMFUSE_API_HOST}:{MEMFUSE_API_PORT}/api/v1/health"
 

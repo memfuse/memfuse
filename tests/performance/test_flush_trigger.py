@@ -12,7 +12,7 @@ Usage:
     python tests/performance/test_flush_trigger.py
 
 Requirements:
-    - MemFuse server running on localhost:8000
+    - MemFuse server running on localhost:8765
     - poetry run memfuse-core
 """
 
@@ -22,7 +22,7 @@ import uuid
 import sys
 from typing import Dict, Any, List
 
-BASE_URL = "http://localhost:8000/api/v1"
+BASE_URL = "http://localhost:8765/api/v1"
 
 
 def get_or_create_user(name: str) -> str:
@@ -245,7 +245,7 @@ if __name__ == "__main__":
             print("   Please start the server with: poetry run memfuse-core")
             sys.exit(1)
     except requests.exceptions.RequestException:
-        print("❌ Cannot connect to MemFuse server at localhost:8000")
+        print("❌ Cannot connect to MemFuse server at localhost:8765")
         print("   Please start the server with: poetry run memfuse-core")
         sys.exit(1)
 

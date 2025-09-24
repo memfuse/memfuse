@@ -10,7 +10,7 @@ import time
 import sys
 import uuid
 
-BASE_URL = "http://localhost:8000/api/v1"
+BASE_URL = "http://localhost:8765/api/v1"
 
 def test_health():
     """Test health endpoint."""

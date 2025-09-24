@@ -22,7 +22,7 @@ class TestUserFilteringFix:
         test_user_id = "27944703-161c-448f-bcc9-3f122c6997e7"
         test_query = "Hey, remember that time we talked about our jobs and expenses?"
         
-        url = f"http://localhost:8000/api/v1/users/{test_user_id}/query"
+        url = f"http://localhost:8765/api/v1/users/{test_user_id}/query"
         payload = {
             "query": test_query,
             "top_k": 5
@@ -53,7 +53,7 @@ class TestUserFilteringFix:
         test_user_id = "00000000-0000-0000-0000-000000000000"  # Non-existent user
         test_query = "Hey, remember that time we talked about our jobs and expenses?"
         
-        url = f"http://localhost:8000/api/v1/users/{test_user_id}/query"
+        url = f"http://localhost:8765/api/v1/users/{test_user_id}/query"
         payload = {
             "query": test_query,
             "top_k": 5
@@ -78,7 +78,7 @@ class TestUserFilteringFix:
         test_user_id = "27944703-161c-448f-bcc9-3f122c6997e7"
         test_query = "save money groceries"
         
-        url = f"http://localhost:8000/api/v1/users/{test_user_id}/query"
+        url = f"http://localhost:8765/api/v1/users/{test_user_id}/query"
         payload = {
             "query": test_query,
             "top_k": 3

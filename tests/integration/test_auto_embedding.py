@@ -19,7 +19,7 @@ from typing import Dict, Any, List
 
 class AutoEmbeddingTester:
     def __init__(self):
-        self.base_url = "http://localhost:8000"
+        self.base_url = "http://localhost:8765"
         self.db_config = {
             "host": "localhost",
             "port": 5432,

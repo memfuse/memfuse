@@ -27,7 +27,7 @@ class TestGlobalConfigPerformance:
         return {
             "server": {
                 "host": "localhost",
-                "port": 8000,
+                "port": 8765,
                 "reload": False
             },
             "database": {
@@ -257,8 +257,8 @@ class TestGlobalConfigPerformance:
         global_config = initialized_global_config
         
         # Get initial value
-        initial_value = global_config.get("server.port", 8000)
-        assert initial_value == 8000
+        initial_value = global_config.get("server.port", 8765)
+        assert initial_value == 8765
         
         # Create updated configuration
         updated_config = {
@@ -279,7 +279,7 @@ class TestGlobalConfigPerformance:
         await global_config.hot_reload(updated_config)
         
         # Check that values are updated
-        new_port = global_config.get("server.port", 8000)
+        new_port = global_config.get("server.port", 8765)
         assert new_port == 9000, "Hot reload did not update server.port"
         
         new_pool_size = global_config.get("database.postgres.pool_size", 20)
@@ -296,7 +296,7 @@ async def run_performance_tests():
     
     # Create sample config
     sample_config = {
-        "server": {"host": "localhost", "port": 8000},
+        "server": {"host": "localhost", "port": 8765},
         "database": {"postgres": {"pool_size": 20}},
         "buffer": {"enabled": True},
         "store": {"top_k": 5}

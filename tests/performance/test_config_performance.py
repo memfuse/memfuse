@@ -17,7 +17,7 @@ async def test_performance():
     """Test GlobalConfigManager performance."""
     # Sample config
     config = {
-        'server': {'host': 'localhost', 'port': 8000},
+        'server': {'host': 'localhost', 'port': 8765},
         'database': {'postgres': {'pool_size': 20, 'max_overflow': 40}},
         'buffer': {'enabled': True, 'round_buffer': {'max_tokens': 800}},
         'store': {'top_k': 5, 'similarity_threshold': 0.3}

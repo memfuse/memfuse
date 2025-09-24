@@ -13,7 +13,7 @@ from datetime import datetime
 
 async def test_memfuse_api():
     """Test the MemFuse API with session_id."""
-    base_url = "http://localhost:8000"
+    base_url = "http://localhost:8765"
     api_key = "test_api_key"  # Default test API key
     headers = {"X-API-Key": api_key}
     

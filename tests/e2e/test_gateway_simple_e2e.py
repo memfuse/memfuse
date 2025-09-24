@@ -3,7 +3,7 @@
 import pytest
 import httpx
 
-TEST_BASE_URL = "http://localhost:8000"
+TEST_BASE_URL = "http://localhost:8765"
 TEST_API_KEY = "test-key"
 TEST_USER_ID = "a4b063c1-9e0e-46c4-bcfc-4aeb4b1317cb"
 

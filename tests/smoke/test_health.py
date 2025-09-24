@@ -14,7 +14,7 @@ class TestHealthEndpoint:
     def api_config(self) -> Dict[str, Any]:
         """Configuration for API testing."""
         return {
-            "base_url": "http://localhost:8000",
+            "base_url": "http://localhost:8765",
             "api_key": "test-key",
             "timeout": 30
         }

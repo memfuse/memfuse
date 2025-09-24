@@ -4,7 +4,7 @@
 # including support for pgai integration and vector operations.
 #
 # Build: docker build -t memfuse/app:latest -f docker/app/Dockerfile .
-# Run: docker run -d --name memfuse-app -p 8000:8000 memfuse/app:latest
+# Run: docker run -d --name memfuse-app -p 8765:8765 memfuse/app:latest
 
 FROM python:3.11-slim
 
@@ -61,11 +61,11 @@ RUN chown -R memfuse:memfuse /app
 USER memfuse
 
 # Expose the port the app runs on
-EXPOSE 8000
+EXPOSE 8765
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+    CMD curl -f http://localhost:8765/api/v1/health || exit 1
 
 # Default command
 CMD ["poetry", "run", "memfuse-core"]
