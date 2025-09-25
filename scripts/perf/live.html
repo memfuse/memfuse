@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MemFuse Live Dashboard</title>
+  <style>
+    body{font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial; margin: 20px; color: #222}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:20px}
+    .card{border:1px solid #e5e7eb;border-radius:8px;padding:12px}
+    .muted{color:#666}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    input{padding:6px 8px;}
+    button{padding:6px 10px}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h1>MemFuse Live Dashboard</h1>
+  <div class="row">
+    <label>History CSV: <input id="histPath" value="locust_stats_history.csv" size="40"/></label>
+    <label>DB JSONL: <input id="dbPath" value="db_metrics.jsonl" size="40"/></label>
+    <label>Refresh (ms): <input id="refreshMs" value="10000" size="8"/></label>
+    <button id="applyBtn">Apply</button>
+  </div>
+  <div class="muted">Paths are relative to the server root (run directory).</div>
+
+  <div class="grid" style="margin-top:16px">
+    <div class="card">
+      <h3>Throughput & Fail Ratio</h3>
+      <canvas id="chart_rps"></canvas>
+    </div>
+    <div class="card">
+      <h3>DB Connections by State</h3>
+      <canvas id="chart_states"></canvas>
+    </div>
+    <div class="card">
+      <h3>Idle-in-Transaction</h3>
+      <canvas id="chart_idle"></canvas>
+    </div>
+  </div>
+
+  <script>
+  const charts = {};
+  function parseCSV(text){
+    const lines = text.trim().split(/\r?\n/);
+    if (!lines.length) return {timestamps:[], users:[], rps:[], fail_ratio:[]};
+    const header = lines[0].split(',');
+    const idx = (name) => header.indexOf(name);
+    const iTs = idx('Timestamp');
+    const iUsers = idx('User Count');
+    const iRps = idx('Requests/s') >= 0 ? idx('Requests/s') : idx('Request/s');
+    const iFail = idx('Fail Ratio');
+    const out = {timestamps:[], users:[], rps:[], fail_ratio:[]};
+    for (let i=1;i<lines.length;i++){
+      const row = lines[i].split(',');
+      out.timestamps.push(row[iTs] || '');
+      out.users.push(parseInt(row[iUsers]||'0',10));
+      out.rps.push(parseFloat(row[iRps]||'0'));
+      out.fail_ratio.push(parseFloat(row[iFail]||'0'));
+    }
+    return out;
+  }
+  function parseJSONL(text){
+    const lines = text.trim().split(/\r?\n/);
+    const timeline = [];
+    const states = new Set();
+    for (const l of lines){
+      if (!l.trim()) continue;
+      try{
+        const o = JSON.parse(l);
+        const ts = o.ts; const m = o.metrics || {}; const st = m.connections_by_state || {}; const idle = m.idle_in_transaction || 0;
+        Object.keys(st).forEach(k => states.add(k || ''));
+        timeline.push({ts, idle_in_tx: idle, states: st});
+      }catch(e){}
+    }
+    return {timeline, states: Array.from(states)};
+  }
+  function seriesStates(db){
+    const labels = db.timeline.map(p=>p.ts);
+    const keys = db.states;
+    const colors = ['#2563eb','#10b981','#f59e0b','#ef4444','#6366f1','#14b8a6','#84cc16','#f472b6'];
+    const datasets = keys.map((k,i)=>({
+      label: k || '(none)',
+      data: db.timeline.map(p => (p.states && (p.states[k] || p.states[''] || 0)) || 0),
+      backgroundColor: colors[i % colors.length], stack: 'conn'
+    }));
+    return {labels, datasets};
+  }
+  async function fetchText(path){
+    const res = await fetch(path + '?_=' + Date.now());
+    if (!res.ok) throw new Error('fetch failed '+path);
+    return await res.text();
+  }
+  function ensureCharts(){
+    if (!charts.rps){ charts.rps = new Chart(document.getElementById('chart_rps'), {type:'line', data:{labels:[], datasets:[{label:'RPS', data:[], borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,0.2)', yAxisID:'y1'}, {label:'Fail %', data:[], borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,0.2)', yAxisID:'y2'}]}, options:{responsive:true, interaction:{mode:'index',intersect:false}, scales:{ y1:{type:'linear',position:'left'}, y2:{type:'linear',position:'right', grid:{drawOnChartArea:false}} }}}); }
+    if (!charts.states){ charts.states = new Chart(document.getElementById('chart_states'), {type:'bar', data:{labels:[], datasets:[]}, options:{responsive:true, scales:{x:{stacked:true}, y:{stacked:true}}}}); }
+    if (!charts.idle){ charts.idle = new Chart(document.getElementById('chart_idle'), {type:'line', data:{labels:[], datasets:[{label:'Idle in TX', data:[], borderColor:'#ef4444'}]}, options:{responsive:true}}); }
+  }
+  async function refresh(){
+    const histPath = document.getElementById('histPath').value.trim();
+    const dbPath = document.getElementById('dbPath').value.trim();
+    try{
+      const [csvText, jsonlText] = await Promise.all([fetchText(histPath), fetchText(dbPath)]);
+      const h = parseCSV(csvText);
+      const d = parseJSONL(jsonlText);
+      ensureCharts();
+      charts.rps.data.labels = h.timestamps;
+      charts.rps.data.datasets[0].data = h.rps;
+      charts.rps.data.datasets[1].data = h.fail_ratio.map(x => (x||0)*100);
+      charts.rps.update('none');
+
+      const st = seriesStates(d);
+      charts.states.data.labels = st.labels; charts.states.data.datasets = st.datasets; charts.states.update('none');
+
+      charts.idle.data.labels = d.timeline.map(p=>p.ts); charts.idle.data.datasets[0].data = d.timeline.map(p=>p.idle_in_tx||0); charts.idle.update('none');
+    }catch(e){ console.warn('refresh failed', e); }
+  }
+  let timer = null;
+  function apply(){
+    if (timer) clearInterval(timer);
+    const ms = parseInt(document.getElementById('refreshMs').value.trim(), 10) || 10000;
+    refresh();
+    timer = setInterval(refresh, ms);
+  }
+  document.getElementById('applyBtn').addEventListener('click', apply);
+  apply();
+  </script>
+</body>
+</html>
+

@@ -344,15 +344,68 @@ def _load_template_env() -> Optional[Environment]:
     return env
 
 
+def _parse_ts_to_seconds(ts: Any) -> Optional[float]:
+    """Best-effort parse of a timestamp to seconds since epoch.
+
+    Accepts numeric (seconds or ms) or common string formats like
+    'YYYY-MM-DD HH:MM:SS' or ISO 'YYYY-MM-DDTHH:MM:SS[Z]'. Returns None on failure.
+    """
+    try:
+        # numeric
+        f = float(str(ts))
+        # Heuristic: treat very large values as ms
+        return f / 1000.0 if f > 1e11 else f
+    except Exception:
+        pass
+    if not isinstance(ts, str):
+        return None
+    s = ts.strip()
+    if not s:
+        return None
+    try:
+        # Try space-separated
+        from datetime import datetime, timezone
+
+        if "T" in s:
+            # Handle trailing Z
+            s2 = s.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s2)
+        else:
+            dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
 def build_chart_data(locust: Dict[str, Any], db: Dict[str, Any]) -> Dict[str, Any]:
     # Locust history: time, users, rps, fail_ratio
     hist = locust.get("history") or []
-    locust_ts = [{
-        "ts": h.get("time"),
-        "users": h.get("users", 0),
-        "rps": h.get("rps", 0.0),
-        "fail_ratio": h.get("fail_ratio", 0.0),
-    } for h in hist if h.get("time")]
+    locust_ts = []
+    for h in hist:
+        t = h.get("time")
+        if not t:
+            continue
+        locust_ts.append({
+            "ts": t,
+            "users": h.get("users", 0),
+            "rps": h.get("rps", 0.0),
+            "fail_ratio": h.get("fail_ratio", 0.0),
+        })
+    # Also compute relative minutes from first timestamp, if numeric/parsable
+    minutes: List[float] = []
+    secs: List[float] = []
+    for p in locust_ts:
+        s = _parse_ts_to_seconds(p.get("ts"))
+        if s is None:
+            secs = []
+            minutes = []
+            break
+        secs.append(s)
+    if secs:
+        t0 = secs[0]
+        minutes = [round((s - t0) / 60.0, 2) for s in secs]
 
     # DB timeline: ts, states (dict), idle_in_tx
     db_timeline = db.get("timeline") or []
@@ -369,6 +422,7 @@ def build_chart_data(locust: Dict[str, Any], db: Dict[str, Any]) -> Dict[str, An
             "timeline": db_timeline,
             "states": sorted(list(state_keys)),
         },
+        "locust_minutes": minutes,
     }
 
 

@@ -277,6 +277,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         return rc_meta
 
     # 2) Start DB metrics sampler (background)
+    # Build DB sampler command with DSN (fallbacks to sensible defaults)
+    def _default_dsn() -> str:
+        host = os.getenv("POSTGRES_HOST", "localhost")
+        port = os.getenv("POSTGRES_PORT", "54321")  # default overridden per requirement
+        db = os.getenv("POSTGRES_DB", "memfuse")
+        user = os.getenv("POSTGRES_USER", "postgres")
+        pwd = os.getenv("POSTGRES_PASSWORD", "postgres")
+        parts = [f"host={host}", f"port={port}", f"dbname={db}", f"user={user}"]
+        if pwd:
+            parts.append(f"password={pwd}")
+        return " ".join(parts)
+
+    dsn = args.db_dsn or os.getenv("DB_DSN") or _default_dsn()
+
     db_cmd = [
         sys.executable,
         "scripts/perf/db_metrics.py",
@@ -286,9 +300,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.runtime,
         "--out",
         str(run_dir / "db_metrics.jsonl"),
+        "--dsn",
+        dsn,
     ]
-    if args.db_dsn:
-        db_cmd.extend(["--dsn", args.db_dsn])
     print(
         f"🗄️  Starting DB sampler every {db_interval} for {args.runtime} → {run_dir/'db_metrics.jsonl'}"
     )

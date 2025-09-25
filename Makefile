@@ -149,24 +149,24 @@ format-tests:
 # Usage: make test-file FILE=tests/unit/rag/chunk/test_base.py
 test-file:
 	@echo "🧪 Running specific test file: $(FILE)"
-	python -m pytest $(FILE) -v
+	poetry run python -m pytest $(FILE) -v
 
 # Run tests with specific marker
 # Usage: make test-marker MARKER=chunking
 test-marker:
 	@echo "🧪 Running tests with marker: $(MARKER)"
-	python -m pytest tests/ -v -m $(MARKER)
+	poetry run python -m pytest tests/ -v -m $(MARKER)
 
 # Verify test structure
 verify-tests:
 	@echo "🔍 Verifying test structure..."
-	python tests/verify_structure.py
+	poetry run python tests/verify_structure.py
 
 # Debug specific test
 # Usage: make debug-test TEST=tests/unit/rag/chunk/test_base.py::TestChunkData::test_chunk_data_creation
 debug-test:
 	@echo "🐛 Debugging test: $(TEST)"
-	python -m pytest $(TEST) -v -s --tb=long
+	poetry run python -m pytest $(TEST) -v -s --tb=long
 
 # Performance test
 test-performance:

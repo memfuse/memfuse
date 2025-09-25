@@ -201,10 +201,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--interval", type=str, default=os.getenv("DB_SAMPLER_INTERVAL", "5s"), help="sampling interval (e.g., 5s, 1m)")
     parser.add_argument("--duration", type=str, default=os.getenv("DB_SAMPLER_DURATION", "10m"), help="total duration (e.g., 10m, 2h)")
     parser.add_argument("--out", type=str, default=os.getenv("DB_SAMPLER_OUT", "outputs/perf/db_metrics.jsonl"), help="output JSONL path")
+    parser.add_argument("--connect-timeout", type=str, default=os.getenv("DB_CONNECT_TIMEOUT", "5s"), help="DB connect timeout (e.g., 3s, 1m)")
     args = parser.parse_args(argv)
 
     interval_s = parse_duration(args.interval)
     duration_s = parse_duration(args.duration)
+    connect_timeout_s = parse_duration(args.connect_timeout)
+    connect_timeout_param = max(1, int(round(connect_timeout_s)))
     out_path = args.out
     ensure_dir(out_path)
 
@@ -223,7 +226,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             record: Dict[str, Any] = {"ts": iso_now(), "ok": True, "metrics": {}, "errors": []}
             try:
                 if conn is None or conn.closed:
-                    conn = psycopg.connect(dsn)
+                    # Ensure we don't block forever on connect attempts
+                    conn = psycopg.connect(dsn, connect_timeout=connect_timeout_param)
                 metrics = sample_once(conn)
                 record["metrics"] = metrics
             except Exception as e:  # pragma: no cover
@@ -255,4 +259,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-

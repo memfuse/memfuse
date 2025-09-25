@@ -120,7 +120,8 @@
   (function(){
     const el = document.getElementById('locust_rps');
     if (!el || !REPORT.charts.locust) return;
-    const labels = REPORT.charts.locust.map(p => p.ts);
+    const useMinutes = Array.isArray(REPORT.charts.locust_minutes) && REPORT.charts.locust_minutes.length > 0;
+    const labels = useMinutes ? REPORT.charts.locust_minutes : REPORT.charts.locust.map(p => p.ts);
     const rps = REPORT.charts.locust.map(p => p.rps);
     const fail = REPORT.charts.locust.map(p => (p.fail_ratio || 0) * 100);
     new Chart(el, {
@@ -133,7 +134,11 @@
         ]
       },
       options: {responsive: true, interaction: {mode: 'index', intersect: false},
-        scales: { y1: {type: 'linear', position: 'left'}, y2: {type: 'linear', position: 'right', grid: {drawOnChartArea:false}} }
+        scales: { 
+          x: { title: { display: useMinutes, text: useMinutes ? 'Minutes' : 'Time' } },
+          y1: {type: 'linear', position: 'left'}, 
+          y2: {type: 'linear', position: 'right', grid: {drawOnChartArea:false}} 
+        }
       }
     });
   })();
