@@ -183,7 +183,7 @@ def fetch_top_queries(cur) -> List[Dict[str, Any]]:
         return []
 
 
-def sample_once(conn) -> Dict[str, Any]:
+def sample_once(conn: psycopg.Connection) -> Dict[str, Any]:
     with conn.cursor() as cur:
         metrics = {
             "connections_by_state": fetch_connections_by_state(cur),
@@ -193,6 +193,12 @@ def sample_once(conn) -> Dict[str, Any]:
             "top_queries": fetch_top_queries(cur),
         }
     return metrics
+
+
+def connect_with_autocommit(dsn: str, timeout: int) -> psycopg.Connection:
+    conn = psycopg.connect(dsn, connect_timeout=timeout)
+    conn.autocommit = True
+    return conn
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -226,8 +232,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             record: Dict[str, Any] = {"ts": iso_now(), "ok": True, "metrics": {}, "errors": []}
             try:
                 if conn is None or conn.closed:
-                    # Ensure we don't block forever on connect attempts
-                    conn = psycopg.connect(dsn, connect_timeout=connect_timeout_param)
+                    conn = connect_with_autocommit(dsn, connect_timeout_param)
                 metrics = sample_once(conn)
                 record["metrics"] = metrics
             except Exception as e:  # pragma: no cover
@@ -236,6 +241,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 # attempt reconnect next loop
                 try:
                     if conn is not None and not conn.closed:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
                         conn.close()
                 except Exception:
                     pass

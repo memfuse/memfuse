@@ -18,15 +18,16 @@ Example:
 from __future__ import annotations
 
 import argparse
+import importlib
+import json
 import os
 import subprocess
 import sys
 import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List
 
 
 def parse_duration_to_seconds(value: str) -> float:
@@ -99,7 +100,16 @@ def build_plan(users: List[int], durations: List[str], profile: str, out_root: P
     return plan
 
 
-def run_profile_once(item: PlanItem, host: str, profile: str, spawn: float, db_interval: str, allow_failures: bool, seed: bool) -> int:
+def run_profile_once(
+    item: PlanItem,
+    host: str,
+    profile: str,
+    spawn: float,
+    db_interval: str,
+    allow_failures: bool,
+    seed: bool,
+    env_overrides: Dict[str, str] | None = None,
+) -> int:
     cmd = [
         sys.executable,
         "scripts/perf/profile_run.py",
@@ -123,11 +133,22 @@ def run_profile_once(item: PlanItem, host: str, profile: str, spawn: float, db_i
     if seed:
         cmd.append("--seed")
     env = os.environ.copy()
-    proc = subprocess.Popen(cmd)
+    if env_overrides:
+        env.update(env_overrides)
+    proc = subprocess.Popen(cmd, env=env)
     return proc.wait()
 
 
-def snapshot_worker(run_dir: Path, host: str, stop_event: threading.Event, interval_s: int = 3600) -> None:
+def snapshot_worker(
+    run_dir: Path,
+    host: str,
+    stop_event: threading.Event,
+    interval_s: int = 3600,
+    env_overrides: Dict[str, str] | None = None,
+) -> None:
+    base_env = os.environ.copy()
+    if env_overrides:
+        base_env.update(env_overrides)
     while not stop_event.wait(timeout=interval_s):
         try:
             # Write hourly MD and HTML snapshots
@@ -138,7 +159,7 @@ def snapshot_worker(run_dir: Path, host: str, stop_event: threading.Event, inter
                 str(run_dir),
                 "--host",
                 host,
-            ], check=False)
+            ], check=False, env=base_env)
             subprocess.run([
                 sys.executable,
                 "scripts/perf/aggregate_report.py",
@@ -148,9 +169,60 @@ def snapshot_worker(run_dir: Path, host: str, stop_event: threading.Event, inter
                 host,
                 "--format",
                 "html",
-            ], check=False)
+            ], check=False, env=base_env)
         except Exception:
             pass
+
+
+def ensure_locust_available() -> None:
+    try:
+        importlib.import_module("locust")
+    except ModuleNotFoundError as exc:
+        msg = (
+            "Locust is not installed in this environment. "
+            "Install it (e.g. `poetry run pip install locust`) before running soak tests."
+        )
+        raise RuntimeError(msg) from exc
+
+
+def ensure_dataset_path(raw_path: str, out_root: Path, auto_create: bool) -> Path:
+    """Ensure a dataset JSONL exists and return its path.
+
+    If the requested path (or env/default fallbacks) does not exist and
+    auto_create is True, a minimal dataset is generated under the output root.
+    """
+
+    candidates: List[Path] = []
+    if raw_path:
+        candidates.append(Path(raw_path))
+    env_path = os.getenv("DATASET_PATH", "").strip()
+    if env_path and (not raw_path or Path(env_path) != Path(raw_path)):
+        candidates.append(Path(env_path))
+    candidates.append(Path("datasets/lme_s_mc10.json"))
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.stat().st_size > 0:
+            return candidate
+
+    if not auto_create:
+        raise FileNotFoundError(
+            "Dataset file not found. Provide --dataset-path or set DATASET_PATH to a valid JSONL dataset."
+        )
+
+    fallback = out_root / "_auto_dataset.jsonl"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    sample = {
+        "haystack_sessions": [
+            [
+                {"role": "user", "content": "Hello from soak generator."},
+                {"role": "assistant", "content": "Acknowledged."},
+            ]
+        ]
+    }
+    with fallback.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps(sample))
+        fh.write("\n")
+    return fallback
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -170,10 +242,29 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--allow-failures", action="store_true")
     ap.add_argument("--seed", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--dataset-path",
+        default=os.getenv("DATASET_PATH", ""),
+        help="Location of JSONL dataset for Locust feeder (default: DATASET_PATH or datasets/lme_s_mc10.json)",
+    )
+    ap.add_argument(
+        "--no-auto-dataset",
+        action="store_true",
+        help="Disable automatic creation of a fallback dataset when none is available.",
+    )
     args = ap.parse_args(argv)
 
     out_root = Path(args.out_root)
     out_root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        ensure_locust_available()
+    except RuntimeError as exc:
+        print(exc)
+        return 1
+
+    dataset_path = ensure_dataset_path(args.dataset_path, out_root, auto_create=not args.no_auto_dataset)
+    dataset_env = {"DATASET_PATH": str(dataset_path)}
 
     users = parse_users_series(args.users_series)
     durations = parse_durations_series(args.durations)
@@ -191,9 +282,23 @@ def main(argv: List[str] | None = None) -> int:
         stop_evt = threading.Event()
         t = None
         if args.snapshot_hourly:
-            t = threading.Thread(target=snapshot_worker, args=(it.run_dir, args.host, stop_evt), daemon=True)
+            t = threading.Thread(
+                target=snapshot_worker,
+                args=(it.run_dir, args.host, stop_evt),
+                kwargs={"env_overrides": dataset_env},
+                daemon=True,
+            )
             t.start()
-        rc = run_profile_once(it, args.host, args.profile, args.spawn, args.db_interval, args.allow_failures, args.seed)
+        rc = run_profile_once(
+            it,
+            args.host,
+            args.profile,
+            args.spawn,
+            args.db_interval,
+            args.allow_failures,
+            args.seed,
+            env_overrides=dataset_env,
+        )
         if t is not None:
             stop_evt.set()
             t.join(timeout=5)
