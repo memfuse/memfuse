@@ -1,6 +1,7 @@
 """Response processors for the gateway layer."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 from loguru import logger
 
 from ..interfaces.gateway_interface import RequestContext
@@ -115,6 +116,11 @@ class QueryResponseProcessor:
         if 'updated_at' not in transformed:
             transformed['updated_at'] = transformed.get('created_at') or None
 
+        # Normalize timestamp fields to ISO 8601 strings
+        for ts_field in ('created_at', 'updated_at'):
+            if ts_field in transformed:
+                transformed[ts_field] = self._normalize_timestamp(transformed.get(ts_field))
+
         # Remove unused fields at top level (done early to ensure clean data)
         unused_top_level_fields = ['role', 'source', 'similarity_score', 'scope', 'distance']
         for field in unused_top_level_fields:
@@ -129,7 +135,49 @@ class QueryResponseProcessor:
             for field in unused_metadata_fields:
                 metadata.pop(field, None)
 
+        # Ensure metadata timestamps (if any) are normalized as well
+        if 'metadata' in transformed and isinstance(transformed['metadata'], dict):
+            for ts_field in ('created_at', 'updated_at'):
+                if ts_field in transformed['metadata']:
+                    transformed['metadata'][ts_field] = self._normalize_timestamp(
+                        transformed['metadata'].get(ts_field)
+                    )
+
         return transformed
+
+    @staticmethod
+    def _normalize_timestamp(value: Any) -> Optional[str]:
+        """Convert various timestamp representations to ISO 8601 strings."""
+        if value is None:
+            return None
+
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.isoformat()
+
+        if isinstance(value, (int, float)):
+            try:
+                return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+            except (OverflowError, OSError, ValueError):
+                logger.warning(f"QueryResponseProcessor: Invalid timestamp value {value}")
+                return None
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            try:
+                numeric = float(stripped)
+                return datetime.fromtimestamp(numeric, tz=timezone.utc).isoformat()
+            except (ValueError, OverflowError, OSError):
+                # Assume already ISO formatted or acceptable string
+                return stripped
+
+        try:
+            return str(value)
+        except Exception:
+            return None
 
 
 class MetadataEnricher:
@@ -137,8 +185,9 @@ class MetadataEnricher:
     
     def __init__(self, db_service=None):
         self.db_service = db_service
+        self._session_cache: Dict[str, Dict[str, Optional[str]]] = {}
     
-    def transform(self, data: Any, context: RequestContext) -> Any:
+    async def transform(self, data: Any, context: RequestContext) -> Any:
         """Enrich results with metadata.
         
         Args:
@@ -150,11 +199,11 @@ class MetadataEnricher:
         """
         if isinstance(data, dict) and 'results' in data:
             for result in data['results']:
-                self._enrich_result_metadata(result, context)
+                await self._enrich_result_metadata(result, context)
         
         return data
     
-    def _enrich_result_metadata(self, result: Dict[str, Any], context: RequestContext):
+    async def _enrich_result_metadata(self, result: Dict[str, Any], context: RequestContext):
         """Enrich a single result with metadata."""
         if 'metadata' not in result:
             result['metadata'] = {}
@@ -162,20 +211,47 @@ class MetadataEnricher:
         metadata = result['metadata']
 
         # Ensure required fields are present
-        if 'user_id' not in metadata and context.user_id:
-            metadata['user_id'] = context.user_id
+        if 'user_id' not in metadata or not metadata.get('user_id'):
+            if context.user_id:
+                metadata['user_id'] = str(context.user_id)
 
-        if 'agent_id' not in metadata and context.agent_id:
-            metadata['agent_id'] = context.agent_id
+        # Resolve session_id from multiple sources
+        result_session_id = metadata.get('session_id') or result.get('session_id') or context.session_id
+        if result_session_id:
+            metadata['session_id'] = str(result_session_id)
 
-        if 'session_id' not in metadata and context.session_id:
-            metadata['session_id'] = context.session_id
+        # Fetch session info when possible
+        session_info = await self._resolve_session_info(metadata.get('session_id'), context)
 
-        if 'session_name' not in metadata and context.session_name:
-            metadata['session_name'] = context.session_name
-        if 'session_name' not in metadata:
-            # Ensure presence as empty string to satisfy schema type
-            metadata['session_name'] = ""
+        # Ensure user_id aligns with session user if available
+        if (not metadata.get('user_id')) and session_info and session_info.get('user_id'):
+            metadata['user_id'] = str(session_info.get('user_id'))
+
+        # Ensure agent_id is populated from context or session info
+        if not metadata.get('agent_id'):
+            if context.agent_id:
+                metadata['agent_id'] = str(context.agent_id)
+            elif session_info and session_info.get('agent_id'):
+                metadata['agent_id'] = str(session_info.get('agent_id'))
+
+        # Ensure session_name reflects the originating session
+        session_name = metadata.get('session_name')
+        if not session_name:
+            if session_info and session_info.get('name'):
+                metadata['session_name'] = session_info.get('name')
+            elif metadata.get('session_id') == context.session_id and context.session_name:
+                metadata['session_name'] = context.session_name
+            else:
+                metadata['session_name'] = None
+        else:
+            metadata['session_name'] = str(session_name)
+
+        # Guarantee presence of key fields even when null
+        metadata.setdefault('session_id', None)
+        metadata.setdefault('agent_id', None)
+        metadata.setdefault('session_name', None)
+        if 'user_id' not in metadata or metadata['user_id'] is None:
+            metadata['user_id'] = str(context.user_id) if context.user_id else None
 
         # Add task and mode from request metadata if available
         if context.request_metadata:
@@ -183,6 +259,50 @@ class MetadataEnricher:
                 metadata['task'] = context.request_metadata['task']
             if 'mode' in context.request_metadata:
                 metadata['mode'] = context.request_metadata['mode']
+
+    async def _resolve_session_info(
+        self,
+        session_id: Optional[str],
+        context: RequestContext
+    ) -> Optional[Dict[str, Optional[str]]]:
+        """Resolve session metadata (name, agent, user) via cache or database."""
+        if not session_id:
+            return None
+
+        session_id_str = str(session_id)
+
+        if session_id_str in self._session_cache:
+            return self._session_cache[session_id_str]
+
+        # Prefer context information when session matches request context
+        if session_id_str == (context.session_id or ""):
+            info = {
+                "name": context.session_name,
+                "agent_id": context.agent_id,
+                "user_id": context.user_id
+            }
+            self._session_cache[session_id_str] = info
+            return info
+
+        if not self.db_service:
+            return None
+
+        try:
+            session = await self.db_service.get_session(session_id_str)
+        except Exception as exc:
+            logger.debug(f"MetadataEnricher: Failed to load session {session_id_str}: {exc}")
+            return None
+
+        if not session:
+            return None
+
+        info = {
+            "name": session.get("name"),
+            "agent_id": session.get("agent_id"),
+            "user_id": session.get("user_id")
+        }
+        self._session_cache[session_id_str] = info
+        return info
 
 
 class ScopeCalculator:

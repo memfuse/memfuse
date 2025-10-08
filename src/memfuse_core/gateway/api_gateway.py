@@ -59,7 +59,7 @@ class MemoryApiGateway(GatewayInterface):
 
         # Initialize processors
         self.response_processor = QueryResponseProcessor()
-        self.metadata_enricher = MetadataEnricher()
+        self.metadata_enricher = MetadataEnricher(db_service=db_service)
         self.scope_calculator = ScopeCalculator()
 
         # Remove unused fields (QueryResponseProcessor handles most top-level fields)
@@ -416,7 +416,7 @@ class MemoryApiGateway(GatewayInterface):
             )
         except Exception:
             ctx_for_meta = context
-        data = self.metadata_enricher.transform(data, ctx_for_meta)
+        data = await self.metadata_enricher.transform(data, ctx_for_meta)
 
         # 3. Calculate scope
         data = self.scope_calculator.transform(data, context)
